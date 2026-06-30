@@ -1,0 +1,15 @@
+{
+  "error.symbol_not_found": "Symbol '{name}' not found in scope '{scope}'.",
+  "error.unsupported_language": "No language provider is registered for file: {path}.",
+  "error.repo_not_indexed": "Repository '{repo}' has not been indexed yet.",
+  "error.invalid_repo_url": "Invalid repository URL: {detail}",
+  "error.remote_index_failed": "Failed to index remote repository '{url}': {detail}",
+  "coverage.high": "High confidence: {anchor_count} anchors from multiple sources, single connected component.",
+  "coverage.medium": "Medium confidence: limited anchor sources; reasoning over a wider context is advised.",
+  "coverage.low": "Low confidence: only a semantic anchor with a small margin; human disambiguation is recommended.",
+  "coverage.touches_god_node": "Warning: this context touches a highly-connected hub symbol (centrality {centrality}); the blast radius may be large.",
+  "disambiguation.multiple_candidates": "Multiple strong candidates were found for '{term}'. Which one did you mean?",
+  "tool.references.count": "{count} reference(s) found for symbol '{name}'.",
+  "tool.indexing.done": "Indexed {files} file(s): {nodes} nodes, {edges} edges at commit {commit}.",
+  "log.context_request": "Context request by '{user}' for task '{task}' at commit {commit}."
+}

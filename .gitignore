@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# Tooling
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Local data / repos cloned by git-sync
+.cce_data/
+repos_cache/
+
+# Env / secrets
+.env
+*.local
+
+# IDE
+.idea/
+.vscode/
+
+CCE_Onerilen_Ozellikler.md
+Cortex_Context_Engine_Mimari.pdf

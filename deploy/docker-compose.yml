@@ -1,0 +1,27 @@
+# Single PostgreSQL with Apache AGE + pgvector for local development.
+# Usage: docker compose -f deploy/docker-compose.yml up -d
+
+services:
+  db:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: cce-postgres-age-pgvector:pg16
+    container_name: cce-db
+    environment:
+      POSTGRES_USER: cce
+      POSTGRES_PASSWORD: cce
+      POSTGRES_DB: cce
+    ports:
+      - "5432:5432"
+    volumes:
+      - cce_pgdata:/var/lib/postgresql/data
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cce -d cce"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  cce_pgdata:

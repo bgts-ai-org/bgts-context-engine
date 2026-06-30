@@ -1,0 +1,15 @@
+{
+  "error.symbol_not_found": "'{name}' sembolü '{scope}' kapsamında bulunamadı.",
+  "error.unsupported_language": "Şu dosya için kayıtlı bir dil sağlayıcısı yok: {path}.",
+  "error.repo_not_indexed": "'{repo}' deposu henüz indekslenmedi.",
+  "error.invalid_repo_url": "Geçersiz depo URL'si: {detail}",
+  "error.remote_index_failed": "Uzak depo '{url}' indekslenemedi: {detail}",
+  "coverage.high": "Yüksek güven: birden çok kaynaktan {anchor_count} çapa, tek bağlı bileşen.",
+  "coverage.medium": "Orta güven: sınırlı çapa kaynağı; daha geniş bir bağlamla muhakeme önerilir.",
+  "coverage.low": "Düşük güven: yalnızca küçük marjlı semantik çapa; insana disambiguation sorulması önerilir.",
+  "coverage.touches_god_node": "Uyarı: bu bağlam yüksek bağlantılı bir hub sembole dokunuyor (merkezilik {centrality}); etki yüzeyi geniş olabilir.",
+  "disambiguation.multiple_candidates": "'{term}' için birden çok güçlü aday bulundu. Hangisini kastettiniz?",
+  "tool.references.count": "'{name}' sembolü için {count} referans bulundu.",
+  "tool.indexing.done": "{files} dosya indekslendi: {commit} commit'inde {nodes} düğüm, {edges} kenar.",
+  "log.context_request": "'{user}' kullanıcısı '{task}' görevi için {commit} commit'inde context istedi."
+}
