@@ -4,6 +4,8 @@ Commands:
 - ``migrate``          apply database migrations
 - ``index``            full-index a local repository
 - ``index-remote``     clone a Bitbucket repo by URL and full-index it
+- ``reindex``          incrementally re-index changed files since the last commit (git-diff)
+- ``bench``            run the POC benchmark (latency/recall/precision/determinism/RLS) -> JSON
 - ``resolve-symbol``   Layer-1: resolve a symbol by name
 - ``find-references``  Layer-1: find references to a symbol_id
 - ``languages``        list supported languages/extensions (no database needed)
@@ -149,6 +151,60 @@ def index_remote_cmd(
     )
 
 
+@app.command()
+def reindex(
+    repo: Path = typer.Option(..., "--repo", help="Path to the local repository (git working tree)"),
+    name: str = typer.Option(..., "--name", help="Logical repository name (must match prior index)"),
+    since: str | None = typer.Option(
+        None, "--since", help="Baseline commit (default: repo's last_indexed_commit)"
+    ),
+    to: str = typer.Option("HEAD", "--to", help="Target commit/ref (default: HEAD)"),
+    locale: str | None = typer.Option(None, "--locale", help="Message locale (en/tr)"),
+) -> None:
+    """Incrementally re-index only the files changed since the last index (git-diff)."""
+    from cce.core.i18n import get_translator
+    from cce.indexing.indexer import Indexer
+    from cce.storage.graph.client import GraphClient
+    from cce.storage.graph.repository import GraphRepository
+    from cce.storage.relational.db import connection
+
+    tr = get_translator()
+    loc = tr.resolve(locale)
+    try:
+        with connection() as conn:
+            repository = GraphRepository(GraphClient(conn))
+            summary = Indexer(repository).index_incremental(
+                path=repo, name=name, since_commit=since, to_commit=to
+            )
+            conn.commit()
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=2) from exc
+
+    typer.echo(
+        tr.translate(
+            "tool.reindex.done",
+            loc,
+            added=summary.added,
+            modified=summary.modified,
+            deleted=summary.deleted,
+            commit=summary.to_commit,
+        )
+    )
+    _echo_json(
+        {
+            "repo_id": summary.repo_id,
+            "from_commit": summary.from_commit,
+            "to_commit": summary.to_commit,
+            "added": summary.added,
+            "modified": summary.modified,
+            "deleted": summary.deleted,
+            "nodes": summary.nodes,
+            "edges": summary.edges,
+        }
+    )
+
+
 @app.command(name="resolve-symbol")
 def resolve_symbol_cmd(
     name: str = typer.Option(..., "--name", help="Symbol name to resolve"),
@@ -188,6 +244,59 @@ def find_references_cmd(
 
 
 @app.command()
+def context(
+    task: str = typer.Option(..., "--task", help="Task title + description text"),
+    max_tokens: int = typer.Option(4000, "--max-tokens", help="Token budget for assembly"),
+    max_candidates: int = typer.Option(8, "--max-candidates", help="Narrow to at most N candidates"),
+    commit: str | None = typer.Option(None, "--commit", help="Pinned commit sha (stage 0)"),
+    locale: str | None = typer.Option(None, "--locale", help="Message locale (en/tr)"),
+) -> None:
+    """Layer 3: assemble a deterministic context package + coverage for a task."""
+    from cce.storage.graph.client import GraphClient
+    from cce.storage.graph.repository import GraphRepository
+    from cce.storage.relational.db import connection
+    from cce.tools.layer3 import get_context_for_task
+
+    with connection() as conn:
+        repository = GraphRepository(GraphClient(conn))
+        result = get_context_for_task(
+            repository,
+            task_text=task,
+            max_tokens=max_tokens,
+            max_candidates=max_candidates,
+            commit=commit,
+            locale=locale,
+        )
+    if result["message"]:
+        typer.echo(result["message"])
+    _echo_json(result["payload"])
+
+
+@app.command()
+def bench(
+    cases: Path = typer.Option(..., "--cases", help="Path to a JSON file of benchmark cases"),
+    out: Path | None = typer.Option(None, "--out", help="Write the JSON report here (else stdout)"),
+    determinism_runs: int = typer.Option(3, "--determinism-runs", help="Repeats for the determinism check"),
+) -> None:
+    """POC benchmark: run a task set and report latency/recall/precision/determinism/RLS as JSON."""
+    from cce.bench.runner import load_cases, run_benchmark
+    from cce.storage.graph.client import GraphClient
+    from cce.storage.graph.repository import GraphRepository
+    from cce.storage.relational.db import connection
+
+    bench_cases = load_cases(str(cases))
+    with connection() as conn:
+        repository = GraphRepository(GraphClient(conn))
+        report = run_benchmark(repository, bench_cases, determinism_runs=determinism_runs)
+
+    data = report.to_dict()
+    if out is not None:
+        out.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        typer.echo(f"Wrote benchmark report to {out}")
+    _echo_json(data)
+
+
+@app.command()
 def languages() -> None:
     """List supported languages and file extensions (no database needed)."""
     from cce.indexing.parser.registry import build_default_registry
@@ -207,10 +316,20 @@ def serve(
     port: int = typer.Option(8000, "--port", help="Bind port"),
     reload: bool = typer.Option(False, "--reload", help="Auto-reload on code changes (dev)"),
 ) -> None:
-    """Run the REST API server (Layer-1 endpoints) via uvicorn."""
+    """Run the REST API server (Layer 1-2-3 endpoints) via uvicorn."""
     import uvicorn
 
     uvicorn.run("cce.api.rest.app:app", host=host, port=port, reload=reload)
+
+
+@app.command(name="serve-mcp")
+def serve_mcp() -> None:
+    """Run the MCP server over stdio (agent-native surface). Requires the 'mcp' package."""
+    import asyncio
+
+    from cce.api.mcp.server import run_stdio
+
+    asyncio.run(run_stdio())
 
 
 def main() -> None:

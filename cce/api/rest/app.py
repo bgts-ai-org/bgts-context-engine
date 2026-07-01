@@ -17,7 +17,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="Cortex Context Engine",
         version=__version__,
-        summary="Deterministic, multi-language code-graph context engine (Layer-1 REST surface).",
+        summary="Deterministic, multi-language code-graph context engine (Layer 1-2-3 REST surface).",
     )
     app.include_router(router)
     return app

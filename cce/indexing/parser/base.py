@@ -34,6 +34,9 @@ class LanguageProvider(abc.ABC):
     #: Human-readable language identifier, used in ``symbol_id`` (e.g. "python", "javascript").
     language: str = "abstract"
 
+    #: Line-comment markers for this language (used by the DesignNote extractor, feature 5).
+    line_comment_markers: tuple[str, ...] = ("#",)
+
     @abc.abstractmethod
     def extensions(self) -> tuple[str, ...]:
         """File extensions (lowercase, with leading dot) handled by this provider."""
@@ -49,6 +52,17 @@ class LanguageProvider(abc.ABC):
         Implementations MUST be deterministic: the same source + context always yields the same
         fragment (modulo the stable de-dup/sort applied by :meth:`GraphFragment.deduped`).
         """
+
+    def extract_routes(
+        self, tree: Any, ctx: ParseContext, symbol_lines: dict[int, str]
+    ) -> GraphFragment:
+        """Feature 1: extract Route nodes + ROUTES_TO edges (framework-aware).
+
+        ``symbol_lines`` maps a 1-based definition line to its ``symbol_id`` (from :meth:`extract`),
+        so a route decorator/registration can bind to its handler symbol. Default is a no-op;
+        language providers that know web frameworks override this. Must be deterministic.
+        """
+        return GraphFragment()
 
     def derive_package(self, ctx: ParseContext) -> str | None:
         """Best-effort logical package/namespace for a file. Override per language.

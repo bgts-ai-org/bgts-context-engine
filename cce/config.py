@@ -47,11 +47,19 @@ class Settings(BaseSettings):
     supported_locales: tuple[str, ...] = ("en", "tr")
 
     # --- Embedding (Phase 2; pinned for determinism, P2) ---
+    # Provider selects the encoder: "hashing" (default, dependency-free, deterministic fallback) or
+    # "voyage" (Voyage AI code embeddings). Model + dim are pinned; a change is a reindex boundary.
+    embedding_provider: str = Field(
+        default="hashing",
+        description="Embedding backend: 'hashing' (local fallback) or 'voyage' (Voyage AI).",
+    )
     embedding_model: str = Field(
-        default="unset",
+        default="voyage-code-3",
         description="Pinned embedding model identifier. Versioned for reproducibility (P2).",
     )
-    embedding_dim: int = 768
+    embedding_dim: int = 1024
+    # Voyage AI API key (used only when embedding_provider == 'voyage').
+    voyage_api_key: str = ""
 
     @property
     def dsn(self) -> str:
@@ -59,6 +67,11 @@ class Settings(BaseSettings):
             f"postgresql://{self.db_user}:{self.db_password}"
             f"@{self.db_host}:{self.db_port}/{self.db_name}"
         )
+
+    @property
+    def voyage_ready(self) -> bool:
+        """True if Voyage is selected and an API key is present."""
+        return self.embedding_provider.lower() == "voyage" and bool(self.voyage_api_key)
 
 
 @lru_cache(maxsize=1)
