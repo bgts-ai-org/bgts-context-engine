@@ -240,20 +240,31 @@ class GraphRepository:
         return [dict(zip(columns, row, strict=False)) for row in rows]
 
     def symbol_degree(self, symbol_id: str) -> int:
-        """Total in+out edge degree for a symbol (structural centrality proxy, spec section 6.4)."""
-        columns = ["deg"]
-        query = (
-            "MATCH (s:Symbol {symbol_id: $sym}) "
-            "OPTIONAL MATCH (s)-[out]->() WITH s, count(out) AS outd "
-            "OPTIONAL MATCH ()-[inc]->(s) RETURN outd + count(inc)"
+        """Total in+out edge degree for a symbol (structural centrality proxy, spec section 6.4).
+
+        Computed as two independent counts (out-degree + in-degree) rather than a single query:
+        Apache AGE rejects ``RETURN <grouping_key> + count(...)`` (mixing a key with an aggregate).
+        """
+        out_rows = self.client.cypher(
+            "MATCH (s:Symbol {symbol_id: $sym})-[out]->() RETURN count(out)",
+            {"sym": symbol_id},
+            ["deg"],
         )
-        rows = self.client.cypher(query, {"sym": symbol_id}, columns)
-        if not rows or rows[0][0] is None:
-            return 0
-        try:
-            return int(rows[0][0])
-        except (TypeError, ValueError):
-            return 0
+        in_rows = self.client.cypher(
+            "MATCH ()-[inc]->(s:Symbol {symbol_id: $sym}) RETURN count(inc)",
+            {"sym": symbol_id},
+            ["deg"],
+        )
+
+        def _as_int(rows: list[Any]) -> int:
+            if not rows or rows[0][0] is None:
+                return 0
+            try:
+                return int(rows[0][0])
+            except (TypeError, ValueError):
+                return 0
+
+        return _as_int(out_rows) + _as_int(in_rows)
 
     def lexical_search(
         self, term: str, *, repo_ids: list[str] | None = None, limit: int = 20
