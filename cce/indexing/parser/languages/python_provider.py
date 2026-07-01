@@ -14,11 +14,15 @@ import tree_sitter_python
 
 from cce.domain.enums import EdgeLabel, NodeLabel, SymbolKind
 from cce.domain.models import GraphEdge, GraphFragment, GraphNode
+from cce.indexing.extractor.routes import add_route
 from cce.indexing.parser._treesitter import load_language, make_parser, node_text
 from cce.indexing.parser.base import LanguageProvider, ParseContext
 from cce.indexing.parser.symbol_id import make_module_id, make_symbol_id
 
 _PY_LANGUAGE = load_language(tree_sitter_python)
+
+# Decorator attribute -> HTTP method for FastAPI/Flask-style ``@app.get("/x")`` routes.
+_HTTP_DECORATOR_METHODS = {"get", "post", "put", "patch", "delete", "head", "options"}
 
 
 class _Def:
@@ -37,6 +41,7 @@ class _Def:
 
 class PythonProvider(LanguageProvider):
     language = "python"
+    line_comment_markers = ("#",)
 
     def __init__(self) -> None:
         self._parser = make_parser(_PY_LANGUAGE)
@@ -223,6 +228,107 @@ class PythonProvider(LanguageProvider):
             )
         )
         frag.add_edge(GraphEdge(EdgeLabel.IMPORTS, ctx.file_id, module_id))
+
+    # --- route extraction (feature 1: FastAPI/Flask decorators) ---
+
+    def extract_routes(self, tree, ctx: ParseContext, symbol_lines: dict[int, str]) -> GraphFragment:
+        frag = GraphFragment()
+        source = ctx.source
+        root = tree.root_node
+        stack = [root]
+        while stack:
+            current = stack.pop()
+            for child in current.named_children:
+                if child.type == "decorated_definition":
+                    self._routes_from_decorated(child, ctx, source, symbol_lines, frag)
+                stack.append(child)
+        return frag
+
+    def _routes_from_decorated(self, node, ctx, source, symbol_lines, frag) -> None:
+        inner = self._unwrap_decorated(node)
+        if inner.type != "function_definition":
+            return
+        handler_line = inner.start_point[0] + 1
+        handler_id = symbol_lines.get(handler_line)
+        for decorator in node.named_children:
+            if decorator.type != "decorator":
+                continue
+            call = self._decorator_call(decorator)
+            if call is None:
+                continue
+            self._route_from_call(call, ctx, source, handler_id, decorator, frag)
+
+    @staticmethod
+    def _decorator_call(decorator):
+        for child in decorator.named_children:
+            if child.type == "call":
+                return child
+        return None
+
+    def _route_from_call(self, call, ctx, source, handler_id, decorator, frag) -> None:
+        fn = call.child_by_field_name("function")
+        if fn is None or fn.type != "attribute":
+            return
+        attr = fn.child_by_field_name("attribute")
+        obj = fn.child_by_field_name("object")
+        if attr is None or obj is None:
+            return
+        method_token = node_text(attr, source).lower()
+        args = call.child_by_field_name("arguments")
+        if args is None:
+            return
+        path = self._first_string_arg(args, source)
+        if path is None:
+            return
+        line = decorator.start_point[0] + 1
+
+        if method_token in _HTTP_DECORATOR_METHODS:
+            add_route(
+                frag,
+                repo_id=ctx.repo_id,
+                framework="fastapi",
+                http_method=method_token,
+                path_pattern=path,
+                file_id=ctx.file_id,
+                line=line,
+                indexed_at_commit=ctx.indexed_at_commit,
+                handler_symbol_id=handler_id,
+            )
+        elif method_token == "route":  # Flask: @app.route("/x", methods=["POST"])
+            for method in self._flask_methods(args, source):
+                add_route(
+                    frag,
+                    repo_id=ctx.repo_id,
+                    framework="flask",
+                    http_method=method,
+                    path_pattern=path,
+                    file_id=ctx.file_id,
+                    line=line,
+                    indexed_at_commit=ctx.indexed_at_commit,
+                    handler_symbol_id=handler_id,
+                )
+
+    @staticmethod
+    def _first_string_arg(args, source) -> str | None:
+        for arg in args.named_children:
+            if arg.type == "string":
+                return node_text(arg, source).strip("\"'")
+        return None
+
+    @staticmethod
+    def _flask_methods(args, source) -> list[str]:
+        methods: list[str] = []
+        for arg in args.named_children:
+            if arg.type != "keyword_argument":
+                continue
+            name = arg.child_by_field_name("name")
+            value = arg.child_by_field_name("value")
+            if name is None or value is None or node_text(name, source) != "methods":
+                continue
+            for element in value.named_children:
+                if element.type == "string":
+                    methods.append(node_text(element, source).strip("\"'"))
+        return methods or ["GET"]
 
     # --- pass 2 helpers ---
 

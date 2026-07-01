@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from cce.indexing.embedder import Embedder
 from cce.indexing.extractor import Extractor
 from cce.indexing.gitsync import (
     GitCredentials,
@@ -23,6 +24,7 @@ from cce.indexing.gitsync import (
 from cce.indexing.parser.symbol_id import make_repo_id
 from cce.indexing.upserter import Upserter
 from cce.storage.graph.repository import GraphRepository
+from cce.storage.vector.store import VectorStore
 
 
 @dataclass(slots=True)
@@ -37,10 +39,23 @@ class IndexSummary:
 
 
 class Indexer:
-    def __init__(self, repository: GraphRepository, extractor: Extractor | None = None) -> None:
+    def __init__(
+        self,
+        repository: GraphRepository,
+        extractor: Extractor | None = None,
+        embedder: Embedder | None = None,
+        embed: bool = True,
+    ) -> None:
         self.repository = repository
         self.extractor = extractor or Extractor()
         self.upserter = Upserter(repository)
+        # Embeddings are written into the same connection (P5). Disabled if ``embed=False`` or when
+        # no connection is available (e.g. unit tests with a fake repository).
+        self.embedder = embedder
+        if self.embedder is None and embed:
+            conn = getattr(getattr(repository, "client", None), "conn", None)
+            if conn is not None:
+                self.embedder = Embedder(VectorStore(conn))
 
     def index_local_repo(
         self, *, path: str | Path, name: str, commit: str | None = None
@@ -113,6 +128,10 @@ class Indexer:
             if fragment is None:
                 continue
             self.upserter.upsert_file_fragment(fragment)
+            if self.embedder is not None:
+                self.embedder.embed_fragment(
+                    fragment, repo_id=repo_id, indexed_at_commit=commit
+                )
             files += 1
 
         nodes, edges = self.repository.counts()

@@ -14,6 +14,7 @@ from typing import Any
 
 from cce.domain.enums import EdgeLabel, NodeLabel, SymbolKind
 from cce.domain.models import GraphEdge, GraphFragment, GraphNode
+from cce.indexing.extractor.routes import add_route
 from cce.indexing.parser._treesitter import make_parser, node_text
 from cce.indexing.parser.base import LanguageProvider, ParseContext
 from cce.indexing.parser.symbol_id import make_module_id, make_symbol_id
@@ -21,6 +22,13 @@ from cce.indexing.parser.symbol_id import make_module_id, make_symbol_id
 _FUNCTION_DECLS = {"function_declaration", "generator_function_declaration"}
 _CLASS_DECLS = {"class_declaration", "abstract_class_declaration"}
 _FUNCTION_VALUES = {"arrow_function", "function", "function_expression"}
+
+# Express-style ``app.get('/x', handler)`` / NestJS ``@Get('/x')`` HTTP verbs.
+_EXPRESS_METHODS = {"get", "post", "put", "patch", "delete", "head", "options", "all"}
+_NEST_DECORATORS = {
+    "Get": "GET", "Post": "POST", "Put": "PUT", "Patch": "PATCH",
+    "Delete": "DELETE", "Head": "HEAD", "Options": "OPTIONS", "All": "ANY",
+}
 
 
 class _Def:
@@ -38,6 +46,7 @@ class _JsFamilyProvider(LanguageProvider):
 
     _grammar = None  # set by subclass (tree_sitter.Language)
     _exts: tuple[str, ...] = ()
+    line_comment_markers = ("//",)
 
     def __init__(self) -> None:
         self._parser = make_parser(self._grammar)
@@ -218,6 +227,102 @@ class _JsFamilyProvider(LanguageProvider):
                         )
                     )
                     frag.add_edge(GraphEdge(EdgeLabel.IMPORTS, ctx.file_id, module_id))
+
+    # --- route extraction (feature 1: Express + NestJS) ---
+
+    def extract_routes(self, tree, ctx: ParseContext, symbol_lines: dict[int, str]) -> GraphFragment:
+        frag = GraphFragment()
+        source = ctx.source
+        root = tree.root_node
+        stack = [root]
+        while stack:
+            current = stack.pop()
+            for child in current.named_children:
+                if child.type == "call_expression":
+                    self._express_route(child, ctx, source, frag)
+                elif child.type == "decorator":
+                    self._nest_route(child, ctx, source, symbol_lines, frag)
+                stack.append(child)
+        return frag
+
+    def _express_route(self, call, ctx, source, frag) -> None:
+        fn = call.child_by_field_name("function")
+        if fn is None or fn.type != "member_expression":
+            return
+        prop = fn.child_by_field_name("property")
+        if prop is None:
+            return
+        method = node_text(prop, source).lower()
+        if method not in _EXPRESS_METHODS:
+            return
+        args = call.child_by_field_name("arguments")
+        if args is None:
+            return
+        path = self._first_string_arg(args, source)
+        if path is None:
+            return
+        add_route(
+            frag,
+            repo_id=ctx.repo_id,
+            framework="express",
+            http_method=method,
+            path_pattern=path,
+            file_id=ctx.file_id,
+            line=call.start_point[0] + 1,
+            indexed_at_commit=ctx.indexed_at_commit,
+            handler_symbol_id=None,
+        )
+
+    def _nest_route(self, decorator, ctx, source, symbol_lines, frag) -> None:
+        call = None
+        for child in decorator.named_children:
+            if child.type == "call_expression":
+                call = child
+                break
+        if call is None:
+            return
+        fn = call.child_by_field_name("function")
+        if fn is None or fn.type != "identifier":
+            return
+        method = _NEST_DECORATORS.get(node_text(fn, source))
+        if method is None:
+            return
+        args = call.child_by_field_name("arguments")
+        path = self._first_string_arg(args, source) if args is not None else ""
+        handler_id = self._nest_handler_id(decorator, symbol_lines)
+        add_route(
+            frag,
+            repo_id=ctx.repo_id,
+            framework="nestjs",
+            http_method=method,
+            path_pattern=path or "/",
+            file_id=ctx.file_id,
+            line=decorator.start_point[0] + 1,
+            indexed_at_commit=ctx.indexed_at_commit,
+            handler_symbol_id=handler_id,
+        )
+
+    @staticmethod
+    def _nest_handler_id(decorator, symbol_lines: dict[int, str]) -> str | None:
+        """The decorated method is the sibling starting on the line after the decorator(s)."""
+        parent = decorator.parent
+        if parent is None:
+            return None
+        target_line = None
+        for member in parent.named_children:
+            if member.type in ("method_definition", "method_signature"):
+                target_line = member.start_point[0] + 1
+                break
+        if target_line is None:
+            return None
+        return symbol_lines.get(target_line)
+
+    @staticmethod
+    def _first_string_arg(args, source) -> str | None:
+        for arg in args.named_children:
+            if arg.type in ("string", "template_string"):
+                return node_text(arg, source).strip("\"'`")
+        return None
 
     # --- pass 2 ---
 

@@ -7,11 +7,17 @@
 | **Determinizm (P1)** | Aynı commit + aynı kaynak → byte-identical payload |
 | **Çok dil** | Python, JavaScript, TypeScript, TSX (tree-sitter AST) |
 | **Tek veritabanı (P5)** | PostgreSQL + Apache AGE (graf) + pgvector (embedding) |
-| **Katman-1 araçlar** | Sembol çözümleme, referans bulma |
+| **Katman-1 araçlar** | resolve_symbol, find_references, find_implementers, get_call_graph, get_dependencies, get_type_hierarchy |
+| **Katman-2 araçlar** | semantic_search, hybrid_search, find_similar_code (yalnızca çapa bulma, P2) |
+| **Katman-3 araçlar** | get_context_for_task, suggest_change_sites, expand_blast_radius, select_repos, assemble_context |
+| **Route & DesignNote** | Framework-aware HTTP route (FastAPI/Flask/Express/NestJS) + `WHY/NOTE/HACK/TODO/FIXME` çıkarımı |
+| **Skorlama & coverage** | Deterministik skor (§6.4) + coverage/confidence (§8) + god-node uyarısı |
+| **Auth / RLS** | Repo-bazlı scope filtresi + PostgreSQL RLS + audit_log |
+| **Arayüz** | REST (FastAPI) + MCP server (agent-native, opsiyonel `mcp` paketi) |
 | **Uzak indeksleme** | Bitbucket Cloud URL'den clone/fetch + indeks |
 | **i18n** | Mesajlar `en` / `tr`; payload locale'den etkilenmez |
 
-> **Sürüm:** 0.0.1 (Phase 0) — SCIP entegrasyonu, embedding üretimi, incremental re-index ve RLS henüz planlanmış aşamalardadır.
+> **Sürüm:** 0.0.1 — Faz 0-4 mimarisi (Katman 1-2-3, indeksleme, skorlama, coverage, auth/RLS, REST+MCP) implemente edildi. Embedding varsayılan olarak deterministik hash tabanlı encoder ile çalışır (P2 fallback); gerçek transformer encoder pinlenerek takılabilir.
 
 ---
 
@@ -59,10 +65,21 @@ flowchart LR
     subgraph Query
         CLI[cce CLI]
         API[FastAPI REST]
-        L1[Layer-1 Tools\nresolve / references]
+        MCP[MCP Server]
+        L3[Layer-3\nget_context_for_task ...]
+        L2[Layer-2\nsemantic / hybrid search]
+        L1[Layer-1\nresolve / references / call graph]
         CLI --> L1
         API --> L1
+        API --> L2
+        API --> L3
+        MCP --> L1
+        MCP --> L2
+        MCP --> L3
+        L3 --> L2 --> L1
         L1 --> AGE
+        L2 --> Vec
+        L3 --> SQL
     end
 ```
 
@@ -72,12 +89,15 @@ flowchart LR
 2. **Extractor** — Dosya uzantısına göre dil sağlayıcısı seçilir, AST ayrıştırılır, `GraphFragment` üretilir.
 3. **Upserter** — Düğüm/kenarlar Apache AGE grafiğine `MERGE` ile yazılır; repo meta verisi SQL tablolarına kaydedilir.
 
-### Sorgulama (Layer-1)
+### Sorgulama (Katman 1-2-3)
 
-- `resolve-symbol` — İsme göre sembol eşleştirme
-- `find-references` — Bir `symbol_id`'ye giden çağrı/referans kenarları
+- **Katman 1 (deterministik graf primitive'leri):** `resolve_symbol`, `find_references`, `find_implementers`, `get_call_graph`, `get_dependencies`, `get_type_hierarchy`
+- **Katman 2 (hibrit retrieval — yalnızca çapa bulma, P2):** `semantic_search`, `hybrid_search`, `find_similar_code`
+- **Katman 3 (task-aware orkestrasyon):** `get_context_for_task`, `suggest_change_sites`, `expand_blast_radius`, `select_repos`, `assemble_context`
 
-Her araç `{ tool, payload, message, locale }` zarfını döner. **`payload` locale'den bağımsızdır**; yalnızca `message` çevrilir.
+Retrieval akışı (§6, 5 aşama): commit sabitleme → çok-kaynaklı çapa → deterministik genişletme → skorlama+daraltma (1000→~8) → RLS filtresi → token-budget montaj. Skorlama embedding kullanmaz (P2); embedding yalnızca grafa giriş kapısı bulur.
+
+Her araç `{ tool, payload, message, locale }` zarfını döner. **`payload` locale'den bağımsızdır**; yalnızca `message` çevrilir. Katman-3 çıktıları ayrıca bir `coverage` objesi taşır (§8): güven seviyesi, çapa kaynakları, provenance dağılımı, god-node uyarısı.
 
 ---
 
@@ -159,6 +179,7 @@ Migrasyonlar `cce/storage/relational/migrations/` altındaki SQL dosyalarını s
 | `0001_extensions_graph.sql` | AGE + pgvector extension, `code_graph` oluşturma |
 | `0002_relational.sql` | `repos`, `tasks`, `users`, `scopes`, `audit_log` |
 | `0003_vector.sql` | `embeddings` tablosu (768 boyut, HNSW indeks) |
+| `0004_rls.sql` | Row-Level Security politikaları (`repos`, `embeddings`); `cce.user_id` session değişkeni ile scope |
 
 ---
 
@@ -248,12 +269,25 @@ cce resolve-symbol --name MyClass --repo my-org/my-repo
 cce find-references --symbol-id "python::pkg::ns::MyClass#abc123..."
 ```
 
+### Task için context derle (Katman 3)
+
+```bash
+cce context --task "login endpoint 500 hatası veriyor" --max-tokens 4000 --locale tr
+```
+
 ### REST API sunucusu
 
 ```bash
 cce serve --host 0.0.0.0 --port 8000
 # Geliştirme modu (auto-reload)
 cce serve --reload
+```
+
+### MCP sunucusu (agent-native, opsiyonel)
+
+```bash
+pip install -e ".[mcp]"
+cce serve-mcp   # stdio üzerinden MCP server
 ```
 
 ---
@@ -267,14 +301,28 @@ Sunucu başlatıldığında OpenAPI dokümantasyonu şu adreste:
 
 ### Endpoint'ler
 
-| Method | Path | Açıklama |
-|--------|------|----------|
-| `GET` | `/healthz` | Canlılık + DB erişilebilirliği |
-| `GET` | `/v1/languages` | Desteklenen diller/uzantılar |
-| `GET` | `/v1/resolve-symbol?name=...&repo=...` | Sembol çözümle |
-| `GET` | `/v1/find-references?symbol_id=...` | Referans bul |
-| `POST` | `/v1/index` | Yerel repo indeksle |
-| `POST` | `/v1/index-remote` | Bitbucket repo indeksle |
+| Method | Path | Katman | Açıklama |
+|--------|------|--------|----------|
+| `GET` | `/healthz` | meta | Canlılık + DB erişilebilirliği |
+| `GET` | `/v1/languages` | meta | Desteklenen diller/uzantılar |
+| `POST` | `/v1/index` | indeksleme | Yerel repo indeksle |
+| `POST` | `/v1/index-remote` | indeksleme | Bitbucket repo indeksle |
+| `GET` | `/v1/resolve-symbol?name=...&repo=...` | 1 | Sembol çözümle |
+| `GET` | `/v1/find-references?symbol_id=...` | 1 | Referans bul |
+| `GET` | `/v1/find-implementers?symbol_id=...` | 1 | Implement eden tipler |
+| `GET` | `/v1/get-call-graph?symbol_id=...&hops=&direction=` | 1 | Çağrı grafı (callers/callees) |
+| `GET` | `/v1/get-dependencies?file_id=...&transitive=` | 1 | Dosya IMPORTS bağımlılıkları |
+| `GET` | `/v1/get-type-hierarchy?symbol_id=...` | 1 | Üst/alt tip hiyerarşisi |
+| `POST` | `/v1/semantic-search` | 2 | Semantik çapa arama |
+| `POST` | `/v1/hybrid-search` | 2 | Keyword + semantik + yapısal blend |
+| `POST` | `/v1/find-similar-code` | 2 | Kod parçasına benzer semboller |
+| `POST` | `/v1/get-context-for-task` | 3 | Task → assembled context + coverage |
+| `POST` | `/v1/suggest-change-sites` | 3 | Skorlu değişiklik adayları |
+| `POST` | `/v1/expand-blast-radius` | 3 | Etki yüzeyi (dosya/repo/sembol) |
+| `POST` | `/v1/select-repos` | 3 | Task için aday repo kümesi |
+| `POST` | `/v1/assemble-context` | 3 | Sembol listesini budget'a montaj |
+
+> Katman-3 uçları isteğe bağlı `X-CCE-User` başlığı ile scope filtresi uygular (RLS, §9). Başlık yoksa sistem principal'ı (allow-all) kullanılır.
 
 ### Örnek istekler
 
@@ -403,19 +451,32 @@ context-engine/
 ├── cce/                          # Ana Python paketi
 │   ├── cli.py                    # Typer CLI giriş noktası
 │   ├── config.py                 # Pydantic Settings (CCE_* env)
-│   ├── api/rest/                 # FastAPI REST katmanı
-│   ├── core/i18n/                # Çeviri katalogları (en, tr)
+│   ├── api/
+│   │   ├── rest/                 # FastAPI REST katmanı (Katman 1-2-3)
+│   │   └── mcp/                  # MCP tool kataloğu + server adaptörü
+│   ├── core/
+│   │   ├── i18n/                 # Çeviri katalogları (en, tr)
+│   │   ├── scoring/              # Skorlama motoru (§6.4)
+│   │   ├── orchestrator/         # Çapa bulma + genişletme + 5-aşama akış
+│   │   ├── coverage/             # Coverage/Confidence + god-node (§8)
+│   │   ├── assembler/            # Token-budget montaj (§6.5)
+│   │   └── auth/                 # Scope filtresi + audit_log (§9)
 │   ├── domain/                   # GraphNode, GraphEdge, enum'lar
 │   ├── indexing/
-│   │   ├── indexer.py            # İndeksleme orkestratörü
-│   │   ├── extractor/            # Dil-agnostik çıkarım
+│   │   ├── indexer.py            # İndeksleme orkestratörü (+embedding)
+│   │   ├── extractor/            # Dil-agnostik çıkarım + route + designnote
 │   │   ├── parser/               # Tree-sitter sağlayıcıları
+│   │   ├── embedder/             # Encoder + embedding yazımı (P2)
 │   │   ├── gitsync/              # Yerel/uzak git sync
 │   │   └── upserter/             # AGE graf yazımı
 │   ├── storage/
-│   │   ├── graph/                # Apache AGE Cypher client
-│   │   └── relational/           # SQL + migrator
-│   └── tools/layer1/             # resolve_symbol, find_references
+│   │   ├── graph/                # Apache AGE Cypher client + repository
+│   │   ├── relational/           # SQL + migrator + queries
+│   │   └── vector/               # pgvector store
+│   └── tools/
+│       ├── layer1/               # Deterministik graf primitive'leri
+│       ├── layer2/               # Hibrit retrieval
+│       └── layer3/               # Task-aware orkestrasyon
 ├── deploy/
 │   ├── docker-compose.yml        # PostgreSQL + AGE + pgvector
 │   ├── Dockerfile
@@ -471,20 +532,21 @@ cce serve --reload
 
 | Faz | Durum | Kapsam |
 |-----|-------|--------|
-| **Phase 0** | ✅ Mevcut | AST çıkarım, full-index, Layer-1 araçlar, REST/CLI |
-| **Phase 1** | Planlanmış | Incremental re-index, cross-file SCIP, route extraction |
-| **Phase 2** | Planlanmış | Embedding üretimi, semantik anchor bulma |
-| **Phase 3** | Planlanmış | Context paketi birleştirme, skorlama |
-| **Phase 4** | Planlanmış | RLS, multi-tenant erişim kontrolü |
+| **Faz 0** | ✅ | AST çıkarım, full-index, symbol_id, i18n iskeleti |
+| **Faz 1** | ✅ | Tüm Katman-1 araçlar, REST/CLI/MCP, `delete_file_subgraph` altyapısı |
+| **Faz 2** | ✅ | Embedding (encoder + pgvector), Katman-2, çapa bulma, deterministik genişletme, skorlama, route + designnote çıkarımı, provenance |
+| **Faz 3** | ✅ | Katman-3 orkestrasyon, coverage/confidence + god-node, token-budget montaj |
+| **Faz 4** | ✅ | Scope filtresi + RLS + audit_log, MCP server, API versiyonlama (`/v1`) |
 
-Phase 0 kapsamında **henüz yapılmayan** özellikler:
+**Sonraki adımlar (ürünleştirme öncesi):**
 
-- Cross-file / cross-repo sembol çözümlemesi (SCIP)
-- `REFERENCES.ref_kind` zenginleştirmesi (define/write/read/pass)
-- Embedding üretimi ve vektör arama
-- Incremental re-index (`delete_file_subgraph` altyapısı hazır)
-- Framework-aware HTTP route çıkarımı
-- Inline yorumlardan design note çıkarımı
+- Cross-file / cross-repo sembol çözümlemesi (SCIP/LSIF) ile `treesitter` → `scip` provenance yükseltmesi
+- `REFERENCES.ref_kind` (define/write/read/pass) için tam AST zenginleştirmesi
+- Gerçek transformer embedding encoder'ının pinlenerek entegrasyonu (varsayılan deterministik hash fallback yerine)
+- Incremental re-index'in git-diff webhook/polling ile sürülmesi
+- Dil genişletme (Java/C#/Go → mobil native) ve diller-arası köprüler (RN/Expo/Swift-ObjC)
+- Route framework genişletme (Spring/ASP.NET/Gin/Rails/Laravel/Axum)
+- SBOM/lisans taraması (AGPL kaçınma)
 
 ---
 

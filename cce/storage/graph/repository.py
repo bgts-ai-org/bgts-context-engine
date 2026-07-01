@@ -96,10 +96,184 @@ class GraphRepository:
         query = (
             "MATCH (caller:Symbol)-[r]->(t:Symbol {symbol_id: $sym}) "
             f"WHERE type(r) IN {_REFERENCE_EDGE_TYPES} "
-            "RETURN caller.symbol_id, caller.file_id, caller.line, type(r), r.ref_kind, r.provenance"
+            "RETURN caller.symbol_id, caller.file_id, caller.line, type(r), r.ref_kind, r.provenance "
+            "ORDER BY caller.symbol_id, caller.line"
         )
         rows = self.client.cypher(query, {"sym": symbol_id}, columns)
         return [dict(zip(columns, row, strict=False)) for row in rows]
+
+    def get_symbol(self, symbol_id: str) -> dict[str, Any] | None:
+        """Return a single symbol's core properties (or None if it does not exist)."""
+        columns = ["symbol_id", "name", "kind", "signature", "file_id", "line", "indexed_at_commit"]
+        query = (
+            "MATCH (s:Symbol {symbol_id: $sym}) "
+            "RETURN s.symbol_id, s.name, s.kind, s.signature, s.file_id, s.line, "
+            "s.indexed_at_commit LIMIT 1"
+        )
+        rows = self.client.cypher(query, {"sym": symbol_id}, columns)
+        if not rows:
+            return None
+        return dict(zip(columns, rows[0], strict=False))
+
+    def find_implementers(self, symbol_id: str) -> list[dict[str, Any]]:
+        """Types that INHERITS/IMPLEMENTS the given type symbol (may be cross-repo)."""
+        columns = ["symbol_id", "name", "kind", "file_id", "line", "edge_type", "provenance"]
+        query = (
+            "MATCH (impl:Symbol)-[r]->(t:Symbol {symbol_id: $sym}) "
+            "WHERE type(r) IN ['INHERITS', 'IMPLEMENTS'] "
+            "RETURN impl.symbol_id, impl.name, impl.kind, impl.file_id, impl.line, "
+            "type(r), r.provenance "
+            "ORDER BY impl.symbol_id"
+        )
+        rows = self.client.cypher(query, {"sym": symbol_id}, columns)
+        return [dict(zip(columns, row, strict=False)) for row in rows]
+
+    def get_callers(self, symbol_id: str) -> list[dict[str, Any]]:
+        columns = ["symbol_id", "name", "file_id", "line", "provenance"]
+        query = (
+            "MATCH (caller:Symbol)-[r:CALLS]->(t:Symbol {symbol_id: $sym}) "
+            "RETURN caller.symbol_id, caller.name, caller.file_id, caller.line, r.provenance "
+            "ORDER BY caller.symbol_id"
+        )
+        rows = self.client.cypher(query, {"sym": symbol_id}, columns)
+        return [dict(zip(columns, row, strict=False)) for row in rows]
+
+    def get_callees(self, symbol_id: str) -> list[dict[str, Any]]:
+        columns = ["symbol_id", "name", "file_id", "line", "provenance"]
+        query = (
+            "MATCH (s:Symbol {symbol_id: $sym})-[r:CALLS]->(callee:Symbol) "
+            "RETURN callee.symbol_id, callee.name, callee.file_id, callee.line, r.provenance "
+            "ORDER BY callee.symbol_id"
+        )
+        rows = self.client.cypher(query, {"sym": symbol_id}, columns)
+        return [dict(zip(columns, row, strict=False)) for row in rows]
+
+    def get_supertypes(self, symbol_id: str) -> list[dict[str, Any]]:
+        columns = ["symbol_id", "name", "kind", "file_id", "line", "edge_type", "provenance"]
+        query = (
+            "MATCH (s:Symbol {symbol_id: $sym})-[r]->(super:Symbol) "
+            "WHERE type(r) IN ['INHERITS', 'IMPLEMENTS'] "
+            "RETURN super.symbol_id, super.name, super.kind, super.file_id, super.line, "
+            "type(r), r.provenance "
+            "ORDER BY super.symbol_id"
+        )
+        rows = self.client.cypher(query, {"sym": symbol_id}, columns)
+        return [dict(zip(columns, row, strict=False)) for row in rows]
+
+    def get_subtypes(self, symbol_id: str) -> list[dict[str, Any]]:
+        columns = ["symbol_id", "name", "kind", "file_id", "line", "edge_type", "provenance"]
+        query = (
+            "MATCH (sub:Symbol)-[r]->(s:Symbol {symbol_id: $sym}) "
+            "WHERE type(r) IN ['INHERITS', 'IMPLEMENTS'] "
+            "RETURN sub.symbol_id, sub.name, sub.kind, sub.file_id, sub.line, "
+            "type(r), r.provenance "
+            "ORDER BY sub.symbol_id"
+        )
+        rows = self.client.cypher(query, {"sym": symbol_id}, columns)
+        return [dict(zip(columns, row, strict=False)) for row in rows]
+
+    def get_file_imports(self, file_id: str) -> list[dict[str, Any]]:
+        """Direct IMPORTS edges out of a file (to modules/files)."""
+        columns = ["target_id", "namespace", "provenance"]
+        query = (
+            "MATCH (f:File {file_id: $fid})-[r:IMPORTS]->(m) "
+            "RETURN m.gid, m.namespace, r.provenance "
+            "ORDER BY m.gid"
+        )
+        rows = self.client.cypher(query, {"fid": file_id}, columns)
+        return [dict(zip(columns, row, strict=False)) for row in rows]
+
+    def find_routes(self, path_substring: str | None = None) -> list[dict[str, Any]]:
+        """Route nodes and their handler symbol (anchor source #1: explicit route reference)."""
+        columns = ["route_id", "http_method", "path_pattern", "framework", "handler_id", "line"]
+        if path_substring:
+            query = (
+                "MATCH (rt:Route) WHERE rt.path_pattern CONTAINS $q "
+                "OPTIONAL MATCH (rt)-[:ROUTES_TO]->(s:Symbol) "
+                "RETURN rt.route_id, rt.http_method, rt.path_pattern, rt.framework, s.symbol_id, "
+                "rt.line ORDER BY rt.route_id"
+            )
+            params = {"q": path_substring}
+        else:
+            query = (
+                "MATCH (rt:Route) OPTIONAL MATCH (rt)-[:ROUTES_TO]->(s:Symbol) "
+                "RETURN rt.route_id, rt.http_method, rt.path_pattern, rt.framework, s.symbol_id, "
+                "rt.line ORDER BY rt.route_id"
+            )
+            params = {}
+        rows = self.client.cypher(query, params, columns)
+        return [dict(zip(columns, row, strict=False)) for row in rows]
+
+    def get_design_notes(self, symbol_id: str) -> list[dict[str, Any]]:
+        """DesignNotes that EXPLAINS a symbol (feature 5: the "why")."""
+        columns = ["note_id", "kind", "text", "file_id", "line"]
+        query = (
+            "MATCH (n:DesignNote)-[:EXPLAINS]->(s:Symbol {symbol_id: $sym}) "
+            "RETURN n.note_id, n.kind, n.text, n.file_id, n.line ORDER BY n.line"
+        )
+        rows = self.client.cypher(query, {"sym": symbol_id}, columns)
+        return [dict(zip(columns, row, strict=False)) for row in rows]
+
+    def symbols_in_file(self, file_id: str) -> list[dict[str, Any]]:
+        """All symbols defined in a file (used to expand file anchors to symbols)."""
+        columns = ["symbol_id", "name", "kind", "line"]
+        query = (
+            "MATCH (s:Symbol)-[:DEFINED_IN]->(f:File {file_id: $fid}) "
+            "RETURN s.symbol_id, s.name, s.kind, s.line ORDER BY s.line, s.symbol_id"
+        )
+        rows = self.client.cypher(query, {"fid": file_id}, columns)
+        return [dict(zip(columns, row, strict=False)) for row in rows]
+
+    def symbol_degree(self, symbol_id: str) -> int:
+        """Total in+out edge degree for a symbol (structural centrality proxy, spec section 6.4)."""
+        columns = ["deg"]
+        query = (
+            "MATCH (s:Symbol {symbol_id: $sym}) "
+            "OPTIONAL MATCH (s)-[out]->() WITH s, count(out) AS outd "
+            "OPTIONAL MATCH ()-[inc]->(s) RETURN outd + count(inc)"
+        )
+        rows = self.client.cypher(query, {"sym": symbol_id}, columns)
+        if not rows or rows[0][0] is None:
+            return 0
+        try:
+            return int(rows[0][0])
+        except (TypeError, ValueError):
+            return 0
+
+    def lexical_search(
+        self, term: str, *, repo_ids: list[str] | None = None, limit: int = 20
+    ) -> list[dict[str, Any]]:
+        """Deterministic keyword match on symbol name (case-insensitive CONTAINS).
+
+        Ordered by name then symbol_id for reproducibility. Feeds hybrid search + anchor source #4
+        (the lexical half) without any model.
+        """
+        columns = ["symbol_id", "name", "kind", "file_id", "line", "indexed_at_commit"]
+        term_l = (term or "").lower()
+        ret = (
+            "RETURN s.symbol_id, s.name, s.kind, s.file_id, s.line, s.indexed_at_commit "
+            "ORDER BY s.name, s.symbol_id LIMIT $limit"
+        )
+        if repo_ids:
+            query = (
+                "MATCH (s:Symbol)-[:DEFINED_IN]->(f:File) "
+                "WHERE toLower(s.name) CONTAINS $term AND f.repo_id IN $repos " + ret
+            )
+            params: dict[str, Any] = {"term": term_l, "repos": repo_ids, "limit": limit}
+        else:
+            query = "MATCH (s:Symbol) WHERE toLower(s.name) CONTAINS $term " + ret
+            params = {"term": term_l, "limit": limit}
+        rows = self.client.cypher(query, params, columns)
+        return [dict(zip(columns, row, strict=False)) for row in rows]
+
+    def repo_of_symbol(self, symbol_id: str) -> str | None:
+        columns = ["repo_id"]
+        query = (
+            "MATCH (s:Symbol {symbol_id: $sym})-[:DEFINED_IN]->(f:File) "
+            "RETURN f.repo_id LIMIT 1"
+        )
+        rows = self.client.cypher(query, {"sym": symbol_id}, columns)
+        return rows[0][0] if rows else None
 
     def counts(self) -> tuple[int, int]:
         nodes = self.client.cypher("MATCH (n) RETURN count(n)", None, ["c"])
