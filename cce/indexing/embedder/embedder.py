@@ -4,9 +4,14 @@ Turns the symbols/files of a :class:`GraphFragment` into embedding rows and writ
 in the caller's transaction (P5). The embedded content is a deterministic string built from
 signature + docstring (+ name/kind), so the same source always produces the same content and, with
 a pinned encoder, the same vector (P2 determinism).
+
+Content is collected first and encoded in one batch (``encode_many``) so batch-API encoders like
+Voyage make a single request per file fragment (rate-limit friendly).
 """
 
 from __future__ import annotations
+
+from dataclasses import dataclass
 
 from cce.domain.enums import NodeLabel
 from cce.domain.models import GraphFragment
@@ -24,41 +29,43 @@ def _symbol_content(props: dict) -> str:
     return "\n".join(p for p in parts if p).strip()
 
 
+@dataclass(slots=True)
+class _Pending:
+    kind: str
+    ref_id: str
+    content: str
+
+
 class Embedder:
     def __init__(self, store: VectorStore, encoder: Encoder | None = None) -> None:
         self.store = store
         self.encoder = encoder or build_default_encoder()
 
     def embed_fragment(self, fragment: GraphFragment, *, repo_id: str, indexed_at_commit: str) -> int:
-        """Embed every Symbol (and File name) in a fragment. Returns the number of rows written."""
-        written = 0
+        """Embed every Symbol (and File) in a fragment. Returns the number of rows written."""
+        pending: list[_Pending] = []
         for node in fragment.nodes:
             if node.label is NodeLabel.SYMBOL:
                 content = _symbol_content(node.properties)
-                if not content:
-                    continue
-                self.store.upsert(
-                    kind="symbol",
-                    ref_id=node.node_id,
-                    repo_id=repo_id,
-                    content=content,
-                    model=self.encoder.model_id,
-                    embedding=self.encoder.encode(content),
-                    indexed_at_commit=indexed_at_commit,
-                )
-                written += 1
+                if content:
+                    pending.append(_Pending("symbol", node.node_id, content))
             elif node.label is NodeLabel.FILE:
                 content = str(node.properties.get("path") or "")
-                if not content:
-                    continue
-                self.store.upsert(
-                    kind="file",
-                    ref_id=node.node_id,
-                    repo_id=repo_id,
-                    content=content,
-                    model=self.encoder.model_id,
-                    embedding=self.encoder.encode(content),
-                    indexed_at_commit=indexed_at_commit,
-                )
-                written += 1
-        return written
+                if content:
+                    pending.append(_Pending("file", node.node_id, content))
+
+        if not pending:
+            return 0
+
+        vectors = self.encoder.encode_many([p.content for p in pending])
+        for item, vector in zip(pending, vectors, strict=True):
+            self.store.upsert(
+                kind=item.kind,
+                ref_id=item.ref_id,
+                repo_id=repo_id,
+                content=item.content,
+                model=self.encoder.model_id,
+                embedding=vector,
+                indexed_at_commit=indexed_at_commit,
+            )
+        return len(pending)

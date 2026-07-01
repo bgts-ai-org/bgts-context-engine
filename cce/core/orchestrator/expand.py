@@ -43,8 +43,19 @@ def expand_from_anchors(
     """Fixed-template, bounded, deterministic expansion. Returns candidates keyed by symbol_id."""
     found: dict[str, ExpansionInfo] = {}
 
-    def record(sid: str, distance: int, *, anchor: bool, provenance: str | None) -> bool:
-        """Insert/keep-smallest-distance. Returns True if this is a new node to expand from."""
+    def record(
+        sid: str,
+        distance: int,
+        *,
+        anchor: bool,
+        provenance: str | None,
+        ref_kind: str | None = None,
+    ) -> bool:
+        """Insert/keep-smallest-distance. Returns True if this is a new node to expand from.
+
+        ref_kind, once set from a REFERENCES edge, is retained (stable per node) so scoring gets a
+        deterministic define/write/read/pass signal regardless of traversal order.
+        """
         existing = found.get(sid)
         if existing is None:
             found[sid] = ExpansionInfo(
@@ -52,6 +63,7 @@ def expand_from_anchors(
                 repo_id=repository.repo_of_symbol(sid),
                 distance=distance,
                 is_anchor=anchor,
+                ref_kind=ref_kind,
                 provenance=provenance,
             )
             return True
@@ -59,6 +71,8 @@ def expand_from_anchors(
             existing.distance = distance
         if anchor:
             existing.is_anchor = True
+        if existing.ref_kind is None and ref_kind is not None:
+            existing.ref_kind = ref_kind
         return False
 
     for sid in sorted(set(anchor_ids)):
@@ -68,6 +82,17 @@ def expand_from_anchors(
     _bfs(repository, sorted(set(anchor_ids)), _CALLERS_HOPS, repository.get_callers, record)
     # Callees 1 hop (what the anchor uses).
     _bfs(repository, sorted(set(anchor_ids)), _CALLEES_HOPS, repository.get_callees, record)
+
+    # Referrers (REFERENCES edges) 1 hop: define/write/read/pass usages -> tag ref_kind (§6.4).
+    for sid in sorted(set(anchor_ids)):
+        for ref in repository.get_referrers(sid):
+            record(
+                ref["symbol_id"],
+                1,
+                anchor=False,
+                provenance=ref.get("provenance"),
+                ref_kind=ref.get("ref_kind"),
+            )
 
     # Type hierarchy (full, both directions) + same-file siblings, 1 hop from anchors.
     for sid in sorted(set(anchor_ids)):

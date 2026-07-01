@@ -148,6 +148,21 @@ class GraphRepository:
         rows = self.client.cypher(query, {"sym": symbol_id}, columns)
         return [dict(zip(columns, row, strict=False)) for row in rows]
 
+    def get_referrers(self, symbol_id: str) -> list[dict[str, Any]]:
+        """Symbols with a REFERENCES edge into the target, carrying ref_kind (scoring §6.4).
+
+        Distinct from ``get_callers`` (CALLS): this surfaces define/write/read/pass usages so
+        expansion can tag candidates with the strongest reference kind that reached them.
+        """
+        columns = ["symbol_id", "name", "file_id", "line", "ref_kind", "provenance"]
+        query = (
+            "MATCH (ref:Symbol)-[r:REFERENCES]->(t:Symbol {symbol_id: $sym}) "
+            "RETURN ref.symbol_id, ref.name, ref.file_id, ref.line, r.ref_kind, r.provenance "
+            "ORDER BY ref.symbol_id"
+        )
+        rows = self.client.cypher(query, {"sym": symbol_id}, columns)
+        return [dict(zip(columns, row, strict=False)) for row in rows]
+
     def get_supertypes(self, symbol_id: str) -> list[dict[str, Any]]:
         columns = ["symbol_id", "name", "kind", "file_id", "line", "edge_type", "provenance"]
         query = (

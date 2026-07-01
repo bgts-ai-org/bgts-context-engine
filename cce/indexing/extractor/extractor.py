@@ -11,17 +11,29 @@ later phases.
 
 from __future__ import annotations
 
-from cce.domain.enums import NodeLabel
+from cce.domain.enums import EdgeLabel, NodeLabel, Provenance
 from cce.domain.models import GraphFragment
 from cce.indexing.extractor.designnote import extract_design_notes
 from cce.indexing.parser.base import ParseContext
 from cce.indexing.parser.registry import LanguageRegistry, build_default_registry
+from cce.indexing.parser.scip import ScipResolution
 from cce.indexing.parser.symbol_id import make_file_id
+
+# Edge kinds whose provenance SCIP can elevate (relationship edges, not membership edges).
+_SCIP_ELEVATABLE = {EdgeLabel.CALLS, EdgeLabel.REFERENCES, EdgeLabel.INHERITS, EdgeLabel.IMPLEMENTS}
 
 
 class Extractor:
-    def __init__(self, registry: LanguageRegistry | None = None) -> None:
+    def __init__(
+        self,
+        registry: LanguageRegistry | None = None,
+        *,
+        scip_resolution: ScipResolution | None = None,
+    ) -> None:
         self.registry = registry or build_default_registry()
+        # Optional repo-level exact resolution (feature 3). When present, relationship edges it
+        # confirms are elevated to Provenance.SCIP; otherwise behaviour is unchanged.
+        self.scip_resolution = scip_resolution
 
     def supports(self, path: str) -> bool:
         return self.registry.get_for_path(path) is not None
@@ -69,7 +81,30 @@ class Extractor:
                 symbol_lines=[(line, sid) for line, sid in symbol_lines.items()],
             )
         )
+        if self.scip_resolution is not None:
+            self._elevate_provenance(fragment)
         return fragment.deduped()
+
+    def _elevate_provenance(self, fragment: GraphFragment) -> None:
+        """Raise relationship-edge provenance to SCIP where the resolution confirms the pair.
+
+        Endpoints are mapped to SCIP monikers by symbol *name* (a deterministic heuristic that works
+        without per-language moniker plumbing). Only relationship edges are eligible; membership
+        edges (DEFINED_IN/BELONGS_TO/IMPORTS) are untouched.
+        """
+        names: dict[str, str] = {}
+        for node in fragment.nodes:
+            if node.label is NodeLabel.SYMBOL:
+                name = node.properties.get("name")
+                if isinstance(name, str):
+                    names[node.node_id] = name
+        for edge in fragment.edges:
+            if edge.label not in _SCIP_ELEVATABLE:
+                continue
+            src_name = names.get(edge.src_id)
+            dst_name = names.get(edge.dst_id)
+            if src_name and dst_name and self.scip_resolution.confirms(src_name, dst_name):
+                edge.provenance = Provenance.SCIP
 
     @staticmethod
     def _symbol_lines(fragment: GraphFragment) -> dict[int, str]:

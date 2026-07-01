@@ -36,6 +36,16 @@ dev = [
 mcp = [
     "mcp>=1.0",
 ]
+# Voyage AI embeddings (Phase 2). Optional: the hashing fallback works without it.
+embed = [
+    "voyageai>=0.3",
+]
+# Additional language grammars (Phase: language extension). Optional per deployment.
+langs = [
+    "tree-sitter-java>=0.21",
+    "tree-sitter-c-sharp>=0.21",
+    "tree-sitter-go>=0.21",
+]
 
 [project.scripts]
 cce = "cce.cli:main"

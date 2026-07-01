@@ -15,6 +15,7 @@
   "tool.dependencies.count": "{count} dependency import(s) found for file '{file}'.",
   "tool.type_hierarchy.summary": "Type hierarchy for '{name}': {supers} supertype(s), {subs} subtype(s).",
   "tool.indexing.done": "Indexed {files} file(s): {nodes} nodes, {edges} edges at commit {commit}.",
+  "tool.reindex.done": "Re-indexed changes at commit {commit}: {added} added, {modified} modified, {deleted} deleted.",
   "tool.semantic_search.count": "{count} candidate(s) found for query '{query}'.",
   "tool.hybrid_search.count": "{count} candidate(s) found (hybrid) for query '{query}'.",
   "tool.find_similar_code.count": "{count} similar code fragment(s) found.",

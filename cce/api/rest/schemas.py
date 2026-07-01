@@ -30,6 +30,17 @@ class IndexRemoteRequest(BaseModel):
     )
 
 
+class ReindexRequest(BaseModel):
+    """Incremental re-index request (git-diff driven, Phase 1)."""
+
+    repo_path: str = Field(..., description="Path to the local git working tree.")
+    name: str = Field(..., description="Logical repository name (must match the prior index).")
+    since_commit: str | None = Field(
+        default=None, description="Baseline commit (default: repo's last_indexed_commit)."
+    )
+    to_commit: str = Field(default="HEAD", description="Target commit/ref (default: HEAD).")
+
+
 class SearchRequest(BaseModel):
     """Layer-2 search request (semantic / hybrid)."""
 

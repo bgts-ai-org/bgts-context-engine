@@ -15,6 +15,7 @@
   "tool.dependencies.count": "'{file}' dosyası için {count} bağımlılık import'u bulundu.",
   "tool.type_hierarchy.summary": "'{name}' için tip hiyerarşisi: {supers} üst tip, {subs} alt tip.",
   "tool.indexing.done": "{files} dosya indekslendi: {commit} commit'inde {nodes} düğüm, {edges} kenar.",
+  "tool.reindex.done": "{commit} commit'inde değişiklikler yeniden indekslendi: {added} eklendi, {modified} değişti, {deleted} silindi.",
   "tool.semantic_search.count": "'{query}' sorgusu için {count} aday bulundu.",
   "tool.hybrid_search.count": "'{query}' sorgusu için (hibrit) {count} aday bulundu.",
   "tool.find_similar_code.count": "{count} benzer kod parçası bulundu.",

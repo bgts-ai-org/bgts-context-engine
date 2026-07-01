@@ -4,15 +4,16 @@ JS and TS share extraction logic (the TS grammar is largely a superset), so a si
 implements ``extract`` and the concrete providers only differ by grammar + extensions. This keeps
 the abstraction-first promise: TypeScript was added without touching the extraction code.
 
-Phase 0 scope mirrors the Python provider: File + Symbol nodes and
-DEFINED_IN / BELONGS_TO / IMPORTS / INHERITS / CALLS edges with intra-file resolution.
+Scope mirrors the Python provider: File + Symbol nodes and
+DEFINED_IN / BELONGS_TO / IMPORTS / INHERITS / CALLS edges with intra-file resolution, plus
+REFERENCES edges carrying ``ref_kind`` (define/write/read/pass) for scoring (§6.4).
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from cce.domain.enums import EdgeLabel, NodeLabel, SymbolKind
+from cce.domain.enums import EdgeLabel, NodeLabel, RefKind, SymbolKind
 from cce.domain.models import GraphEdge, GraphFragment, GraphNode
 from cce.indexing.extractor.routes import add_route
 from cce.indexing.parser._treesitter import make_parser, node_text
@@ -22,6 +23,9 @@ from cce.indexing.parser.symbol_id import make_module_id, make_symbol_id
 _FUNCTION_DECLS = {"function_declaration", "generator_function_declaration"}
 _CLASS_DECLS = {"class_declaration", "abstract_class_declaration"}
 _FUNCTION_VALUES = {"arrow_function", "function", "function_expression"}
+
+# Strength ordering for ref_kind (higher wins when a symbol is used multiple ways in one body).
+_REF_KIND_RANK = {RefKind.READ: 0, RefKind.PASS: 1, RefKind.WRITE: 2, RefKind.DEFINE: 3}
 
 # Express-style ``app.get('/x', handler)`` / NestJS ``@Get('/x')`` HTTP verbs.
 _EXPRESS_METHODS = {"get", "post", "put", "patch", "delete", "head", "options", "all"}
@@ -94,6 +98,12 @@ class _JsFamilyProvider(LanguageProvider):
                 target = self._resolve_call(call, source, module_symbols, class_methods, d.class_name)
                 if target is not None and target != d.symbol_id:
                     frag.add_edge(GraphEdge(EdgeLabel.CALLS, d.symbol_id, target))
+
+        # REFERENCES edges with ref_kind (define/write/read/pass) for scoring (§6.4).
+        for d in defs:
+            if d.body is None:
+                continue
+            self._collect_references(d, source, module_symbols, frag)
 
         return frag
 
@@ -353,6 +363,88 @@ class _JsFamilyProvider(LanguageProvider):
             if obj is not None and prop is not None and node_text(obj, source) == "this" and class_name:
                 return class_methods.get(class_name, {}).get(node_text(prop, source))
         return None
+
+    # --- REFERENCES.ref_kind ---
+
+    def _collect_references(self, d, source, module_symbols, frag) -> None:
+        """Emit REFERENCES edges from ``d`` to module symbols it uses, tagged with ref_kind.
+
+        ``define`` (declared/assigned as target), ``write`` (augmented/member assignment),
+        ``read`` (plain use), ``pass`` (used as a call argument). The strongest kind per target wins.
+        """
+        strongest: dict[str, RefKind] = {}
+
+        def note(name: str, kind: RefKind) -> None:
+            target = module_symbols.get(name)
+            if target is None or target == d.symbol_id:
+                return
+            current = strongest.get(target)
+            if current is None or _REF_KIND_RANK[kind] > _REF_KIND_RANK[current]:
+                strongest[target] = kind
+
+        self._walk_refs(d.body, source, note)
+
+        for target in sorted(strongest):
+            frag.add_edge(
+                GraphEdge(
+                    EdgeLabel.REFERENCES,
+                    d.symbol_id,
+                    target,
+                    ref_kind=strongest[target],
+                )
+            )
+
+    def _walk_refs(self, node, source, note) -> None:
+        stop = _FUNCTION_DECLS | _CLASS_DECLS | _FUNCTION_VALUES | {
+            "method_definition",
+            "method_signature",
+        }
+        stack = [node]
+        while stack:
+            current = stack.pop()
+            for child in current.named_children:
+                self._classify_ref_node(child, source, note)
+                if child.type not in stop:
+                    stack.append(child)
+
+    def _classify_ref_node(self, child, source, note) -> None:
+        ctype = child.type
+        if ctype == "variable_declarator":
+            name_node = child.child_by_field_name("name")
+            if name_node is not None and name_node.type == "identifier":
+                note(node_text(name_node, source), RefKind.DEFINE)
+            self._note_reads(child.child_by_field_name("value"), source, note)
+        elif ctype == "assignment_expression":
+            left = child.child_by_field_name("left")
+            if left is not None and left.type == "identifier":
+                note(node_text(left, source), RefKind.WRITE)
+            elif left is not None and left.type == "member_expression":
+                obj = left.child_by_field_name("object")
+                if obj is not None and obj.type == "identifier":
+                    note(node_text(obj, source), RefKind.WRITE)
+            self._note_reads(child.child_by_field_name("right"), source, note)
+        elif ctype == "augmented_assignment_expression":
+            left = child.child_by_field_name("left")
+            if left is not None and left.type == "identifier":
+                note(node_text(left, source), RefKind.WRITE)
+            self._note_reads(child.child_by_field_name("right"), source, note)
+        elif ctype == "call_expression":
+            args = child.child_by_field_name("arguments")
+            if args is not None:
+                for arg in args.named_children:
+                    if arg.type == "identifier":
+                        note(node_text(arg, source), RefKind.PASS)
+
+    def _note_reads(self, node, source, note) -> None:
+        if node is None:
+            return
+        stack = [node]
+        while stack:
+            current = stack.pop()
+            if current.type == "identifier":
+                note(node_text(current, source), RefKind.READ)
+            for kid in current.named_children:
+                stack.append(kid)
 
     @staticmethod
     def _unwrap_export(node):

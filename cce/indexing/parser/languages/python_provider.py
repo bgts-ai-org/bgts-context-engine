@@ -1,9 +1,10 @@
 """Python language provider (tree-sitter).
 
-Phase 0 scope (deterministic, AST-only): File + Symbol nodes, DEFINED_IN / BELONGS_TO / IMPORTS /
-INHERITS / CALLS edges, with intra-file resolution for inheritance and calls. Cross-file and
-cross-repo resolution and fine-grained REFERENCES.ref_kind enrichment arrive with SCIP/scoring in
-later phases; the schema already carries those fields.
+Scope (deterministic, AST-only): File + Symbol nodes, DEFINED_IN / BELONGS_TO / IMPORTS /
+INHERITS / CALLS edges, with intra-file resolution for inheritance and calls, plus
+REFERENCES edges carrying ``ref_kind`` (define/write/read/pass) for scoring (§6.4). Cross-file and
+cross-repo exact resolution is elevated by the optional SCIP adapter; the schema carries those
+fields regardless.
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ from typing import Any
 
 import tree_sitter_python
 
-from cce.domain.enums import EdgeLabel, NodeLabel, SymbolKind
+from cce.domain.enums import EdgeLabel, NodeLabel, RefKind, SymbolKind
 from cce.domain.models import GraphEdge, GraphFragment, GraphNode
 from cce.indexing.extractor.routes import add_route
 from cce.indexing.parser._treesitter import load_language, make_parser, node_text
@@ -23,6 +24,10 @@ _PY_LANGUAGE = load_language(tree_sitter_python)
 
 # Decorator attribute -> HTTP method for FastAPI/Flask-style ``@app.get("/x")`` routes.
 _HTTP_DECORATOR_METHODS = {"get", "post", "put", "patch", "delete", "head", "options"}
+
+# Strength ordering for ref_kind (higher wins when a symbol is used multiple ways in one body).
+# Mirrors scoring's weighting: define/write outrank read/pass (§6.4).
+_REF_KIND_RANK = {RefKind.READ: 0, RefKind.PASS: 1, RefKind.WRITE: 2, RefKind.DEFINE: 3}
 
 
 class _Def:
@@ -95,6 +100,12 @@ class PythonProvider(LanguageProvider):
                 target = self._resolve_call(call, source, module_symbols, class_methods, d.class_name)
                 if target is not None and target != d.symbol_id:
                     frag.add_edge(GraphEdge(EdgeLabel.CALLS, d.symbol_id, target))
+
+        # Pass 3: REFERENCES edges with ref_kind (define/write/read/pass) for scoring (§6.4).
+        for d in defs:
+            if d.body is None:
+                continue
+            self._collect_references(d, source, module_symbols, frag)
 
         return frag
 
@@ -356,6 +367,87 @@ class PythonProvider(LanguageProvider):
             if obj is not None and attr is not None and node_text(obj, source) == "self" and class_name:
                 return class_methods.get(class_name, {}).get(node_text(attr, source))
         return None
+
+    # --- pass 3 helpers (REFERENCES.ref_kind) ---
+
+    def _collect_references(self, d, source, module_symbols, frag) -> None:
+        """Emit REFERENCES edges from ``d`` to module-level symbols it uses.
+
+        ref_kind classifies the strongest role of each name within the body:
+        ``define`` (bound as an assignment target), ``write`` (augmented/attribute assignment),
+        ``read`` (plain use), ``pass`` (used as a call argument). The strongest kind per target wins
+        so scoring's ``define/write >> read/pass`` rule (§6.4) is fed a stable, single value.
+        """
+        strongest: dict[str, RefKind] = {}
+
+        def note(name: str, kind: RefKind) -> None:
+            target = module_symbols.get(name)
+            if target is None or target == d.symbol_id:
+                return
+            current = strongest.get(target)
+            if current is None or _REF_KIND_RANK[kind] > _REF_KIND_RANK[current]:
+                strongest[target] = kind
+
+        self._walk_refs(d.body, source, note)
+
+        for target in sorted(strongest):
+            frag.add_edge(
+                GraphEdge(
+                    EdgeLabel.REFERENCES,
+                    d.symbol_id,
+                    target,
+                    ref_kind=strongest[target],
+                )
+            )
+
+    def _walk_refs(self, node, source, note) -> None:
+        stop = {"function_definition", "class_definition", "decorated_definition", "lambda"}
+        stack = [node]
+        while stack:
+            current = stack.pop()
+            for child in current.named_children:
+                self._classify_ref_node(child, source, note)
+                if child.type not in stop:
+                    stack.append(child)
+
+    def _classify_ref_node(self, child, source, note) -> None:
+        ctype = child.type
+        if ctype == "assignment":
+            left = child.child_by_field_name("left")
+            if left is not None and left.type == "identifier":
+                note(node_text(left, source), RefKind.DEFINE)
+            elif left is not None and left.type == "attribute":
+                note(self._attr_root(left, source), RefKind.WRITE)
+            self._note_reads(child.child_by_field_name("right"), source, note)
+        elif ctype == "augmented_assignment":
+            left = child.child_by_field_name("left")
+            if left is not None and left.type == "identifier":
+                note(node_text(left, source), RefKind.WRITE)
+            self._note_reads(child.child_by_field_name("right"), source, note)
+        elif ctype == "call":
+            args = child.child_by_field_name("arguments")
+            if args is not None:
+                for arg in args.named_children:
+                    if arg.type == "identifier":
+                        note(node_text(arg, source), RefKind.PASS)
+
+    def _note_reads(self, node, source, note) -> None:
+        if node is None:
+            return
+        stack = [node]
+        while stack:
+            current = stack.pop()
+            if current.type == "identifier":
+                note(node_text(current, source), RefKind.READ)
+            for kid in current.named_children:
+                stack.append(kid)
+
+    @staticmethod
+    def _attr_root(attr_node, source) -> str:
+        obj = attr_node.child_by_field_name("object")
+        if obj is not None:
+            return node_text(obj, source)
+        return node_text(attr_node, source)
 
     # --- misc ---
 

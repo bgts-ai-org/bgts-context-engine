@@ -22,6 +22,7 @@ from cce.api.rest.schemas import (
     IndexRemoteRequest,
     IndexRequest,
     LanguagesResponse,
+    ReindexRequest,
     SearchRequest,
     SelectReposRequest,
     SimilarCodeRequest,
@@ -364,6 +365,53 @@ def index_remote_route(
             "nodes": summary.nodes,
             "edges": summary.edges,
             "commit": summary.commit,
+        },
+        "message": message,
+        "locale": locale,
+    }
+
+
+@router.post("/v1/reindex", response_model=ToolResponse, tags=["indexing"])
+def reindex_route(
+    body: ReindexRequest,
+    repository: GraphRepository = Depends(get_repository),
+    locale: str = Depends(get_locale),
+) -> Any:
+    """Incrementally re-index only files changed since the last index (git-diff), then commit.
+
+    Returns 400 when no baseline commit exists (repo never fully indexed and no ``since_commit``).
+    """
+    tr = get_translator()
+    try:
+        summary = Indexer(repository).index_incremental(
+            path=body.repo_path,
+            name=body.name,
+            since_commit=body.since_commit,
+            to_commit=body.to_commit,
+        )
+    except ValueError as exc:
+        return JSONResponse(status_code=400, content={"message": str(exc)})
+    repository.client.conn.commit()
+
+    message = tr.translate(
+        "tool.reindex.done",
+        locale,
+        added=summary.added,
+        modified=summary.modified,
+        deleted=summary.deleted,
+        commit=summary.to_commit,
+    )
+    return {
+        "tool": "reindex",
+        "payload": {
+            "repo_id": summary.repo_id,
+            "from_commit": summary.from_commit,
+            "to_commit": summary.to_commit,
+            "added": summary.added,
+            "modified": summary.modified,
+            "deleted": summary.deleted,
+            "nodes": summary.nodes,
+            "edges": summary.edges,
         },
         "message": message,
         "locale": locale,

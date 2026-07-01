@@ -29,10 +29,8 @@ _HYBRID_WEIGHTS_VERSION = "hybrid-v1"
 
 
 def _default_encoder() -> Encoder:
-    from cce.config import get_settings
-
-    settings = get_settings()
-    return build_default_encoder(dim=settings.embedding_dim, model_id=settings.embedding_model)
+    """The same encoder indexing uses (settings-driven), so query + index vectors are comparable."""
+    return build_default_encoder()
 
 
 def semantic_search(
@@ -48,7 +46,7 @@ def semantic_search(
     tr = get_translator()
     loc = tr.resolve(locale)
     enc = encoder or _default_encoder()
-    vector = enc.encode(query)
+    vector = enc.encode_query(query)
     hits = store.search(vector, limit=limit, repo_ids=repo_ids, kind="symbol")
     candidates = [
         {
@@ -85,7 +83,7 @@ def hybrid_search(
 
     pool = max(limit * 3, 30)
     lexical = repository.lexical_search(query, repo_ids=repo_ids, limit=pool)
-    semantic = store.search(enc.encode(query), limit=pool, repo_ids=repo_ids, kind="symbol")
+    semantic = store.search(enc.encode_query(query), limit=pool, repo_ids=repo_ids, kind="symbol")
 
     scores: dict[str, dict[str, Any]] = {}
 

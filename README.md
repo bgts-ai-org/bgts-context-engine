@@ -17,7 +17,7 @@
 | **Uzak indeksleme** | Bitbucket Cloud URL'den clone/fetch + indeks |
 | **i18n** | Mesajlar `en` / `tr`; payload locale'den etkilenmez |
 
-> **Sürüm:** 0.0.1 — Faz 0-4 mimarisi (Katman 1-2-3, indeksleme, skorlama, coverage, auth/RLS, REST+MCP) implemente edildi. Embedding varsayılan olarak deterministik hash tabanlı encoder ile çalışır (P2 fallback); gerçek transformer encoder pinlenerek takılabilir.
+> **Sürüm:** 0.0.1 — Faz 0-5 mimarisi (Katman 1-2-3, indeksleme, skorlama, coverage, auth/RLS, REST+MCP) implemente edildi. Embedding **Voyage AI** (`voyage-code-3`, 1024 boyut) ile çalışır (`CCE_EMBEDDING_PROVIDER=voyage`); ağ/anahtar yoksa deterministik hash tabanlı encoder'a düşer (P2 fallback). Embedding yalnızca çapa bulmada; genişletme/skorlama/montaj %100 deterministik.
 
 ---
 
@@ -180,6 +180,7 @@ Migrasyonlar `cce/storage/relational/migrations/` altındaki SQL dosyalarını s
 | `0002_relational.sql` | `repos`, `tasks`, `users`, `scopes`, `audit_log` |
 | `0003_vector.sql` | `embeddings` tablosu (768 boyut, HNSW indeks) |
 | `0004_rls.sql` | Row-Level Security politikaları (`repos`, `embeddings`); `cce.user_id` session değişkeni ile scope |
+| `0005_embeddings_dim.sql` | `embeddings.embedding` → `vector(1024)` (Voyage `voyage-code-3`); HNSW indeks yeniden kurulur (reindex sınırı) |
 
 ---
 
@@ -204,12 +205,20 @@ CCE_DB_PASSWORD=cce
 # i18n (yalnızca mesajlar; payload etkilenmez)
 CCE_DEFAULT_LOCALE=en
 
+# Embedding (Faz 2; yalnızca çapa bulma, P2)
+CCE_EMBEDDING_PROVIDER=voyage        # "voyage" veya "hashing" (fallback)
+CCE_EMBEDDING_MODEL=voyage-code-3
+CCE_EMBEDDING_DIM=1024
+CCE_VOYAGE_API_KEY=                   # provider=voyage için gerekli
+
 # Bitbucket Cloud uzak indeksleme
 CCE_BITBUCKET_USERNAME=
 CCE_BITBUCKET_TOKEN=
 CCE_REPO_CACHE_DIR=.cce_data/repos
 CCE_GIT_SSL_VERIFY=true
 ```
+
+Voyage embedding'i için: `pip install -e ".[embed]"`. Ek dil grameri için: `pip install -e ".[langs]"` (Java/C#/Go).
 
 ### Bitbucket kimlik doğrulama
 
@@ -256,6 +265,26 @@ Desteklenen URL biçimleri:
 - `https://bitbucket.org/acme/widgets.git`
 - `https://bitbucket.org/acme/widgets/src/main/...` (web Source URL)
 - `git@bitbucket.org:acme/widgets.git` (SSH — clone HTTPS üzerinden yapılır)
+
+### Incremental re-index (git-diff)
+
+Sadece son indekslemeden bu yana değişen dosyaları yeniden işler:
+
+```bash
+cce reindex --repo ./my-repo --name my-org/my-repo
+# Belirli commit aralığı:
+cce reindex --repo ./my-repo --name my-org/my-repo --since <sha> --to HEAD
+```
+
+REST karşılığı: `POST /v1/reindex` (`{repo_path, name, since_commit?, to_commit?}`).
+
+### POC benchmark
+
+Bir task seti üzerinde latency/recall/precision/determinizm/RLS ölçer ve JSON rapor yazar:
+
+```bash
+cce bench --cases cases.json --out report.json
+```
 
 ### Sembol çözümle
 
@@ -378,14 +407,21 @@ Locale, `Accept-Language` başlığı veya `?locale=tr` sorgu parametresi ile be
 
 ## Desteklenen Diller
 
-Phase 0'da kayıtlı dil sağlayıcıları:
+Varsayılan olarak kayıtlı diller (Python + JS/TS her zaman; Java/C#/Go grameri kuruluysa):
 
-| Dil | Uzantılar | Çıkarılan yapılar |
-|-----|-----------|-------------------|
-| Python | `.py`, `.pyi` | Sınıf, fonksiyon, method; IMPORTS, INHERITS, CALLS |
-| JavaScript | `.js`, `.jsx`, `.mjs`, `.cjs` | Modül sembolleri, import/call kenarları |
-| TypeScript | `.ts`, `.d.ts` | Arayüz, tip, sınıf, fonksiyon |
-| TSX | `.tsx` | TS + JSX bileşenleri |
+| Dil | Uzantılar | Çıkarılan yapılar | Route |
+|-----|-----------|-------------------|-------|
+| Python | `.py`, `.pyi` | Sınıf, fonksiyon, method; IMPORTS, INHERITS, CALLS, REFERENCES (`ref_kind`) | FastAPI, Flask |
+| JavaScript | `.js`, `.jsx`, `.mjs`, `.cjs` | Modül sembolleri, import/call/reference kenarları | Express |
+| TypeScript | `.ts` | Arayüz, tip, sınıf, fonksiyon | NestJS |
+| TSX | `.tsx` | TS + JSX bileşenleri | — |
+| Java | `.java` | Sınıf, arayüz, method; INHERITS/IMPLEMENTS, CALLS, REFERENCES | Spring MVC |
+| C# | `.cs` | Sınıf, method, property; CALLS, REFERENCES | ASP.NET |
+| Go | `.go` | Fonksiyon, method, tip; CALLS, REFERENCES | Gin |
+
+> Java/C#/Go opsiyoneldir: `pip install -e ".[langs]"`. Gramer yoksa ilgili sağlayıcı sessizce atlanır.
+>
+> **Diller-arası köprüler** (heuristic): React Native legacy (`RCT_EXPORT_METHOD`), Swift↔ObjC selector, Expo Modules DSL, RN event kanalları → `provenance='heuristic'` + `synthesized_by` etiketli CALLS kenarları.
 
 Atlanan dizinler: `.git`, `node_modules`, `.venv`, `__pycache__`, `dist`, `build` ve benzeri.
 
@@ -438,8 +474,8 @@ Her kenar kaynağını taşır:
 
 | Değer | Anlam |
 |-------|-------|
-| `treesitter` | AST çıkarımı (Phase 0 varsayılan) |
-| `scip` | SCIP çözümlemesi (gelecek faz) |
+| `treesitter` | AST çıkarımı (varsayılan) |
+| `scip` | SCIP çözümlemesi (opsiyonel adaptör; binary varsa yükseltilir) |
 | `heuristic` | Sentezlenmiş köprü kenarları |
 
 ---
@@ -461,13 +497,14 @@ context-engine/
 │   │   ├── coverage/             # Coverage/Confidence + god-node (§8)
 │   │   ├── assembler/            # Token-budget montaj (§6.5)
 │   │   └── auth/                 # Scope filtresi + audit_log (§9)
+│   ├── bench/                    # POC benchmark harness (latency/recall/precision/determinizm/RLS)
 │   ├── domain/                   # GraphNode, GraphEdge, enum'lar
 │   ├── indexing/
-│   │   ├── indexer.py            # İndeksleme orkestratörü (+embedding)
-│   │   ├── extractor/            # Dil-agnostik çıkarım + route + designnote
-│   │   ├── parser/               # Tree-sitter sağlayıcıları
-│   │   ├── embedder/             # Encoder + embedding yazımı (P2)
-│   │   ├── gitsync/              # Yerel/uzak git sync
+│   │   ├── indexer.py            # İndeksleme orkestratörü (+embedding, incremental, SCIP)
+│   │   ├── extractor/            # Dil-agnostik çıkarım + route + designnote + bridges
+│   │   ├── parser/               # Tree-sitter sağlayıcıları (Py/JS/TS/Java/C#/Go) + scip/ adaptörü
+│   │   ├── embedder/             # Encoder (Hashing + Voyage) + embedding yazımı (P2)
+│   │   ├── gitsync/              # Yerel/uzak git sync + git-diff (changed_files)
 │   │   └── upserter/             # AGE graf yazımı
 │   ├── storage/
 │   │   ├── graph/                # Apache AGE Cypher client + repository
@@ -537,15 +574,21 @@ cce serve --reload
 | **Faz 2** | ✅ | Embedding (encoder + pgvector), Katman-2, çapa bulma, deterministik genişletme, skorlama, route + designnote çıkarımı, provenance |
 | **Faz 3** | ✅ | Katman-3 orkestrasyon, coverage/confidence + god-node, token-budget montaj |
 | **Faz 4** | ✅ | Scope filtresi + RLS + audit_log, MCP server, API versiyonlama (`/v1`) |
+| **Faz 5** | ✅ | Voyage AI embedding (`voyage-code-3`, 1024), `ref_kind` çıkarımı, git-diff incremental re-index, opsiyonel SCIP adaptörü, dil genişletme (Java/C#/Go + köprüler), POC benchmark |
+
+**Faz 5 detayları:**
+
+- **Voyage embedding** — `CCE_EMBEDDING_PROVIDER=voyage` ile `voyage-code-3` (1024 boyut); `document`/`query` input ayrımı; ağ yoksa deterministik hash fallback. Boyut migration: `0005_embeddings_dim.sql`.
+- **`REFERENCES.ref_kind`** — define/write/read/pass çıkarımı (Python + JS/TS + Java/C#/Go); genişletme `get_referrers` ile besler, skorlamada define/write >> read/pass (§6.4).
+- **Incremental re-index** — `Indexer.index_incremental` (git-diff), `cce reindex` CLI + `POST /v1/reindex`; değişen/silinen dosyalar için subgraph + embedding güncelleme.
+- **SCIP adaptörü** — opsiyonel `scip-python`/`scip-typescript`; binary varsa ilgili kenarların provenance'ı `scip`'e yükseltilir, yoksa tree-sitter davranışı korunur.
+- **Dil genişletme** — Java (Spring), C# (ASP.NET), Go (Gin) tree-sitter sağlayıcıları (`pip install -e ".[langs]"`); diller-arası köprüler (RN/Expo/Swift-ObjC) `provenance='heuristic'` + `synthesized_by`.
+- **POC benchmark** — `cce bench --cases cases.json` → JSON rapor (latency, recall, precision, determinizm regresyon, RLS sızıntı kontrolü).
 
 **Sonraki adımlar (ürünleştirme öncesi):**
 
-- Cross-file / cross-repo sembol çözümlemesi (SCIP/LSIF) ile `treesitter` → `scip` provenance yükseltmesi
-- `REFERENCES.ref_kind` (define/write/read/pass) için tam AST zenginleştirmesi
-- Gerçek transformer embedding encoder'ının pinlenerek entegrasyonu (varsayılan deterministik hash fallback yerine)
-- Incremental re-index'in git-diff webhook/polling ile sürülmesi
-- Dil genişletme (Java/C#/Go → mobil native) ve diller-arası köprüler (RN/Expo/Swift-ObjC)
-- Route framework genişletme (Spring/ASP.NET/Gin/Rails/Laravel/Axum)
+- Incremental re-index'in webhook/polling ile otomatik tetiklenmesi
+- Route framework genişletme (Rails/Laravel/Axum)
 - SBOM/lisans taraması (AGPL kaçınma)
 
 ---

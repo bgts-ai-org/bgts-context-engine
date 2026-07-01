@@ -4,13 +4,17 @@ An encoder maps text to a fixed-dimension unit vector. Per P2 the embedding is a
 the graph), never the answer, and per the determinism rules the model identity is pinned so results
 are reproducible within a snapshot.
 
-Two encoders ship:
+Three encoders ship:
 
 - :class:`HashingEncoder` - dependency-free, fully deterministic (a hashed bag-of-tokens projected
   to the unit sphere). It is the default "lexical safety-net" fallback the plan calls for: no heavy
   model is required to run semantic search, and its output is byte-stable across machines.
-- :class:`Encoder` - the abstract contract. A real transformer encoder (self-hosted, on-prem) can
-  implement this later without touching the rest of the pipeline; its ``model_id`` must be pinned.
+- :class:`VoyageEncoder` - Voyage AI code embeddings (``voyage-code-3``, 1024 dims). It distinguishes
+  ``document`` (indexing) from ``query`` (search) input types. Its outputs are written into pgvector
+  at index time and pinned there; since embeddings only *find anchors* (P2), the deterministic
+  payload is unaffected by any minor API float variation.
+- :class:`Encoder` - the abstract contract. Any other on-prem encoder can implement this without
+  touching the rest of the pipeline; its ``model_id`` must be pinned.
 
 The encoder used by indexing and search MUST match (same ``model_id`` + dimension), otherwise a
 version bump is a determinism-regression boundary and requires a reindex.
@@ -36,7 +40,13 @@ class Encoder(abc.ABC):
     def encode(self, text: str) -> list[float]:
         """Return a ``dim``-length embedding for ``text`` (deterministic for a fixed model)."""
 
+    def encode_query(self, text: str) -> list[float]:
+        """Encode a search query. Defaults to :meth:`encode`; overridden when the model has a
+        distinct query input type (e.g. Voyage)."""
+        return self.encode(text)
+
     def encode_many(self, texts: list[str]) -> list[list[float]]:
+        """Batch-encode documents (indexing side). Default is per-item; overridden for batch APIs."""
         return [self.encode(t) for t in texts]
 
 
@@ -70,8 +80,72 @@ class HashingEncoder(Encoder):
         return [v / norm for v in vec]
 
 
-def build_default_encoder(dim: int = 768, model_id: str | None = None) -> Encoder:
-    """Default encoder: the deterministic hashing encoder (lexical fallback per the plan)."""
+class VoyageEncoder(Encoder):
+    """Voyage AI code embeddings (``voyage-code-3`` by default).
+
+    Uses the ``voyageai`` SDK. Indexing uses ``input_type='document'`` and search uses
+    ``input_type='query'`` (Voyage recommends this asymmetry for retrieval). The output dimension is
+    requested explicitly so it matches the pinned pgvector column width.
+    """
+
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        model: str = "voyage-code-3",
+        dim: int = 1024,
+    ) -> None:
+        try:
+            import voyageai
+        except ModuleNotFoundError as exc:  # pragma: no cover - optional dep
+            raise RuntimeError(
+                "The 'voyageai' package is required for VoyageEncoder. "
+                "Install it with: pip install 'cortex-context-engine[embed]'"
+            ) from exc
+        self._client = voyageai.Client(api_key=api_key)
+        self.model = model
+        self.dim = dim
+        # model_id pins model + dimension together (a change requires a reindex, P2 determinism).
+        self.model_id = f"{model}-{dim}"
+
+    def _embed(self, texts: list[str], input_type: str) -> list[list[float]]:
+        result = self._client.embed(
+            texts,
+            model=self.model,
+            input_type=input_type,
+            output_dimension=self.dim,
+        )
+        return [list(vec) for vec in result.embeddings]
+
+    def encode(self, text: str) -> list[float]:
+        return self._embed([text], "document")[0]
+
+    def encode_query(self, text: str) -> list[float]:
+        return self._embed([text], "query")[0]
+
+    def encode_many(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        return self._embed(list(texts), "document")
+
+
+def build_default_encoder(dim: int | None = None, model_id: str | None = None) -> Encoder:
+    """Encoder from settings: Voyage when configured, else the deterministic hashing fallback.
+
+    Reads :class:`cce.config.Settings` for the provider/model/dim/key. Explicit ``dim``/``model_id``
+    args override settings (used by tests); otherwise the hashing fallback adopts the settings dim so
+    its vectors match the pinned pgvector column width.
+    """
+    from cce.config import get_settings
+
+    settings = get_settings()
+    if settings.voyage_ready:
+        return VoyageEncoder(
+            settings.voyage_api_key,
+            model=settings.embedding_model,
+            dim=settings.embedding_dim,
+        )
+    fallback_dim = dim if dim is not None else settings.embedding_dim
     if model_id and model_id != "unset":
-        return HashingEncoder(dim=dim, model_id=model_id)
-    return HashingEncoder(dim=dim)
+        return HashingEncoder(dim=fallback_dim, model_id=model_id)
+    return HashingEncoder(dim=fallback_dim)
