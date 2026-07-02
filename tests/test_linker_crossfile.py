@@ -147,6 +147,23 @@ def test_linking_is_input_order_independent():
     assert _fingerprint(a) == _fingerprint(b)
 
 
+def test_monorepo_service_rooted_import_is_linked():
+    """Absolute imports rooted at a service subdirectory (``from app.core.pricing import x``
+    inside ``services/ai-analytics/``) resolve via package-suffix matching."""
+    cost = _extract("services/ai-analytics/app/core/pricing.py", COST_PY)
+    svc = _extract(
+        "services/ai-analytics/app/services/ai_service.py",
+        b"from app.core.pricing import calculate_cost\n\n\n"
+        b"def estimate(tokens):\n    return calculate_cost(tokens, 0.002)\n",
+    )
+    linked = link_fragments([cost, svc])
+
+    callee = symbols_by_name(cost)["calculate_cost"]
+    caller = symbols_by_name(svc)["estimate"]
+    calls = _edges(linked, EdgeLabel.CALLS)
+    assert any(e.src_id == caller and e.dst_id == callee for e in calls)
+
+
 def test_incremental_relink_preserves_incoming_cross_file_edges():
     """A6: after the callee's file changes, relinking all fragments re-derives the incoming edge."""
     frags = _cost_fragments()

@@ -101,6 +101,17 @@ def _candidates(
     return out
 
 
+def _package_suffixes(package: str) -> list[str]:
+    """Proper dotted suffixes of a package, longest first (``a.b.c`` -> ``b.c``, ``c``).
+
+    Monorepos commonly root absolute imports at a *service* directory rather than the repo root
+    (``from app.core.pricing import x`` inside ``services/ai-analytics/``), so the repo-derived
+    package (``services.ai-analytics.app.core.pricing``) only matches by suffix.
+    """
+    parts = package.split(".")
+    return [".".join(parts[i:]) for i in range(1, len(parts))]
+
+
 def link_fragments(
     fragments: list[GraphFragment],
     *,
@@ -116,7 +127,7 @@ def link_fragments(
     link_data = [f.link_data for f in fragments if f.link_data is not None]
     link_data.sort(key=lambda ld: ld.file_id)
 
-    table, symbol_files = _build_table(link_data)
+    table, suffix_table, symbol_files = _build_table(link_data)
     symbol_names = _build_symbol_names(fragments)
 
     out = GraphFragment()
@@ -130,7 +141,7 @@ def link_fragments(
             label = _KIND_TO_LABEL.get(ref.kind)
             if label is None:
                 continue
-            target = _resolve(ref, bindings, wildcard_modules, package, table)
+            target = _resolve(ref, bindings, wildcard_modules, package, table, suffix_table)
             if target is None or target == ref.src_symbol_id:
                 continue
             provenance = Provenance.TREESITTER
@@ -160,9 +171,18 @@ def _resolve(
     wildcard_modules: list[str],
     package: str,
     table: dict[tuple[str, str], str],
+    suffix_table: dict[tuple[str, str], str],
 ) -> str | None:
-    for key in _candidates(ref, bindings, wildcard_modules, package):
+    candidates = _candidates(ref, bindings, wildcard_modules, package)
+    for key in candidates:
         target = table.get(key)
+        if target is not None:
+            return target
+    # Monorepo fallback: the import root may be a subdirectory (service root), so the binding's
+    # module path only matches a *suffix* of the repo-derived package. Exact matches above always
+    # win; the suffix table itself is deterministic (first entry over sorted files wins).
+    for key in candidates:
+        target = suffix_table.get(key)
         if target is not None:
             return target
     return None
@@ -170,21 +190,26 @@ def _resolve(
 
 def _build_table(
     link_data: list[FragmentLinkData],
-) -> tuple[dict[tuple[str, str], str], dict[str, str]]:
-    """Global ``(package, name) -> symbol_id`` table + ``symbol_id -> file_id`` map.
+) -> tuple[dict[tuple[str, str], str], dict[tuple[str, str], str], dict[str, str]]:
+    """Global ``(package, name) -> symbol_id`` tables + ``symbol_id -> file_id`` map.
 
-    First entry wins on collisions; iteration over sorted file_ids and sorted export names makes
-    the winner deterministic.
+    Returns the exact-package table, a package-suffix table (monorepo service-rooted imports),
+    and the symbol->file map. First entry wins on collisions; iteration over sorted file_ids and
+    sorted export names makes the winner deterministic.
     """
     table: dict[tuple[str, str], str] = {}
+    suffix_table: dict[tuple[str, str], str] = {}
     symbol_files: dict[str, str] = {}
     for ld in link_data:
         package = (ld.package or "").strip()
+        suffixes = _package_suffixes(package)
         for name in sorted(ld.exports):
             sid = ld.exports[name]
             table.setdefault((package, name), sid)
+            for suffix in suffixes:
+                suffix_table.setdefault((suffix, name), sid)
             symbol_files.setdefault(sid, ld.file_id)
-    return table, symbol_files
+    return table, suffix_table, symbol_files
 
 
 def _build_symbol_names(fragments: list[GraphFragment]) -> dict[str, str]:
@@ -211,6 +236,12 @@ def _link_modules_to_files(
         package = (ld.package or "").strip()
         if package:
             package_files.setdefault(package, ld.file_id)
+    # Monorepo suffix aliases (service-rooted imports), registered after all exact packages so
+    # an exact package always beats another file's suffix.
+    for ld in link_data:
+        package = (ld.package or "").strip()
+        for suffix in _package_suffixes(package):
+            package_files.setdefault(suffix, ld.file_id)
 
     seen: set[str] = set()
     modules: list[GraphNode] = []
