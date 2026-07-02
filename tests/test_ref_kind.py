@@ -76,6 +76,12 @@ def test_references_feed_scoring_via_expansion():
         def repo_of_symbol(self, sid):
             return "r1"
 
+        def get_symbol(self, sid):
+            return None
+
+        def symbols_in_file(self, fid):
+            return []
+
         def get_callers(self, sid):
             return []
 

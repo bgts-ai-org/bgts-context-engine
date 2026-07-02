@@ -94,7 +94,7 @@ def expand_from_anchors(
                 ref_kind=ref.get("ref_kind"),
             )
 
-    # Type hierarchy (full, both directions) + same-file siblings, 1 hop from anchors.
+    # Type hierarchy (full, both directions), 1 hop from anchors.
     for sid in sorted(set(anchor_ids)):
         for sup in repository.get_supertypes(sid):
             record(sup["symbol_id"], 1, anchor=False, provenance=sup.get("provenance"))
@@ -102,6 +102,17 @@ def expand_from_anchors(
             record(sub["symbol_id"], 1, anchor=False, provenance=sub.get("provenance"))
         for impl in repository.find_implementers(sid):
             record(impl["symbol_id"], 1, anchor=False, provenance=impl.get("provenance"))
+
+    # Same-file siblings, 1 hop: symbols co-located with an anchor often change together.
+    # symbols_in_file orders by (line, symbol_id), so traversal stays deterministic.
+    for sid in sorted(set(anchor_ids)):
+        file_id = (repository.get_symbol(sid) or {}).get("file_id")
+        if not file_id:
+            continue
+        for sibling in repository.symbols_in_file(file_id):
+            sib_id = sibling.get("symbol_id")
+            if sib_id and sib_id != sid:
+                record(sib_id, 1, anchor=False, provenance=None)
 
     return found
 

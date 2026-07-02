@@ -42,3 +42,17 @@ def make_parser(language: Language) -> Parser:
 def node_text(node: Any, source: bytes) -> str:
     """Return the source text spanned by a tree-sitter node."""
     return source[node.start_byte : node.end_byte].decode("utf-8", errors="replace")
+
+
+#: Deterministic cap for the ``body`` symbol property (embedding input; keeps node payloads small).
+BODY_SNIPPET_MAX_CHARS = 1200
+
+
+def body_snippet(node: Any, source: bytes, max_chars: int = BODY_SNIPPET_MAX_CHARS) -> str | None:
+    """Trimmed body text for embedding content (deterministic char-based truncation)."""
+    if node is None:
+        return None
+    text = node_text(node, source).strip()
+    if not text:
+        return None
+    return text[:max_chars]

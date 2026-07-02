@@ -71,6 +71,10 @@ class ContextForTaskRequest(BaseModel):
     semantic_candidates: list[str] | None = Field(
         default=None, description="Pre-ranked semantic anchor symbol_ids (anchor #4, lowest priority)."
     )
+    auto_semantic: bool = Field(
+        default=True,
+        description="Auto-run semantic_search(task_text) for anchor #4 when semantic_candidates is omitted.",
+    )
 
 
 class BlastRadiusRequest(BaseModel):

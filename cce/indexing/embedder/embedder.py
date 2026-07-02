@@ -2,8 +2,9 @@
 
 Turns the symbols/files of a :class:`GraphFragment` into embedding rows and writes them to pgvector
 in the caller's transaction (P5). The embedded content is a deterministic string built from
-signature + docstring (+ name/kind), so the same source always produces the same content and, with
-a pinned encoder, the same vector (P2 determinism).
+name + kind + signature + docstring + a trimmed body snippet, so the same source always produces
+the same content and, with a pinned encoder, the same vector (P2 determinism). Adding the body
+snippet improved retrieval precision but requires a re-index of previously embedded repos.
 
 Content is collected first and encoded in one batch (``encode_many``) so batch-API encoders like
 Voyage make a single request per file fragment (rate-limit friendly).
@@ -25,6 +26,7 @@ def _symbol_content(props: dict) -> str:
         str(props.get("kind") or ""),
         str(props.get("signature") or ""),
         str(props.get("docstring") or ""),
+        str(props.get("body") or ""),
     ]
     return "\n".join(p for p in parts if p).strip()
 

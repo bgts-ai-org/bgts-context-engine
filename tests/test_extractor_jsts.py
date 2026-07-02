@@ -48,7 +48,8 @@ def test_javascript_symbols_and_edges():
     assert {"PI", "helper", "Base", "greet", "Service", "run"} <= set(names)
     assert has_edge(frag, EdgeLabel.INHERITS, names["Service"], names["Base"])
     assert has_edge(frag, EdgeLabel.CALLS, names["run"], names["helper"])
-    assert "./util" in module_namespaces(frag)
+    # Relative specifiers are normalized against the importing file's directory (linker input).
+    assert "src.util" in module_namespaces(frag)
 
 
 def test_javascript_const_kind():

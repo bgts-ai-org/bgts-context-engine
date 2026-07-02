@@ -9,7 +9,14 @@ from cce.domain.enums import (
     RefKind,
     SymbolKind,
 )
-from cce.domain.models import GraphEdge, GraphFragment, GraphNode
+from cce.domain.models import (
+    FragmentLinkData,
+    GraphEdge,
+    GraphFragment,
+    GraphNode,
+    ImportBinding,
+    UnresolvedRef,
+)
 
 __all__ = [
     "DesignNoteKind",
@@ -19,7 +26,10 @@ __all__ = [
     "Provenance",
     "RefKind",
     "SymbolKind",
+    "FragmentLinkData",
     "GraphEdge",
     "GraphFragment",
     "GraphNode",
+    "ImportBinding",
+    "UnresolvedRef",
 ]

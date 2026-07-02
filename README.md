@@ -181,6 +181,11 @@ Migrasyonlar `cce/storage/relational/migrations/` altındaki SQL dosyalarını s
 | `0003_vector.sql` | `embeddings` tablosu (768 boyut, HNSW indeks) |
 | `0004_rls.sql` | Row-Level Security politikaları (`repos`, `embeddings`); `cce.user_id` session değişkeni ile scope |
 | `0005_embeddings_dim.sql` | `embeddings.embedding` → `vector(1024)` (Voyage `voyage-code-3`); HNSW indeks yeniden kurulur (reindex sınırı) |
+| `0006_fts.sql` | `symbol_fts` tablosu (tsvector + GIN): Layer-2 lexical kanalın FTS yolu |
+
+> **Not:** Embedding içeriğine sembol gövdesi (kırpılmış) eklendi ve lexical arama FTS tablosunu
+> kullanıyor; daha önce indekslenmiş repolar için tam re-index (`cce index`) gerekir — embedding'ler
+> Voyage API ile yeniden üretilir.
 
 ---
 

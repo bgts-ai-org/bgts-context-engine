@@ -4,8 +4,9 @@ These are the only place the engine touches a model (the embedding encoder), and
 to *find anchors* (P2), never to produce context. Ranking is deterministic:
 
 - ``semantic_search``: cosine nearest neighbours from pgvector (order: distance, then ref_id).
-- ``hybrid_search``: a fixed-weight blend of lexical (keyword) + semantic + a light structural
-  (degree) signal, combined into one score; deterministic tie-breaks by symbol_id.
+- ``hybrid_search`` (hybrid-v2): token-based lexical coverage + semantic similarity blended with
+  fixed weights (re-normalized when a channel is empty), an exact-name boost, and the structural
+  degree signal reduced to a tie-breaker; deterministic tie-breaks by symbol_id.
 - ``find_similar_code``: embed a code fragment, return nearest symbols.
 
 Every payload is language-neutral and carries indexed_at_commit where available; only ``message`` is
@@ -14,6 +15,7 @@ localized (P1 i18n boundary).
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from cce.core.i18n import get_translator
@@ -22,10 +24,25 @@ from cce.storage.graph.repository import GraphRepository
 from cce.storage.vector.store import VectorStore
 
 # Fixed, versioned blend weights for hybrid_search (determinism: never data-dependent).
-_W_LEXICAL = 0.5
-_W_SEMANTIC = 0.4
-_W_STRUCTURAL = 0.1
-_HYBRID_WEIGHTS_VERSION = "hybrid-v1"
+# v2: lexical is token-coverage based; structural is only a tie-breaker (epsilon-scaled) so
+# high-degree but irrelevant symbols can no longer outrank real matches.
+_W_LEXICAL = 0.55
+_W_SEMANTIC = 0.45
+_STRUCTURAL_EPSILON = 0.001
+_EXACT_NAME_BOOST = 0.15
+_HYBRID_WEIGHTS_VERSION = "hybrid-v2"
+
+_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _query_tokens(query: str) -> list[str]:
+    """Identifier-like tokens (length>=3) in first-seen order, lowercased, de-duplicated."""
+    seen: list[str] = []
+    for token in _TOKEN_RE.findall(query or ""):
+        lowered = token.lower()
+        if len(lowered) >= 3 and lowered not in seen:
+            seen.append(lowered)
+    return seen
 
 
 def _default_encoder() -> Encoder:
@@ -76,24 +93,35 @@ def hybrid_search(
     encoder: Encoder | None = None,
     locale: str | None = None,
 ) -> dict[str, Any]:
-    """Keyword + semantic + structural blend into one deterministic score."""
+    """Token-based lexical coverage + semantic similarity, deterministically blended (hybrid-v2)."""
     tr = get_translator()
     loc = tr.resolve(locale)
     enc = encoder or _default_encoder()
 
     pool = max(limit * 3, 30)
-    lexical = repository.lexical_search(query, repo_ids=repo_ids, limit=pool)
+    tokens = _query_tokens(query)
+    query_l = (query or "").strip().lower()
+
+    # Lexical: search per token; a symbol's score is the fraction of query tokens its name covers.
+    # This makes natural-language queries contribute (full-phrase substring matching scored 0.0).
+    matched_tokens: dict[str, set[str]] = {}
+    lexical_rows: dict[str, dict[str, Any]] = {}
+    for token in tokens or ([query_l] if query_l else []):
+        for row in repository.lexical_search(token, repo_ids=repo_ids, limit=pool):
+            sid = row["symbol_id"]
+            lexical_rows.setdefault(sid, row)
+            matched_tokens.setdefault(sid, set()).add(token)
+
     semantic = store.search(enc.encode_query(query), limit=pool, repo_ids=repo_ids, kind="symbol")
 
     scores: dict[str, dict[str, Any]] = {}
 
-    # Lexical: rank-normalized (best keyword hit = 1.0), deterministic by list order.
-    n_lex = len(lexical)
-    for rank, row in enumerate(lexical):
-        sid = row["symbol_id"]
-        lex_score = (n_lex - rank) / n_lex if n_lex else 0.0
-        scores.setdefault(sid, _blank(sid, row))
-        scores[sid]["lexical"] = lex_score
+    denom = max(len(tokens), 1)
+    for sid in sorted(lexical_rows):
+        row = lexical_rows[sid]
+        entry = scores.setdefault(sid, _blank(sid, row))
+        entry["lexical"] = round(len(matched_tokens[sid]) / denom, 6)
+        entry["name"] = row.get("name")
 
     # Semantic: convert cosine distance (0=identical) to similarity in [0,1].
     for hit in semantic:
@@ -103,14 +131,28 @@ def hybrid_search(
         entry["semantic"] = sim
         entry.setdefault("indexed_at_commit", hit["indexed_at_commit"])
 
-    # Structural: light degree signal, capped so it only breaks near-ties.
+    # Re-normalize weights when a channel contributed nothing (its weight must not stay dead).
+    has_lexical = any(e["lexical"] > 0.0 for e in scores.values())
+    has_semantic = any(e["semantic"] > 0.0 for e in scores.values())
+    w_lex, w_sem = _effective_weights(has_lexical, has_semantic)
+
+    token_set = set(tokens)
     for sid, entry in scores.items():
         degree = repository.symbol_degree(sid)
         entry["structural"] = min(degree / 20.0, 1.0)
+        if entry.get("name") is None:
+            symbol = repository.get_symbol(sid)
+            if symbol:
+                entry["name"] = symbol.get("name")
+        name_l = str(entry.get("name") or "").lower()
+        exact = bool(name_l) and (name_l == query_l or name_l in token_set)
+        entry["exact_name"] = exact
         entry["score"] = round(
-            _W_LEXICAL * entry["lexical"]
-            + _W_SEMANTIC * entry["semantic"]
-            + _W_STRUCTURAL * entry["structural"],
+            w_lex * entry["lexical"]
+            + w_sem * entry["semantic"]
+            + (_EXACT_NAME_BOOST if exact else 0.0)
+            # Structural degree only breaks near-ties; it can no longer promote noisy hubs.
+            + _STRUCTURAL_EPSILON * entry["structural"],
             6,
         )
 
@@ -129,13 +171,26 @@ def hybrid_search(
     }
 
 
+def _effective_weights(has_lexical: bool, has_semantic: bool) -> tuple[float, float]:
+    """Fixed weights, re-normalized over the channels that actually contributed."""
+    if has_lexical and has_semantic:
+        return _W_LEXICAL, _W_SEMANTIC
+    if has_lexical:
+        return 1.0, 0.0
+    if has_semantic:
+        return 0.0, 1.0
+    return 0.0, 0.0
+
+
 def _blank(sid: str, row: dict[str, Any]) -> dict[str, Any]:
     return {
         "symbol_id": sid,
         "repo_id": row.get("repo_id"),
+        "name": row.get("name"),
         "lexical": 0.0,
         "semantic": 0.0,
         "structural": 0.0,
+        "exact_name": False,
         "score": 0.0,
         "indexed_at_commit": row.get("indexed_at_commit"),
     }

@@ -78,12 +78,88 @@ class GraphEdge:
         )
 
 
+@dataclass(slots=True, frozen=True)
+class ImportBinding:
+    """A local-name binding introduced by an import statement (cross-file linking input).
+
+    ``local_name`` is the identifier usable inside the importing file (alias-aware). A local name of
+    ``"*"`` denotes a wildcard/namespace-wide import (``from m import *``, Java ``import a.b.*``,
+    C# ``using``). ``module_path`` is the language-normalized absolute module path (relative
+    Python/JS specifiers are resolved against the importing file's package before recording).
+    ``imported_name`` is the original exported name, or ``None`` for module-object bindings.
+    """
+
+    local_name: str
+    module_path: str
+    imported_name: str | None = None
+
+    @property
+    def sort_key(self) -> tuple[str, str, str]:
+        return (self.local_name, self.module_path, self.imported_name or "")
+
+
+@dataclass(slots=True, frozen=True)
+class UnresolvedRef:
+    """A call/reference/inheritance whose target was not defined in the same file.
+
+    Providers record these instead of silently dropping the edge; the repo-wide linker resolves
+    them against the global symbol table + import bindings after all files are extracted.
+    """
+
+    src_symbol_id: str
+    name: str
+    qualifier: str | None = None
+    kind: str = "call"  # "call" | "reference" | "inherits" | "implements"
+    ref_kind: RefKind | None = None
+    line: int | None = None
+
+    @property
+    def sort_key(self) -> tuple[str, str, str, str, str, int]:
+        return (
+            self.src_symbol_id,
+            self.name,
+            self.qualifier or "",
+            self.kind,
+            str(self.ref_kind) if self.ref_kind is not None else "",
+            self.line or 0,
+        )
+
+
+@dataclass(slots=True)
+class FragmentLinkData:
+    """Per-file linking context carried alongside a fragment (not persisted to the graph).
+
+    ``exports`` maps top-level names (and ``Class.method`` qualified names) defined in the file to
+    their symbol ids; the linker unions these into the repo-wide symbol table.
+    """
+
+    file_id: str
+    package: str | None
+    language: str
+    exports: dict[str, str] = field(default_factory=dict)
+    imports: list[ImportBinding] = field(default_factory=list)
+    unresolved: list[UnresolvedRef] = field(default_factory=list)
+
+    def deduped(self) -> FragmentLinkData:
+        imports = sorted(set(self.imports), key=lambda b: b.sort_key)
+        unresolved = sorted(set(self.unresolved), key=lambda u: u.sort_key)
+        return FragmentLinkData(
+            file_id=self.file_id,
+            package=self.package,
+            language=self.language,
+            exports=dict(sorted(self.exports.items())),
+            imports=imports,
+            unresolved=unresolved,
+        )
+
+
 @dataclass(slots=True)
 class GraphFragment:
     """A deterministic set of nodes and edges, typically for one file or one repo."""
 
     nodes: list[GraphNode] = field(default_factory=list)
     edges: list[GraphEdge] = field(default_factory=list)
+    link_data: FragmentLinkData | None = None
 
     def add_node(self, node: GraphNode) -> None:
         self.nodes.append(node)
@@ -94,13 +170,15 @@ class GraphFragment:
     def extend(self, other: GraphFragment) -> None:
         self.nodes.extend(other.nodes)
         self.edges.extend(other.edges)
+        if self.link_data is None:
+            self.link_data = other.link_data
 
     def deduped(self) -> GraphFragment:
         """Return a fragment with duplicate nodes/edges removed, in a stable order.
 
         Determinism: nodes are de-duplicated by (label, id) and sorted by that key; edges by their
         dedup_key and sorted. This guarantees a reproducible upsert order regardless of traversal
-        order in the extractor.
+        order in the extractor. Link data (if any) is deduped/sorted the same way.
         """
         seen_nodes: dict[tuple[str, str], GraphNode] = {}
         for node in self.nodes:
@@ -112,7 +190,8 @@ class GraphFragment:
 
         nodes = sorted(seen_nodes.values(), key=lambda n: n.dedup_key)
         edges = sorted(seen_edges.values(), key=lambda e: tuple("" if p is None else p for p in e.dedup_key))
-        return GraphFragment(nodes=nodes, edges=edges)
+        link_data = self.link_data.deduped() if self.link_data is not None else None
+        return GraphFragment(nodes=nodes, edges=edges, link_data=link_data)
 
     def __len__(self) -> int:
         return len(self.nodes) + len(self.edges)

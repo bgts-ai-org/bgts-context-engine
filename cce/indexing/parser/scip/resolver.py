@@ -187,6 +187,21 @@ def _enclosing_symbol(
     return best[1] if best else None
 
 
+def moniker_display_name(moniker: str) -> str:
+    """Short symbol name from a SCIP moniker (identity for already-plain names).
+
+    SCIP symbol strings look like ``scip-python python pkg 0.1 mod/Class#method().`` - the last
+    space-separated token carries the descriptor chain; the final path/descriptor segment (with
+    SCIP suffix punctuation stripped) is the display name the extractor also uses.
+    """
+    tail = moniker.strip().split(" ")[-1]
+    tail = tail.rstrip(".").rstrip(")").rstrip("(").rstrip("#").rstrip("/")
+    for sep in ("/", "#", "."):
+        if sep in tail:
+            tail = tail.rpartition(sep)[2]
+    return tail.rstrip(")").rstrip("(") or moniker
+
+
 def build_scip_resolver(language: str) -> ScipResolver:
     """Return a CLI resolver for a language if a binary is known, else the null resolver."""
     if language in _SCIP_BINARIES:

@@ -12,9 +12,16 @@ from __future__ import annotations
 from typing import Any
 
 from cce.domain.enums import EdgeLabel, NodeLabel, RefKind, SymbolKind
-from cce.domain.models import GraphEdge, GraphFragment, GraphNode
+from cce.domain.models import (
+    FragmentLinkData,
+    GraphEdge,
+    GraphFragment,
+    GraphNode,
+    ImportBinding,
+    UnresolvedRef,
+)
 from cce.indexing.extractor.routes import add_route
-from cce.indexing.parser._treesitter import load_language, make_parser, node_text
+from cce.indexing.parser._treesitter import body_snippet, load_language, make_parser, node_text
 from cce.indexing.parser.base import LanguageProvider, ParseContext
 from cce.indexing.parser.symbol_id import make_module_id, make_symbol_id
 
@@ -72,6 +79,7 @@ class GoProvider(LanguageProvider):
 
         module_symbols: dict[str, str] = {}
         defs: list[_Def] = []
+        unresolved: list[UnresolvedRef] = []
 
         for child in root.named_children:
             if child.type in ("function_declaration", "method_declaration"):
@@ -86,21 +94,48 @@ class GoProvider(LanguageProvider):
                             module_symbols[d.name] = d.symbol_id
                             defs.append(d)
 
-        self._collect_imports(root, ctx, source, frag)
+        bindings: list[ImportBinding] = []
+        self._collect_imports(root, ctx, source, frag, bindings)
 
         for d in defs:
             if d.body is None:
                 continue
+            seen_unresolved: set[tuple[str, str | None]] = set()
             for call in self._iter_calls(d.body):
+                line = call.start_point[0] + 1
                 target = self._resolve_call(call, source, module_symbols)
                 if target is not None and target != d.symbol_id:
-                    frag.add_edge(GraphEdge(EdgeLabel.CALLS, d.symbol_id, target))
+                    frag.add_edge(
+                        GraphEdge(EdgeLabel.CALLS, d.symbol_id, target, properties={"line": line})
+                    )
+                    continue
+                if target is not None:
+                    continue
+                parts = self._unresolved_call_parts(call, source)
+                if parts is None:
+                    continue
+                name, qualifier = parts
+                key = (name, qualifier)
+                if key in seen_unresolved:
+                    continue
+                seen_unresolved.add(key)
+                unresolved.append(
+                    UnresolvedRef(d.symbol_id, name, qualifier=qualifier, kind="call", line=line)
+                )
 
         for d in defs:
             if d.body is None:
                 continue
-            self._collect_references(d, source, module_symbols, frag)
+            self._collect_references(d, source, module_symbols, frag, unresolved)
 
+        frag.link_data = FragmentLinkData(
+            file_id=ctx.file_id,
+            package=package,
+            language=self.language,
+            exports=dict(module_symbols),
+            imports=bindings,
+            unresolved=unresolved,
+        )
         return frag
 
     # --- pass 1 ---
@@ -113,7 +148,7 @@ class GoProvider(LanguageProvider):
         body = node.child_by_field_name("body")
         kind = SymbolKind.METHOD if node.type == "method_declaration" else SymbolKind.FUNCTION
         symbol_id = self._make_id(package, name, signature, kind)
-        self._add_node(frag, ctx, symbol_id, name, kind, signature, node, package)
+        self._add_node(frag, ctx, symbol_id, name, kind, signature, node, package, body=body)
         return _Def(symbol_id, name, kind, body)
 
     def _add_type(self, spec, ctx, package, source, frag) -> _Def | None:
@@ -141,7 +176,7 @@ class GoProvider(LanguageProvider):
             kind=str(kind),
         )
 
-    def _add_node(self, frag, ctx, symbol_id, name, kind, signature, node, package) -> None:
+    def _add_node(self, frag, ctx, symbol_id, name, kind, signature, node, package, body=None) -> None:
         frag.add_node(
             GraphNode(
                 NodeLabel.SYMBOL,
@@ -153,6 +188,7 @@ class GoProvider(LanguageProvider):
                     # Go visibility is by capitalization (exported vs unexported).
                     "visibility": "public" if name[:1].isupper() else "private",
                     "docstring": None,
+                    "body": body_snippet(body, ctx.source),
                     "namespace": package or "",
                     "file_id": ctx.file_id,
                     "line": node.start_point[0] + 1,
@@ -162,7 +198,7 @@ class GoProvider(LanguageProvider):
         )
         frag.add_edge(GraphEdge(EdgeLabel.DEFINED_IN, symbol_id, ctx.file_id))
 
-    def _collect_imports(self, root, ctx, source, frag) -> None:
+    def _collect_imports(self, root, ctx, source, frag, bindings) -> None:
         for child in root.named_children:
             if child.type != "import_declaration":
                 continue
@@ -178,6 +214,31 @@ class GoProvider(LanguageProvider):
                     )
                 )
                 frag.add_edge(GraphEdge(EdgeLabel.IMPORTS, ctx.file_id, module_id))
+                alias_node = spec.child_by_field_name("name")
+                if alias_node is not None:
+                    local = node_text(alias_node, source)
+                else:
+                    local = name.rstrip("/").rpartition("/")[2]
+                if local and local not in ("_", "."):
+                    # Slash-form module path preserved: the linker matches by dotted suffix.
+                    bindings.append(ImportBinding(local_name=local, module_path=name))
+
+    def _unresolved_call_parts(self, call, source) -> tuple[str, str | None] | None:
+        """Extract ``(name, qualifier)`` for a call the intra-file pass could not resolve."""
+        fn = call.child_by_field_name("function")
+        if fn is None:
+            return None
+        if fn.type == "identifier":
+            return node_text(fn, source), None
+        if fn.type == "selector_expression":
+            operand = fn.child_by_field_name("operand")
+            field = fn.child_by_field_name("field")
+            if operand is None or field is None:
+                return None
+            if operand.type != "identifier":
+                return None
+            return node_text(field, source), node_text(operand, source)
+        return None
 
     @staticmethod
     def _iter_import_specs(node):
@@ -260,12 +321,19 @@ class GoProvider(LanguageProvider):
 
     # --- REFERENCES.ref_kind ---
 
-    def _collect_references(self, d, source, module_symbols, frag) -> None:
+    def _collect_references(self, d, source, module_symbols, frag, unresolved) -> None:
         strongest: dict[str, RefKind] = {}
+        unresolved_strongest: dict[str, RefKind] = {}
 
         def note(name: str, kind: RefKind) -> None:
             target = module_symbols.get(name)
-            if target is None or target == d.symbol_id:
+            if target is None:
+                # Go resolves same-package (directory) symbols at link time (no import needed).
+                current = unresolved_strongest.get(name)
+                if current is None or _REF_KIND_RANK[kind] > _REF_KIND_RANK[current]:
+                    unresolved_strongest[name] = kind
+                return
+            if target == d.symbol_id:
                 return
             current = strongest.get(target)
             if current is None or _REF_KIND_RANK[kind] > _REF_KIND_RANK[current]:
@@ -275,6 +343,12 @@ class GoProvider(LanguageProvider):
         for target in sorted(strongest):
             frag.add_edge(
                 GraphEdge(EdgeLabel.REFERENCES, d.symbol_id, target, ref_kind=strongest[target])
+            )
+        for name in sorted(unresolved_strongest):
+            unresolved.append(
+                UnresolvedRef(
+                    d.symbol_id, name, kind="reference", ref_kind=unresolved_strongest[name]
+                )
             )
 
     def _walk_refs(self, node, source, note) -> None:
@@ -329,3 +403,10 @@ class GoProvider(LanguageProvider):
                 note(node_text(current, source), RefKind.READ)
             for kid in current.named_children:
                 stack.append(kid)
+
+    def derive_package(self, ctx: ParseContext) -> str | None:
+        # Go packages are per-directory: two files in the same directory share a package,
+        # which is what enables same-package cross-file resolution at link time.
+        path = ctx.path.replace("\\", "/").lstrip("./")
+        directory = path.rpartition("/")[0]
+        return directory.strip("/").replace("/", ".") or None

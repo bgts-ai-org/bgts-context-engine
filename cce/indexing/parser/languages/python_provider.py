@@ -2,9 +2,11 @@
 
 Scope (deterministic, AST-only): File + Symbol nodes, DEFINED_IN / BELONGS_TO / IMPORTS /
 INHERITS / CALLS edges, with intra-file resolution for inheritance and calls, plus
-REFERENCES edges carrying ``ref_kind`` (define/write/read/pass) for scoring (§6.4). Cross-file and
-cross-repo exact resolution is elevated by the optional SCIP adapter; the schema carries those
-fields regardless.
+REFERENCES edges carrying ``ref_kind`` (define/write/read/pass) for scoring (§6.4).
+
+Cross-file resolution: unresolved calls/references/inheritance and import bindings are recorded on
+the fragment's :class:`FragmentLinkData`; the repo-wide linker resolves them deterministically
+after all files are extracted. The optional SCIP adapter can additionally elevate provenance.
 """
 
 from __future__ import annotations
@@ -14,9 +16,16 @@ from typing import Any
 import tree_sitter_python
 
 from cce.domain.enums import EdgeLabel, NodeLabel, RefKind, SymbolKind
-from cce.domain.models import GraphEdge, GraphFragment, GraphNode
+from cce.domain.models import (
+    FragmentLinkData,
+    GraphEdge,
+    GraphFragment,
+    GraphNode,
+    ImportBinding,
+    UnresolvedRef,
+)
 from cce.indexing.extractor.routes import add_route
-from cce.indexing.parser._treesitter import load_language, make_parser, node_text
+from cce.indexing.parser._treesitter import body_snippet, load_language, make_parser, node_text
 from cce.indexing.parser.base import LanguageProvider, ParseContext
 from cce.indexing.parser.symbol_id import make_module_id, make_symbol_id
 
@@ -82,37 +91,80 @@ class PythonProvider(LanguageProvider):
         module_symbols: dict[str, str] = {}
         class_methods: dict[str, dict[str, str]] = {}
         defs: list[_Def] = []
+        unresolved: list[UnresolvedRef] = []
 
         for child in root.named_children:
             self._collect_top_level(
-                child, ctx, package, source, frag, module_symbols, class_methods, defs
+                child, ctx, package, source, frag, module_symbols, class_methods, defs, unresolved
             )
 
-        # IMPORTS edges.
+        # IMPORTS edges + local-name bindings for the cross-file linker.
+        bindings: list[ImportBinding] = []
         for child in root.named_children:
-            self._collect_imports(child, ctx, source, frag)
+            self._collect_imports(child, ctx, source, frag, package, bindings)
+        bound_locals = {b.local_name for b in bindings}
+        has_wildcard = "*" in bound_locals
 
-        # Pass 2: resolve calls within each definition body.
+        # Pass 2: resolve calls within each definition body; record unresolved for the linker.
         for d in defs:
             if d.body is None:
                 continue
+            seen_unresolved: set[tuple[str, str | None]] = set()
             for call in self._iter_calls(d.body):
+                line = call.start_point[0] + 1
                 target = self._resolve_call(call, source, module_symbols, class_methods, d.class_name)
                 if target is not None and target != d.symbol_id:
-                    frag.add_edge(GraphEdge(EdgeLabel.CALLS, d.symbol_id, target))
+                    frag.add_edge(
+                        GraphEdge(EdgeLabel.CALLS, d.symbol_id, target, properties={"line": line})
+                    )
+                    continue
+                if target is not None:
+                    continue
+                parts = self._unresolved_call_parts(call, source)
+                if parts is None:
+                    continue
+                name, qualifier = parts
+                key = (name, qualifier)
+                if key in seen_unresolved:
+                    continue
+                seen_unresolved.add(key)
+                unresolved.append(
+                    UnresolvedRef(d.symbol_id, name, qualifier=qualifier, kind="call", line=line)
+                )
 
         # Pass 3: REFERENCES edges with ref_kind (define/write/read/pass) for scoring (§6.4).
         for d in defs:
             if d.body is None:
                 continue
-            self._collect_references(d, source, module_symbols, frag)
+            self._collect_references(
+                d, source, module_symbols, frag, unresolved, bound_locals, has_wildcard
+            )
 
+        frag.link_data = FragmentLinkData(
+            file_id=ctx.file_id,
+            package=package,
+            language=self.language,
+            exports=self._build_exports(module_symbols, class_methods),
+            imports=bindings,
+            unresolved=unresolved,
+        )
         return frag
+
+    @staticmethod
+    def _build_exports(
+        module_symbols: dict[str, str], class_methods: dict[str, dict[str, str]]
+    ) -> dict[str, str]:
+        """Top-level names + ``Class.method`` qualified names -> symbol_id (linker table input)."""
+        exports = dict(module_symbols)
+        for cls, methods in class_methods.items():
+            for method, sid in methods.items():
+                exports.setdefault(f"{cls}.{method}", sid)
+        return exports
 
     # --- pass 1 helpers ---
 
     def _collect_top_level(
-        self, node, ctx, package, source, frag, module_symbols, class_methods, defs
+        self, node, ctx, package, source, frag, module_symbols, class_methods, defs, unresolved
     ) -> None:
         node = self._unwrap_decorated(node)
         if node.type == "function_definition":
@@ -123,7 +175,7 @@ class PythonProvider(LanguageProvider):
             d = self._add_symbol(node, ctx, package, "", source, frag, SymbolKind.CLASS)
             module_symbols[d.name] = d.symbol_id
             defs.append(d)
-            self._add_inherits(node, source, frag, d.symbol_id, module_symbols)
+            self._add_inherits(node, source, frag, d.symbol_id, module_symbols, unresolved)
             methods = class_methods.setdefault(d.name, {})
             body = node.child_by_field_name("body")
             if body is not None:
@@ -185,6 +237,7 @@ class PythonProvider(LanguageProvider):
                     "signature": signature,
                     "visibility": "private" if name.startswith("_") else "public",
                     "docstring": self._docstring(body, source),
+                    "body": body_snippet(body, source),
                     "namespace": namespace or package or "",
                     "file_id": ctx.file_id,
                     "line": node.start_point[0] + 1,
@@ -196,38 +249,115 @@ class PythonProvider(LanguageProvider):
         class_name = namespace if kind is SymbolKind.METHOD else None
         return _Def(symbol_id, name, kind, namespace, body, class_name)
 
-    def _add_inherits(self, class_node, source, frag, class_symbol_id, module_symbols) -> None:
+    def _add_inherits(
+        self, class_node, source, frag, class_symbol_id, module_symbols, unresolved
+    ) -> None:
         supers = class_node.child_by_field_name("superclasses")
         if supers is None:
             return
+        line = class_node.start_point[0] + 1
         for arg in supers.named_children:
-            base_name = node_text(arg, source) if arg.type == "identifier" else None
-            if base_name and base_name in module_symbols:
-                frag.add_edge(
-                    GraphEdge(EdgeLabel.INHERITS, class_symbol_id, module_symbols[base_name])
-                )
+            if arg.type == "identifier":
+                base_name = node_text(arg, source)
+                if base_name in module_symbols:
+                    frag.add_edge(
+                        GraphEdge(EdgeLabel.INHERITS, class_symbol_id, module_symbols[base_name])
+                    )
+                else:
+                    unresolved.append(
+                        UnresolvedRef(class_symbol_id, base_name, kind="inherits", line=line)
+                    )
+            elif arg.type == "attribute":
+                dotted = self._dotted_name(arg, source)
+                if dotted and "." in dotted:
+                    qualifier, _, base_name = dotted.rpartition(".")
+                    unresolved.append(
+                        UnresolvedRef(
+                            class_symbol_id,
+                            base_name,
+                            qualifier=qualifier,
+                            kind="inherits",
+                            line=line,
+                        )
+                    )
 
-    def _import_name(self, child, source) -> str | None:
-        if child.type == "dotted_name":
-            return node_text(child, source)
-        if child.type == "aliased_import":
-            name_node = child.child_by_field_name("name")
-            if name_node is not None:
-                return node_text(name_node, source)
-        return None
-
-    def _collect_imports(self, node, ctx, source, frag) -> None:
+    def _collect_imports(self, node, ctx, source, frag, package, bindings) -> None:
+        is_pkg_init = ctx.path.replace("\\", "/").endswith("__init__.py")
         if node.type == "import_statement":
             for child in node.named_children:
-                name = self._import_name(child, source)
-                if name:
+                if child.type == "dotted_name":
+                    name = node_text(child, source)
+                    if not name:
+                        continue
                     self._add_import(ctx, name, frag)
+                    # ``import a.b`` makes both ``a.b`` and root ``a`` usable as qualifiers.
+                    bindings.append(ImportBinding(local_name=name, module_path=name))
+                    root = name.split(".")[0]
+                    if root != name:
+                        bindings.append(ImportBinding(local_name=root, module_path=root))
+                elif child.type == "aliased_import":
+                    name_node = child.child_by_field_name("name")
+                    alias_node = child.child_by_field_name("alias")
+                    if name_node is None:
+                        continue
+                    name = node_text(name_node, source)
+                    if not name:
+                        continue
+                    alias = node_text(alias_node, source) if alias_node is not None else name
+                    self._add_import(ctx, name, frag)
+                    bindings.append(ImportBinding(local_name=alias, module_path=name))
         elif node.type == "import_from_statement":
             module_node = node.child_by_field_name("module_name")
-            if module_node is not None:
-                name = node_text(module_node, source)
-                if name:
-                    self._add_import(ctx, name, frag)
+            if module_node is None:
+                return
+            module_text = node_text(module_node, source)
+            module_abs = self._absolutize_module(module_text, package, is_pkg_init)
+            if not module_abs:
+                return
+            self._add_import(ctx, module_abs, frag)
+            module_id = getattr(module_node, "id", None)
+            for child in node.named_children:
+                if module_id is not None and getattr(child, "id", None) == module_id:
+                    continue
+                if child.type == "wildcard_import":
+                    bindings.append(ImportBinding(local_name="*", module_path=module_abs))
+                elif child.type == "dotted_name":
+                    name = node_text(child, source)
+                    if name:
+                        bindings.append(
+                            ImportBinding(
+                                local_name=name, module_path=module_abs, imported_name=name
+                            )
+                        )
+                elif child.type == "aliased_import":
+                    name_node = child.child_by_field_name("name")
+                    alias_node = child.child_by_field_name("alias")
+                    if name_node is None:
+                        continue
+                    name = node_text(name_node, source)
+                    if not name:
+                        continue
+                    alias = node_text(alias_node, source) if alias_node is not None else name
+                    bindings.append(
+                        ImportBinding(local_name=alias, module_path=module_abs, imported_name=name)
+                    )
+
+    @staticmethod
+    def _absolutize_module(module_text: str, package: str | None, is_pkg_init: bool) -> str:
+        """Resolve a (possibly relative) Python module spec against the importing file's package.
+
+        For a module ``pkg.sub.mod``, one leading dot refers to ``pkg.sub``; for a package
+        ``__init__`` one dot refers to the package itself (one level less is stripped).
+        """
+        if not module_text.startswith("."):
+            return module_text
+        dots = len(module_text) - len(module_text.lstrip("."))
+        rest = module_text.lstrip(".")
+        parts = [p for p in (package or "").split(".") if p]
+        strip = dots - 1 if is_pkg_init else dots
+        base = parts[: max(len(parts) - strip, 0)] if strip > 0 else parts
+        combined = base + ([rest] if rest else [])
+        return ".".join(p for p in combined if p)
 
     def _add_import(self, ctx, module_name, frag) -> None:
         module_id = make_module_id(ctx.repo_id, module_name)
@@ -368,21 +498,67 @@ class PythonProvider(LanguageProvider):
                 return class_methods.get(class_name, {}).get(node_text(attr, source))
         return None
 
+    def _unresolved_call_parts(self, call, source) -> tuple[str, str | None] | None:
+        """Extract ``(name, qualifier)`` for a call the intra-file pass could not resolve."""
+        fn = call.child_by_field_name("function")
+        if fn is None:
+            return None
+        if fn.type == "identifier":
+            return node_text(fn, source), None
+        if fn.type == "attribute":
+            obj = fn.child_by_field_name("object")
+            attr = fn.child_by_field_name("attribute")
+            if obj is None or attr is None:
+                return None
+            qualifier = self._dotted_name(obj, source)
+            if qualifier is None or qualifier == "self":
+                return None
+            return node_text(attr, source), qualifier
+        return None
+
+    @staticmethod
+    def _dotted_name(node, source) -> str | None:
+        """Text of an identifier / attribute-of-identifiers chain (``a.b.c``), else ``None``."""
+        if node.type == "identifier":
+            return node_text(node, source)
+        if node.type == "attribute":
+            obj = node.child_by_field_name("object")
+            attr = node.child_by_field_name("attribute")
+            if obj is None or attr is None:
+                return None
+            left = PythonProvider._dotted_name(obj, source)
+            if left is None:
+                return None
+            return f"{left}.{node_text(attr, source)}"
+        return None
+
     # --- pass 3 helpers (REFERENCES.ref_kind) ---
 
-    def _collect_references(self, d, source, module_symbols, frag) -> None:
+    def _collect_references(
+        self, d, source, module_symbols, frag, unresolved, bound_locals, has_wildcard
+    ) -> None:
         """Emit REFERENCES edges from ``d`` to module-level symbols it uses.
 
         ref_kind classifies the strongest role of each name within the body:
         ``define`` (bound as an assignment target), ``write`` (augmented/attribute assignment),
         ``read`` (plain use), ``pass`` (used as a call argument). The strongest kind per target wins
         so scoring's ``define/write >> read/pass`` rule (§6.4) is fed a stable, single value.
+
+        Names bound by imports (or any name when a wildcard import exists) that are not defined in
+        this file are recorded as unresolved references for the cross-file linker.
         """
         strongest: dict[str, RefKind] = {}
+        unresolved_strongest: dict[str, RefKind] = {}
 
         def note(name: str, kind: RefKind) -> None:
             target = module_symbols.get(name)
-            if target is None or target == d.symbol_id:
+            if target is None:
+                if name in bound_locals or has_wildcard:
+                    current = unresolved_strongest.get(name)
+                    if current is None or _REF_KIND_RANK[kind] > _REF_KIND_RANK[current]:
+                        unresolved_strongest[name] = kind
+                return
+            if target == d.symbol_id:
                 return
             current = strongest.get(target)
             if current is None or _REF_KIND_RANK[kind] > _REF_KIND_RANK[current]:
@@ -397,6 +573,15 @@ class PythonProvider(LanguageProvider):
                     d.symbol_id,
                     target,
                     ref_kind=strongest[target],
+                )
+            )
+        for name in sorted(unresolved_strongest):
+            unresolved.append(
+                UnresolvedRef(
+                    d.symbol_id,
+                    name,
+                    kind="reference",
+                    ref_kind=unresolved_strongest[name],
                 )
             )
 
@@ -450,6 +635,15 @@ class PythonProvider(LanguageProvider):
         return node_text(attr_node, source)
 
     # --- misc ---
+
+    def derive_package(self, ctx: ParseContext) -> str | None:
+        """Dotted module path; ``pkg/__init__.py`` maps to ``pkg`` (not ``pkg.__init__``)."""
+        package = super().derive_package(ctx)
+        if package and package.endswith(".__init__"):
+            return package[: -len(".__init__")] or None
+        if package == "__init__":
+            return None
+        return package
 
     @staticmethod
     def _unwrap_decorated(node):

@@ -14,9 +14,16 @@ from __future__ import annotations
 from typing import Any
 
 from cce.domain.enums import EdgeLabel, NodeLabel, RefKind, SymbolKind
-from cce.domain.models import GraphEdge, GraphFragment, GraphNode
+from cce.domain.models import (
+    FragmentLinkData,
+    GraphEdge,
+    GraphFragment,
+    GraphNode,
+    ImportBinding,
+    UnresolvedRef,
+)
 from cce.indexing.extractor.routes import add_route
-from cce.indexing.parser._treesitter import load_language, make_parser, node_text
+from cce.indexing.parser._treesitter import body_snippet, load_language, make_parser, node_text
 from cce.indexing.parser.base import LanguageProvider, ParseContext
 from cce.indexing.parser.symbol_id import make_module_id, make_symbol_id
 
@@ -82,25 +89,59 @@ class JavaProvider(LanguageProvider):
         module_symbols: dict[str, str] = {}
         class_methods: dict[str, dict[str, str]] = {}
         defs: list[_Def] = []
+        unresolved: list[UnresolvedRef] = []
 
         for node in self._iter_type_decls(root):
-            self._collect_type(node, ctx, package, source, frag, module_symbols, class_methods, defs)
+            self._collect_type(
+                node, ctx, package, source, frag, module_symbols, class_methods, defs, unresolved
+            )
 
-        self._collect_imports(root, ctx, source, frag)
+        bindings: list[ImportBinding] = []
+        self._collect_imports(root, ctx, source, frag, bindings)
 
         for d in defs:
             if d.body is None:
                 continue
+            seen_unresolved: set[tuple[str, str | None]] = set()
             for call in self._iter_calls(d.body):
+                line = call.start_point[0] + 1
                 target = self._resolve_call(call, source, module_symbols, class_methods, d.class_name)
                 if target is not None and target != d.symbol_id:
-                    frag.add_edge(GraphEdge(EdgeLabel.CALLS, d.symbol_id, target))
+                    frag.add_edge(
+                        GraphEdge(EdgeLabel.CALLS, d.symbol_id, target, properties={"line": line})
+                    )
+                    continue
+                if target is not None:
+                    continue
+                parts = self._unresolved_call_parts(call, source)
+                if parts is None:
+                    continue
+                name, qualifier = parts
+                key = (name, qualifier)
+                if key in seen_unresolved:
+                    continue
+                seen_unresolved.add(key)
+                unresolved.append(
+                    UnresolvedRef(d.symbol_id, name, qualifier=qualifier, kind="call", line=line)
+                )
 
         for d in defs:
             if d.body is None:
                 continue
-            self._collect_references(d, source, module_symbols, frag)
+            self._collect_references(d, source, module_symbols, frag, unresolved)
 
+        exports = dict(module_symbols)
+        for cls, methods in class_methods.items():
+            for method, sid in methods.items():
+                exports.setdefault(f"{cls}.{method}", sid)
+        frag.link_data = FragmentLinkData(
+            file_id=ctx.file_id,
+            package=package,
+            language=self.language,
+            exports=exports,
+            imports=bindings,
+            unresolved=unresolved,
+        )
         return frag
 
     # --- pass 1 ---
@@ -111,13 +152,13 @@ class JavaProvider(LanguageProvider):
                 yield child
 
     def _collect_type(
-        self, node, ctx, package, source, frag, module_symbols, class_methods, defs
+        self, node, ctx, package, source, frag, module_symbols, class_methods, defs, unresolved
     ) -> None:
         kind = SymbolKind.INTERFACE if node.type == "interface_declaration" else SymbolKind.CLASS
         d = self._add_symbol(node, ctx, package, "", source, frag, kind, None)
         module_symbols[d.name] = d.symbol_id
         defs.append(d)
-        self._add_heritage(node, source, frag, d.symbol_id, module_symbols)
+        self._add_heritage(node, source, frag, d.symbol_id, module_symbols, unresolved)
 
         body = node.child_by_field_name("body")
         if body is None:
@@ -158,6 +199,7 @@ class JavaProvider(LanguageProvider):
                     "signature": signature,
                     "visibility": self._visibility(node, source),
                     "docstring": None,
+                    "body": body_snippet(body, source),
                     "namespace": namespace or package or "",
                     "file_id": ctx.file_id,
                     "line": node.start_point[0] + 1,
@@ -182,15 +224,21 @@ class JavaProvider(LanguageProvider):
                     return "public"
         return "package"
 
-    def _add_heritage(self, node, source, frag, class_symbol_id, module_symbols) -> None:
+    def _add_heritage(self, node, source, frag, class_symbol_id, module_symbols, unresolved) -> None:
+        line = node.start_point[0] + 1
         for field in ("superclass", "interfaces"):
             sub = node.child_by_field_name(field)
             if sub is None:
                 continue
             label = EdgeLabel.INHERITS if field == "superclass" else EdgeLabel.IMPLEMENTS
+            kind = "inherits" if field == "superclass" else "implements"
             for ident in self._iter_type_identifiers(sub, source):
                 if ident in module_symbols:
                     frag.add_edge(GraphEdge(label, class_symbol_id, module_symbols[ident]))
+                else:
+                    unresolved.append(
+                        UnresolvedRef(class_symbol_id, ident, kind=kind, line=line)
+                    )
 
     def _iter_type_identifiers(self, node, source):
         stack = [node]
@@ -201,11 +249,13 @@ class JavaProvider(LanguageProvider):
             for child in current.named_children:
                 stack.append(child)
 
-    def _collect_imports(self, root, ctx, source, frag) -> None:
+    def _collect_imports(self, root, ctx, source, frag, bindings) -> None:
         for child in root.named_children:
             if child.type != "import_declaration":
                 continue
-            name = node_text(child, source).replace("import", "").replace("static", "")
+            raw = node_text(child, source)
+            is_static = " static " in f" {raw} " or raw.startswith("import static")
+            name = raw.replace("import", "", 1).replace("static", "", 1)
             name = name.strip().rstrip(";").strip()
             if not name:
                 continue
@@ -216,6 +266,48 @@ class JavaProvider(LanguageProvider):
                 )
             )
             frag.add_edge(GraphEdge(EdgeLabel.IMPORTS, ctx.file_id, module_id))
+            if name.endswith(".*"):
+                bindings.append(ImportBinding(local_name="*", module_path=name[:-2]))
+            elif "." in name:
+                module_path, _, member = name.rpartition(".")
+                if is_static and "." in module_path:
+                    # ``import static a.b.C.max`` binds ``max`` to class C in package a.b.
+                    pkg, _, cls = module_path.rpartition(".")
+                    bindings.append(
+                        ImportBinding(local_name=member, module_path=pkg, imported_name=f"{cls}.{member}")
+                    )
+                else:
+                    bindings.append(
+                        ImportBinding(local_name=member, module_path=module_path, imported_name=member)
+                    )
+
+    def _unresolved_call_parts(self, call, source) -> tuple[str, str | None] | None:
+        """Extract ``(name, qualifier)`` for a method invocation not resolved intra-file."""
+        name_node = call.child_by_field_name("name")
+        if name_node is None:
+            return None
+        obj = call.child_by_field_name("object")
+        if obj is None:
+            return node_text(name_node, source), None
+        qualifier = self._qualifier_chain(obj, source)
+        if qualifier is None or qualifier == "this":
+            return None
+        return node_text(name_node, source), qualifier
+
+    @staticmethod
+    def _qualifier_chain(node, source) -> str | None:
+        if node.type == "identifier":
+            return node_text(node, source)
+        if node.type == "field_access":
+            obj = node.child_by_field_name("object")
+            field = node.child_by_field_name("field")
+            if obj is None or field is None:
+                return None
+            left = JavaProvider._qualifier_chain(obj, source)
+            if left is None:
+                return None
+            return f"{left}.{node_text(field, source)}"
+        return None
 
     # --- route extraction (Spring MVC) ---
 
@@ -318,12 +410,19 @@ class JavaProvider(LanguageProvider):
 
     # --- REFERENCES.ref_kind ---
 
-    def _collect_references(self, d, source, module_symbols, frag) -> None:
+    def _collect_references(self, d, source, module_symbols, frag, unresolved) -> None:
         strongest: dict[str, RefKind] = {}
+        unresolved_strongest: dict[str, RefKind] = {}
 
         def note(name: str, kind: RefKind) -> None:
             target = module_symbols.get(name)
-            if target is None or target == d.symbol_id:
+            if target is None:
+                # Java resolves same-package and imported types at link time (no intra-file gate).
+                current = unresolved_strongest.get(name)
+                if current is None or _REF_KIND_RANK[kind] > _REF_KIND_RANK[current]:
+                    unresolved_strongest[name] = kind
+                return
+            if target == d.symbol_id:
                 return
             current = strongest.get(target)
             if current is None or _REF_KIND_RANK[kind] > _REF_KIND_RANK[current]:
@@ -333,6 +432,12 @@ class JavaProvider(LanguageProvider):
         for target in sorted(strongest):
             frag.add_edge(
                 GraphEdge(EdgeLabel.REFERENCES, d.symbol_id, target, ref_kind=strongest[target])
+            )
+        for name in sorted(unresolved_strongest):
+            unresolved.append(
+                UnresolvedRef(
+                    d.symbol_id, name, kind="reference", ref_kind=unresolved_strongest[name]
+                )
             )
 
     def _walk_refs(self, node, source, note) -> None:

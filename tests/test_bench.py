@@ -22,6 +22,14 @@ class _FakeRepo:
     def repo_of_symbol(self, sid):
         return self._repo.get(sid)
 
+    def get_symbol(self, sid):
+        if sid in self._repo:
+            return {"symbol_id": sid, "name": sid, "file_id": f"{sid}.py", "line": 1}
+        return None
+
+    def symbols_in_file(self, fid):
+        return []
+
     def get_callers(self, sid):
         return [{"symbol_id": "setup", "provenance": "treesitter"}] if sid == "helper" else []
 
@@ -59,11 +67,15 @@ def test_benchmark_recall_precision_and_determinism():
     report = run_benchmark(_FakeRepo(), cases, determinism_runs=3)
     assert report.recall_mean == 1.0
     assert report.precision_mean == 1.0
+    assert report.precision_at_1_mean == 1.0
+    assert report.mrr_mean == 1.0
     assert report.determinism_ok is True
     assert report.rls_ok is True
     data = report.to_dict()
     assert data["summary"]["cases"] == 1
     assert "latency_median_ms" in data["summary"]
+    assert "precision_at_1_mean" in data["summary"]
+    assert "mrr_mean" in data["summary"]
 
 
 def test_benchmark_report_serializes_case_fields():

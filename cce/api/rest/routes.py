@@ -182,6 +182,7 @@ def find_similar_code_route(
 def get_context_for_task_route(
     body: ContextForTaskRequest,
     repository: GraphRepository = Depends(get_repository),
+    store: VectorStore = Depends(get_vector_store),
     scope: ScopeFilter = Depends(get_scope),
     locale: str = Depends(get_locale),
 ) -> dict[str, Any]:
@@ -198,6 +199,8 @@ def get_context_for_task_route(
         history_file_ids=body.history_file_ids,
         component_repo_ids=body.component_repo_ids,
         semantic_candidates=body.semantic_candidates,
+        store=store,
+        auto_semantic=body.auto_semantic,
         scope=scope,
         locale=locale,
     )
@@ -207,6 +210,7 @@ def get_context_for_task_route(
 def suggest_change_sites_route(
     body: ContextForTaskRequest,
     repository: GraphRepository = Depends(get_repository),
+    store: VectorStore = Depends(get_vector_store),
     scope: ScopeFilter = Depends(get_scope),
     locale: str = Depends(get_locale),
 ) -> dict[str, Any]:
@@ -221,6 +225,8 @@ def suggest_change_sites_route(
         history_file_ids=body.history_file_ids,
         component_repo_ids=body.component_repo_ids,
         semantic_candidates=body.semantic_candidates,
+        store=store,
+        auto_semantic=body.auto_semantic,
         scope=scope,
         locale=locale,
     )
@@ -299,6 +305,8 @@ def index_route(
             "files": summary.files,
             "nodes": summary.nodes,
             "edges": summary.edges,
+            "nodes_added": summary.nodes_added,
+            "edges_added": summary.edges_added,
             "commit": summary.commit,
         },
         "message": message,
@@ -364,6 +372,8 @@ def index_remote_route(
             "files": summary.files,
             "nodes": summary.nodes,
             "edges": summary.edges,
+            "nodes_added": summary.nodes_added,
+            "edges_added": summary.edges_added,
             "commit": summary.commit,
         },
         "message": message,
@@ -412,6 +422,8 @@ def reindex_route(
             "deleted": summary.deleted,
             "nodes": summary.nodes,
             "edges": summary.edges,
+            "nodes_added": summary.nodes_added,
+            "edges_added": summary.edges_added,
         },
         "message": message,
         "locale": locale,

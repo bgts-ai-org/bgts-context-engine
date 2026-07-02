@@ -1,10 +1,11 @@
-"""Indexing orchestrator: git-sync -> extract -> upsert.
+"""Indexing orchestrator: git-sync -> extract (pass 1) -> link (pass 2) -> upsert.
 
 Phase 0 entry point for full-indexing a repository - either a local path
 (:meth:`Indexer.index_local_repo`) or a remote Bitbucket Cloud URL
 (:meth:`Indexer.index_remote_repo`, which clones/fetches first and then runs the same local walk).
-Wires the language registry (multi-language), the extractor, and the graph upserter together, and
-stamps every node with the commit the index was built against (freshness guarantee).
+Wires the language registry (multi-language), the extractor, the repo-wide cross-file linker, and
+the graph upserter together, and stamps every node with the commit the index was built against
+(freshness guarantee).
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from cce.domain.models import GraphFragment
 from cce.indexing.embedder import Embedder
 from cce.indexing.extractor import Extractor
 from cce.indexing.gitsync import (
@@ -22,10 +24,14 @@ from cce.indexing.gitsync import (
     parse_bitbucket_url,
     sync_repo,
 )
+from cce.indexing.linker import link_fragments, synthesize_scip_edges
 from cce.indexing.parser.symbol_id import make_file_id, make_repo_id
 from cce.indexing.upserter import Upserter
 from cce.storage.graph.repository import GraphRepository
 from cce.storage.vector.store import VectorStore
+
+#: Extensions scanned for cross-language bridge detection (native mobile + JS sides).
+_BRIDGE_EXTS = (".m", ".mm", ".swift", ".kt", ".js", ".jsx", ".ts", ".tsx")
 
 
 @dataclass(slots=True)
@@ -35,6 +41,8 @@ class IndexSummary:
     nodes: int
     edges: int
     commit: str
+    nodes_added: int = 0
+    edges_added: int = 0
     remote_url: str | None = None
     branch: str | None = None
 
@@ -49,6 +57,8 @@ class IncrementalSummary:
     deleted: int
     nodes: int
     edges: int
+    nodes_added: int = 0
+    edges_added: int = 0
 
 
 class Indexer:
@@ -131,13 +141,16 @@ class Indexer:
     ) -> IndexSummary:
         repo_id = make_repo_id(name)
         default_branch = branch or "main"
+        nodes_before, edges_before = self.repository.counts()
 
         self.upserter.ensure_repo_node(repo_id, name, default_branch, commit, remote_url)
         self._record_repo_row(repo_id, name, commit, remote_url, default_branch)
 
         self._apply_scip_resolution(root)
 
+        # Pass 1: per-file extraction + upsert. Fragments are kept for the repo-wide link pass.
         files = 0
+        fragments: list[GraphFragment] = []
         exts = self.extractor.registry.supported_extensions()
         for rel, abs_path in iter_source_files(root, exts):
             source = abs_path.read_bytes()
@@ -146,12 +159,16 @@ class Indexer:
             )
             if fragment is None:
                 continue
+            fragments.append(fragment)
             self.upserter.upsert_file_fragment(fragment)
             if self.embedder is not None:
                 self.embedder.embed_fragment(
                     fragment, repo_id=repo_id, indexed_at_commit=commit
                 )
             files += 1
+
+        # Pass 2: cross-file linking, optional SCIP edge synthesis, heuristic bridges.
+        self._link_and_upsert(root, fragments)
 
         nodes, edges = self.repository.counts()
         return IndexSummary(
@@ -160,9 +177,63 @@ class Indexer:
             nodes=nodes,
             edges=edges,
             commit=commit,
+            nodes_added=nodes - nodes_before,
+            edges_added=edges - edges_before,
             remote_url=remote_url,
             branch=branch,
         )
+
+    def _link_and_upsert(self, root: Path, fragments: list[GraphFragment]) -> None:
+        """Repo-wide pass 2: resolve cross-file refs, synthesize SCIP + bridge edges, upsert."""
+        if not fragments:
+            return
+        linked = link_fragments(fragments, scip_resolution=self.extractor.scip_resolution)
+        if len(linked):
+            self.upserter.upsert_file_fragment(linked)
+        if self.extractor.scip_resolution is not None:
+            synthesized = synthesize_scip_edges(self.extractor.scip_resolution, fragments)
+            if len(synthesized):
+                self.upserter.upsert_file_fragment(synthesized)
+        bridges = self._extract_bridges(root, fragments)
+        if len(bridges):
+            self.upserter.upsert_file_fragment(bridges)
+
+    def _extract_bridges(self, root: Path, fragments: list[GraphFragment]) -> GraphFragment:
+        """Cross-language heuristic bridges (RN/Expo/Swift-ObjC), resolved over this run's symbols."""
+        from cce.domain.enums import NodeLabel
+        from cce.indexing.extractor.bridges import BridgeFile, SymbolRef, extract_bridges
+
+        bridge_files: list[BridgeFile] = []
+        for rel, abs_path in iter_source_files(root, _BRIDGE_EXTS):
+            try:
+                text = abs_path.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            bridge_files.append(BridgeFile(path=rel, text=text))
+        if not bridge_files:
+            return GraphFragment()
+
+        by_name: dict[str, list[SymbolRef]] = {}
+        for fragment in fragments:
+            language = None
+            for node in fragment.nodes:
+                if node.label is NodeLabel.FILE:
+                    language = node.properties.get("language")
+                    break
+            if not isinstance(language, str):
+                continue
+            for node in fragment.nodes:
+                if node.label is not NodeLabel.SYMBOL:
+                    continue
+                name = node.properties.get("name")
+                if not isinstance(name, str) or not name:
+                    continue
+                ref = SymbolRef(symbol_id=node.node_id, language=language)
+                refs = by_name.setdefault(name, [])
+                if ref not in refs:
+                    refs.append(ref)
+
+        return extract_bridges(bridge_files, lambda name: by_name.get(name, []))
 
     def index_incremental(
         self,
@@ -178,6 +249,11 @@ class Indexer:
         For each deleted file: drop its subgraph + embeddings. Falls back to the repo's recorded
         ``last_indexed_commit`` when ``since_commit`` is omitted. All work happens in the repository's
         single connection so the graph + vector writes commit together (P5).
+
+        After the per-file work a repo-wide **relink** runs: dropping a changed file's subgraph
+        (DETACH DELETE) also removes cross-file edges into its symbols, and a newly added file may
+        satisfy imports that previously resolved to nothing. Re-linking re-derives every cross-file
+        edge deterministically (correctness first; unchanged edges MERGE idempotently).
         """
         root = Path(path).resolve()
         repo_id = make_repo_id(name)
@@ -187,16 +263,22 @@ class Indexer:
                 f"No baseline commit for repo '{name}'; run a full index first or pass since_commit."
             )
         target = current_commit(root) if to_commit == "HEAD" else to_commit
+        nodes_before, edges_before = self.repository.counts()
+
+        self._apply_scip_resolution(root)
 
         changes = changed_files(root, base, to_commit)
         exts = set(self.extractor.registry.supported_extensions())
 
         added = modified = deleted = 0
+        changed_paths: set[str] = set()
+        changed_fragments: dict[str, GraphFragment] = {}
         for change in changes:
             if not any(change.path.lower().endswith(ext) for ext in exts):
                 continue
             file_id = make_file_id(repo_id, change.path)
             self._drop_file(file_id)
+            changed_paths.add(change.path)
             if change.status == "deleted":
                 deleted += 1
                 continue
@@ -212,6 +294,7 @@ class Indexer:
             )
             if fragment is None:
                 continue
+            changed_fragments[change.path] = fragment
             self.upserter.upsert_file_fragment(fragment)
             if self.embedder is not None:
                 self.embedder.embed_fragment(fragment, repo_id=repo_id, indexed_at_commit=target)
@@ -219,6 +302,12 @@ class Indexer:
                 added += 1
             else:
                 modified += 1
+
+        if changed_paths:
+            fragments = self._collect_fragments_for_relink(
+                root, repo_id, target, changed_fragments
+            )
+            self._link_and_upsert(root, fragments)
 
         self._update_indexed_commit(repo_id, target)
         nodes, edges = self.repository.counts()
@@ -231,18 +320,51 @@ class Indexer:
             deleted=deleted,
             nodes=nodes,
             edges=edges,
+            nodes_added=nodes - nodes_before,
+            edges_added=edges - edges_before,
         )
+
+    def _collect_fragments_for_relink(
+        self,
+        root: Path,
+        repo_id: str,
+        commit: str,
+        changed_fragments: dict[str, GraphFragment],
+    ) -> list[GraphFragment]:
+        """Fragments for every source file (in-memory only; unchanged files are not re-upserted).
+
+        Changed files reuse their freshly extracted fragments; unchanged files are re-parsed just
+        to rebuild the deterministic link inputs (exports/imports/unresolved refs).
+        """
+        fragments: list[GraphFragment] = []
+        exts = self.extractor.registry.supported_extensions()
+        for rel, abs_path in iter_source_files(root, exts):
+            if rel in changed_fragments:
+                fragments.append(changed_fragments[rel])
+                continue
+            source = abs_path.read_bytes()
+            fragment = self.extractor.extract_file(
+                repo_id=repo_id, path=rel, source=source, indexed_at_commit=commit
+            )
+            if fragment is not None:
+                fragments.append(fragment)
+        return fragments
 
     def _apply_scip_resolution(self, root: Path) -> None:
         """Build repo-level SCIP resolution (if any indexer binary exists) for the extractor.
 
         Tries the known ecosystems; the first resolver that produces a resolution wins (deterministic
         by the fixed order). No-op when disabled or when no binary/reader is available, leaving the
-        pure tree-sitter behaviour intact.
+        pure tree-sitter behaviour intact. Monikers are normalized to short symbol names so both
+        provenance elevation and cross-file edge synthesis can match extractor symbols by name.
         """
         if not self.use_scip:
             return
-        from cce.indexing.parser.scip import ScipResolution, build_scip_resolver
+        from cce.indexing.parser.scip import (
+            ScipResolution,
+            build_scip_resolver,
+            moniker_display_name,
+        )
 
         merged_edges: set[tuple[str, str]] = set()
         merged_defs: set[str] = set()
@@ -254,8 +376,10 @@ class Indexer:
             resolution = resolver.resolve(root)
             if resolution is None:
                 continue
-            merged_edges |= set(resolution.edges)
-            merged_defs |= set(resolution.definitions)
+            merged_edges |= {
+                (moniker_display_name(a), moniker_display_name(b)) for a, b in resolution.edges
+            }
+            merged_defs |= {moniker_display_name(d) for d in resolution.definitions}
             found_any = True
         if found_any:
             self.extractor.scip_resolution = ScipResolution(

@@ -13,9 +13,16 @@ from __future__ import annotations
 from typing import Any
 
 from cce.domain.enums import EdgeLabel, NodeLabel, RefKind, SymbolKind
-from cce.domain.models import GraphEdge, GraphFragment, GraphNode
+from cce.domain.models import (
+    FragmentLinkData,
+    GraphEdge,
+    GraphFragment,
+    GraphNode,
+    ImportBinding,
+    UnresolvedRef,
+)
 from cce.indexing.extractor.routes import add_route
-from cce.indexing.parser._treesitter import load_language, make_parser, node_text
+from cce.indexing.parser._treesitter import body_snippet, load_language, make_parser, node_text
 from cce.indexing.parser.base import LanguageProvider, ParseContext
 from cce.indexing.parser.symbol_id import make_module_id, make_symbol_id
 
@@ -83,25 +90,59 @@ class CSharpProvider(LanguageProvider):
         module_symbols: dict[str, str] = {}
         class_methods: dict[str, dict[str, str]] = {}
         defs: list[_Def] = []
+        unresolved: list[UnresolvedRef] = []
 
         for node in self._iter_type_decls(root):
-            self._collect_type(node, ctx, package, source, frag, module_symbols, class_methods, defs)
+            self._collect_type(
+                node, ctx, package, source, frag, module_symbols, class_methods, defs, unresolved
+            )
 
-        self._collect_imports(root, ctx, source, frag)
+        bindings: list[ImportBinding] = []
+        self._collect_imports(root, ctx, source, frag, bindings)
 
         for d in defs:
             if d.body is None:
                 continue
+            seen_unresolved: set[tuple[str, str | None]] = set()
             for call in self._iter_calls(d.body):
+                line = call.start_point[0] + 1
                 target = self._resolve_call(call, source, module_symbols, class_methods, d.class_name)
                 if target is not None and target != d.symbol_id:
-                    frag.add_edge(GraphEdge(EdgeLabel.CALLS, d.symbol_id, target))
+                    frag.add_edge(
+                        GraphEdge(EdgeLabel.CALLS, d.symbol_id, target, properties={"line": line})
+                    )
+                    continue
+                if target is not None:
+                    continue
+                parts = self._unresolved_call_parts(call, source)
+                if parts is None:
+                    continue
+                name, qualifier = parts
+                key = (name, qualifier)
+                if key in seen_unresolved:
+                    continue
+                seen_unresolved.add(key)
+                unresolved.append(
+                    UnresolvedRef(d.symbol_id, name, qualifier=qualifier, kind="call", line=line)
+                )
 
         for d in defs:
             if d.body is None:
                 continue
-            self._collect_references(d, source, module_symbols, frag)
+            self._collect_references(d, source, module_symbols, frag, unresolved)
 
+        exports = dict(module_symbols)
+        for cls, methods in class_methods.items():
+            for method, sid in methods.items():
+                exports.setdefault(f"{cls}.{method}", sid)
+        frag.link_data = FragmentLinkData(
+            file_id=ctx.file_id,
+            package=package,
+            language=self.language,
+            exports=exports,
+            imports=bindings,
+            unresolved=unresolved,
+        )
         return frag
 
     # --- pass 1 ---
@@ -122,13 +163,13 @@ class CSharpProvider(LanguageProvider):
                     stack.append(child)
 
     def _collect_type(
-        self, node, ctx, package, source, frag, module_symbols, class_methods, defs
+        self, node, ctx, package, source, frag, module_symbols, class_methods, defs, unresolved
     ) -> None:
         kind = SymbolKind.INTERFACE if node.type == "interface_declaration" else SymbolKind.CLASS
         d = self._add_symbol(node, ctx, package, "", source, frag, kind)
         module_symbols[d.name] = d.symbol_id
         defs.append(d)
-        self._add_heritage(node, source, frag, d.symbol_id, module_symbols)
+        self._add_heritage(node, source, frag, d.symbol_id, module_symbols, unresolved)
 
         body = node.child_by_field_name("body")
         if body is None:
@@ -172,6 +213,7 @@ class CSharpProvider(LanguageProvider):
                     "signature": signature,
                     "visibility": self._visibility(node, source),
                     "docstring": None,
+                    "body": body_snippet(body, source),
                     "namespace": namespace or package or "",
                     "file_id": ctx.file_id,
                     "line": node.start_point[0] + 1,
@@ -192,7 +234,7 @@ class CSharpProvider(LanguageProvider):
                     return text
         return "internal"
 
-    def _add_heritage(self, node, source, frag, class_symbol_id, module_symbols) -> None:
+    def _add_heritage(self, node, source, frag, class_symbol_id, module_symbols, unresolved) -> None:
         base_list = None
         for child in node.named_children:
             if child.type == "base_list":
@@ -200,10 +242,15 @@ class CSharpProvider(LanguageProvider):
                 break
         if base_list is None:
             return
+        line = node.start_point[0] + 1
         for ident in self._iter_type_identifiers(base_list, source):
             if ident in module_symbols:
                 # C# can't distinguish base class vs interface syntactically here; default INHERITS.
                 frag.add_edge(GraphEdge(EdgeLabel.INHERITS, class_symbol_id, module_symbols[ident]))
+            else:
+                unresolved.append(
+                    UnresolvedRef(class_symbol_id, ident, kind="inherits", line=line)
+                )
 
     def _iter_type_identifiers(self, node, source):
         stack = [node]
@@ -214,7 +261,7 @@ class CSharpProvider(LanguageProvider):
             for child in current.named_children:
                 stack.append(child)
 
-    def _collect_imports(self, root, ctx, source, frag) -> None:
+    def _collect_imports(self, root, ctx, source, frag, bindings) -> None:
         stack = [root]
         while stack:
             current = stack.pop()
@@ -231,6 +278,23 @@ class CSharpProvider(LanguageProvider):
                             )
                         )
                         frag.add_edge(GraphEdge(EdgeLabel.IMPORTS, ctx.file_id, module_id))
+                        if "=" in name:
+                            # ``using Alias = Some.Namespace.Type;`` -> alias binding.
+                            alias, _, target = (p.strip() for p in name.partition("="))
+                            if alias and target and "." in target:
+                                module_path, _, member = target.rpartition(".")
+                                bindings.append(
+                                    ImportBinding(
+                                        local_name=alias,
+                                        module_path=module_path,
+                                        imported_name=member,
+                                    )
+                                )
+                        else:
+                            # ``using My.App.Utils;`` brings the namespace's types into scope.
+                            bindings.append(
+                                ImportBinding(local_name="*", module_path=name.removeprefix("static ").strip())
+                            )
                 elif child.type in ("namespace_declaration", "file_scoped_namespace_declaration"):
                     stack.append(child)
 
@@ -332,14 +396,54 @@ class CSharpProvider(LanguageProvider):
                 return class_methods.get(class_name, {}).get(node_text(name, source))
         return None
 
+    def _unresolved_call_parts(self, call, source) -> tuple[str, str | None] | None:
+        """Extract ``(name, qualifier)`` for an invocation not resolved intra-file."""
+        fn = call.child_by_field_name("function")
+        if fn is None:
+            return None
+        if fn.type == "identifier":
+            return node_text(fn, source), None
+        if fn.type == "member_access_expression":
+            expr = fn.child_by_field_name("expression")
+            name = fn.child_by_field_name("name")
+            if expr is None or name is None:
+                return None
+            qualifier = self._qualifier_chain(expr, source)
+            if qualifier is None or qualifier == "this":
+                return None
+            return node_text(name, source), qualifier
+        return None
+
+    @staticmethod
+    def _qualifier_chain(node, source) -> str | None:
+        if node.type == "identifier":
+            return node_text(node, source)
+        if node.type == "member_access_expression":
+            expr = node.child_by_field_name("expression")
+            name = node.child_by_field_name("name")
+            if expr is None or name is None:
+                return None
+            left = CSharpProvider._qualifier_chain(expr, source)
+            if left is None:
+                return None
+            return f"{left}.{node_text(name, source)}"
+        return None
+
     # --- REFERENCES.ref_kind ---
 
-    def _collect_references(self, d, source, module_symbols, frag) -> None:
+    def _collect_references(self, d, source, module_symbols, frag, unresolved) -> None:
         strongest: dict[str, RefKind] = {}
+        unresolved_strongest: dict[str, RefKind] = {}
 
         def note(name: str, kind: RefKind) -> None:
             target = module_symbols.get(name)
-            if target is None or target == d.symbol_id:
+            if target is None:
+                # C# resolves same-namespace and ``using``-scoped types at link time.
+                current = unresolved_strongest.get(name)
+                if current is None or _REF_KIND_RANK[kind] > _REF_KIND_RANK[current]:
+                    unresolved_strongest[name] = kind
+                return
+            if target == d.symbol_id:
                 return
             current = strongest.get(target)
             if current is None or _REF_KIND_RANK[kind] > _REF_KIND_RANK[current]:
@@ -349,6 +453,12 @@ class CSharpProvider(LanguageProvider):
         for target in sorted(strongest):
             frag.add_edge(
                 GraphEdge(EdgeLabel.REFERENCES, d.symbol_id, target, ref_kind=strongest[target])
+            )
+        for name in sorted(unresolved_strongest):
+            unresolved.append(
+                UnresolvedRef(
+                    d.symbol_id, name, kind="reference", ref_kind=unresolved_strongest[name]
+                )
             )
 
     def _walk_refs(self, node, source, note) -> None:
@@ -400,3 +510,25 @@ class CSharpProvider(LanguageProvider):
                 note(node_text(current, source), RefKind.READ)
             for kid in current.named_children:
                 stack.append(kid)
+
+    def derive_package(self, ctx: ParseContext) -> str | None:
+        # C# namespaces come from the ``namespace`` declaration (shared across files),
+        # enabling same-namespace cross-file resolution; fall back to the path.
+        try:
+            tree = self.parse(ctx.source)
+            stack = [tree.root_node]
+            while stack:
+                current = stack.pop()
+                for child in current.named_children:
+                    if child.type in (
+                        "namespace_declaration",
+                        "file_scoped_namespace_declaration",
+                    ):
+                        name_node = child.child_by_field_name("name")
+                        if name_node is not None:
+                            name = node_text(name_node, ctx.source)
+                            if name:
+                                return name
+        except Exception:
+            pass
+        return super().derive_package(ctx)

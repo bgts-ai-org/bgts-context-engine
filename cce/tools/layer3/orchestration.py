@@ -18,8 +18,24 @@ from cce.core.i18n import get_translator
 from cce.core.orchestrator import RetrievalOrchestrator
 from cce.core.orchestrator.anchors import AnchorResult, find_anchors
 from cce.storage.graph.repository import GraphRepository
+from cce.storage.vector.store import VectorStore
 
 _WORD_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+#: How many nearest symbols the automatic semantic anchor pulls in (D1; opt-out via auto_semantic).
+_AUTO_SEMANTIC_LIMIT = 10
+
+
+def _auto_semantic_candidates(
+    store: VectorStore, task_text: str, repo_ids: list[str] | None
+) -> list[str]:
+    """Nearest symbol_ids for the task text, in (distance, ref_id) order (deterministic given the
+    pinned encoder + snapshot). Used only when the caller did not supply semantic_candidates."""
+    from cce.indexing.embedder.encoder import build_default_encoder
+
+    vector = build_default_encoder().encode_query(task_text)
+    hits = store.search(vector, limit=_AUTO_SEMANTIC_LIMIT, repo_ids=repo_ids, kind="symbol")
+    return [h["ref_id"] for h in hits]
 
 
 def _task_signals(task_text: str, symbol_ids: list[str], repository: GraphRepository) -> dict[str, float]:
@@ -73,6 +89,8 @@ def get_context_for_task(
     history_file_ids: list[str] | None = None,
     component_repo_ids: list[str] | None = None,
     semantic_candidates: list[str] | None = None,
+    store: VectorStore | None = None,
+    auto_semantic: bool = True,
     scope: ScopeFilter | None = None,
     task_id: str | None = None,
     locale: str | None = None,
@@ -80,6 +98,10 @@ def get_context_for_task(
     """End-to-end: task -> anchors -> expand -> score -> filter -> assemble + coverage (section 6)."""
     tr = get_translator()
     loc = tr.resolve(locale)
+
+    # D1: automatic semantic anchor when the caller did not pre-compute one (opt-out: auto_semantic).
+    if semantic_candidates is None and auto_semantic and store is not None:
+        semantic_candidates = _auto_semantic_candidates(store, task_text, repo_ids)
 
     anchors = _build_anchors(
         repository,
@@ -107,7 +129,7 @@ def get_context_for_task(
 
     items = _enrich_items(repository, result.candidates)
     package = assemble(items, max_tokens=max_tokens)
-    coverage = compute_coverage(result)
+    coverage = compute_coverage(result, repository)
 
     message = coverage_message(coverage, loc)
     return {
@@ -154,21 +176,34 @@ def expand_blast_radius(
     scope: ScopeFilter | None = None,
     locale: str | None = None,
 ) -> dict[str, Any]:
-    """Impacted surface (files/repos/symbols) reachable as callers of the targets, deterministically."""
+    """Impacted surface (files/repos/symbols) reachable from the targets, deterministically.
+
+    Impact channels (D2): incoming CALLS (callers), incoming REFERENCES (referrers), subtype
+    impact (INHERITS/IMPLEMENTS), and file-level IMPORTS (files importing the target's file).
+    The payload carries a per-edge-type breakdown.
+    """
     tr = get_translator()
     loc = tr.resolve(locale)
 
     impacted_symbols: set[str] = set()
     impacted_files: set[str] = set()
     impacted_repos: set[str] = set()
+    # First edge type that reached each newly impacted symbol/file (deterministic given the
+    # fixed channel order below), so the breakdown never double-counts.
+    edge_counts = {"CALLS": 0, "REFERENCES": 0, "INHERITS_IMPLEMENTS": 0, "IMPORTS": 0}
 
     visited = set(target_symbols)
     frontier = sorted(set(target_symbols))
     for _ in range(3):  # fixed depth (spec: 2-hop callers + type impact); bounded for determinism.
         next_frontier: list[str] = []
         for sid in frontier:
-            for caller in repository.get_callers(sid) + repository.get_subtypes(sid):
-                cid = caller.get("symbol_id")
+            neighbours = (
+                [("CALLS", n) for n in repository.get_callers(sid)]
+                + [("REFERENCES", n) for n in repository.get_referrers(sid)]
+                + [("INHERITS_IMPLEMENTS", n) for n in repository.get_subtypes(sid)]
+            )
+            for edge_type, neighbour in neighbours:
+                cid = neighbour.get("symbol_id")
                 if not cid or cid in visited:
                     continue
                 repo_id = repository.repo_of_symbol(cid)
@@ -176,14 +211,39 @@ def expand_blast_radius(
                     continue
                 visited.add(cid)
                 impacted_symbols.add(cid)
-                if caller.get("file_id"):
-                    impacted_files.add(caller["file_id"])
+                edge_counts[edge_type] += 1
+                if neighbour.get("file_id"):
+                    impacted_files.add(neighbour["file_id"])
                 if repo_id:
                     impacted_repos.add(repo_id)
                 next_frontier.append(cid)
         frontier = sorted(next_frontier)
         if not frontier:
             break
+
+    # File-level IMPORTS impact: every file importing a target's file is potentially affected.
+    target_files = sorted(
+        {
+            fid
+            for fid in (
+                (repository.get_symbol(sid) or {}).get("file_id") for sid in sorted(set(target_symbols))
+            )
+            if fid
+        }
+    )
+    for fid in target_files:
+        for importer in repository.file_importers(fid):
+            ifid = importer.get("file_id")
+            irepo = importer.get("repo_id")
+            if not ifid:
+                continue
+            if scope is not None and not scope.allows(irepo):
+                continue
+            if ifid not in impacted_files:
+                impacted_files.add(ifid)
+                edge_counts["IMPORTS"] += 1
+            if irepo:
+                impacted_repos.add(irepo)
 
     message = tr.translate(
         "tool.blast_radius.summary",
@@ -204,6 +264,7 @@ def expand_blast_radius(
                 "files": len(impacted_files),
                 "repos": len(impacted_repos),
             },
+            "impact_by_edge": edge_counts,
         },
         "message": message,
         "locale": loc,
@@ -222,12 +283,18 @@ def suggest_change_sites(
     history_file_ids: list[str] | None = None,
     component_repo_ids: list[str] | None = None,
     semantic_candidates: list[str] | None = None,
+    store: VectorStore | None = None,
+    auto_semantic: bool = True,
     scope: ScopeFilter | None = None,
     locale: str | None = None,
 ) -> dict[str, Any]:
     """Scored change-site candidates for a task (does NOT decide; narrows the space, P3)."""
     tr = get_translator()
     loc = tr.resolve(locale)
+
+    # D1: automatic semantic anchor when the caller did not pre-compute one (opt-out: auto_semantic).
+    if semantic_candidates is None and auto_semantic and store is not None:
+        semantic_candidates = _auto_semantic_candidates(store, task_text, repo_ids)
 
     anchors = _build_anchors(
         repository,
@@ -251,7 +318,7 @@ def suggest_change_sites(
     )
 
     sites = _enrich_items(repository, result.candidates)
-    coverage = compute_coverage(result)
+    coverage = compute_coverage(result, repository)
     message = tr.translate("tool.change_sites.count", loc, count=len(sites))
     return {
         "tool": "suggest_change_sites",
