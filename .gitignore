@@ -19,6 +19,7 @@ htmlcov/
 # Local data / repos cloned by git-sync
 .cce_data/
 repos_cache/
+reports/
 
 # Env / secrets
 .env
