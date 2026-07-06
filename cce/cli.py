@@ -327,6 +327,9 @@ def serve(
     """Run the REST API server (Layer 1-2-3 endpoints) via uvicorn."""
     import uvicorn
 
+    from cce.core.logging import setup_logging
+
+    setup_logging()
     uvicorn.run("cce.api.rest.app:app", host=host, port=port, reload=reload)
 
 

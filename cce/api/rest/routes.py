@@ -32,6 +32,7 @@ from cce.core.auth.scope import ScopeFilter
 from cce.core.i18n import get_translator
 from cce.indexing.gitsync import GitCredentials, GitError
 from cce.indexing.indexer import Indexer
+from cce.jobs.store import cancel_job, enqueue_job, get_job, list_jobs
 from cce.indexing.parser.registry import build_default_registry
 from cce.storage.graph.repository import GraphRepository
 from cce.storage.vector.store import VectorStore
@@ -425,6 +426,158 @@ def reindex_route(
             "nodes_added": summary.nodes_added,
             "edges_added": summary.edges_added,
         },
+        "message": message,
+        "locale": locale,
+    }
+
+
+# --- Jobs: async indexing (DB-backed queue; workers run in-process, see cce.jobs) ---
+
+
+def _enqueue_response(
+    repository: GraphRepository, job_type: str, payload: dict[str, Any], locale: str
+) -> JSONResponse:
+    """Insert a pending job, commit, and answer 202 with the tool envelope."""
+    conn = repository.client.conn
+    job = enqueue_job(conn, job_type, payload)
+    conn.commit()
+    message = get_translator().translate(
+        "tool.job.enqueued", locale, job_id=job["job_id"], job_type=job_type
+    )
+    return JSONResponse(
+        status_code=202,
+        content={
+            "tool": f"job_{job_type}",
+            "payload": {"job": job},
+            "message": message,
+            "locale": locale,
+        },
+    )
+
+
+@router.post("/v1/jobs/index", response_model=ToolResponse, status_code=202, tags=["jobs"])
+def job_index_route(
+    body: IndexRequest,
+    repository: GraphRepository = Depends(get_repository),
+    locale: str = Depends(get_locale),
+) -> JSONResponse:
+    """Enqueue a full local-repo index; poll ``GET /v1/jobs/{job_id}`` for the outcome."""
+    payload = {"repo_path": body.repo_path, "name": body.name, "commit": body.commit}
+    return _enqueue_response(repository, "index", payload, locale)
+
+
+@router.post(
+    "/v1/jobs/index-remote", response_model=ToolResponse, status_code=202, tags=["jobs"]
+)
+def job_index_remote_route(
+    body: IndexRemoteRequest,
+    repository: GraphRepository = Depends(get_repository),
+    locale: str = Depends(get_locale),
+) -> JSONResponse:
+    """Enqueue a remote clone + index.
+
+    Credentials are **not** persisted with the job: the worker always reads
+    ``CCE_BITBUCKET_USERNAME`` / ``CCE_BITBUCKET_TOKEN`` from the environment at execution time,
+    so per-request ``token``/``username`` fields are ignored here (use the sync endpoint if you
+    must pass request-scoped credentials).
+    """
+    payload = {"url": body.url, "name": body.name, "branch": body.branch}
+    return _enqueue_response(repository, "index_remote", payload, locale)
+
+
+@router.post("/v1/jobs/reindex", response_model=ToolResponse, status_code=202, tags=["jobs"])
+def job_reindex_route(
+    body: ReindexRequest,
+    repository: GraphRepository = Depends(get_repository),
+    locale: str = Depends(get_locale),
+) -> JSONResponse:
+    """Enqueue an incremental (git-diff driven) re-index."""
+    payload = {
+        "repo_path": body.repo_path,
+        "name": body.name,
+        "since_commit": body.since_commit,
+        "to_commit": body.to_commit,
+    }
+    return _enqueue_response(repository, "reindex", payload, locale)
+
+
+@router.get("/v1/jobs", response_model=ToolResponse, tags=["jobs"])
+def jobs_list_route(
+    status: str | None = Query(
+        default=None, description="Filter: pending | running | succeeded | failed | cancelled."
+    ),
+    repo: str | None = Query(default=None, description="Filter by logical repository name."),
+    limit: int = Query(default=50, ge=1, le=500, description="Max jobs to return (newest first)."),
+    repository: GraphRepository = Depends(get_repository),
+    locale: str = Depends(get_locale),
+) -> dict[str, Any]:
+    jobs = list_jobs(repository.client.conn, status=status, repo=repo, limit=limit)
+    message = get_translator().translate("tool.job.list", locale, count=len(jobs))
+    return {
+        "tool": "job_list",
+        "payload": {"jobs": jobs},
+        "message": message,
+        "locale": locale,
+    }
+
+
+@router.get("/v1/jobs/{job_id}", response_model=ToolResponse, tags=["jobs"])
+def job_status_route(
+    job_id: str,
+    repository: GraphRepository = Depends(get_repository),
+    locale: str = Depends(get_locale),
+) -> Any:
+    tr = get_translator()
+    job = get_job(repository.client.conn, job_id)
+    if job is None:
+        return JSONResponse(
+            status_code=404,
+            content={
+                "tool": "job_status",
+                "payload": {"job_id": job_id},
+                "message": tr.translate("error.job_not_found", locale, job_id=job_id),
+                "locale": locale,
+            },
+        )
+    message = tr.translate("tool.job.status", locale, job_id=job["job_id"], status=job["status"])
+    return {
+        "tool": "job_status",
+        "payload": {"job": job},
+        "message": message,
+        "locale": locale,
+    }
+
+
+@router.post("/v1/jobs/{job_id}/cancel", response_model=ToolResponse, tags=["jobs"])
+def job_cancel_route(
+    job_id: str,
+    repository: GraphRepository = Depends(get_repository),
+    locale: str = Depends(get_locale),
+) -> Any:
+    """Cancel a job while it is still pending (running jobs cannot be interrupted)."""
+    tr = get_translator()
+    conn = repository.client.conn
+    job = cancel_job(conn, job_id)
+    if job is None:
+        existing = get_job(conn, job_id)
+        if existing is None:
+            key, status_code = "error.job_not_found", 404
+        else:
+            key, status_code = "error.job_not_cancellable", 409
+        return JSONResponse(
+            status_code=status_code,
+            content={
+                "tool": "job_cancel",
+                "payload": {"job_id": job_id, "job": existing},
+                "message": tr.translate(key, locale, job_id=job_id),
+                "locale": locale,
+            },
+        )
+    conn.commit()
+    message = tr.translate("tool.job.cancelled", locale, job_id=job["job_id"])
+    return {
+        "tool": "job_cancel",
+        "payload": {"job": job},
         "message": message,
         "locale": locale,
     }

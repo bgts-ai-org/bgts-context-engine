@@ -8,7 +8,9 @@ so the consumer can proceed / widen / ask a human.
 
 from __future__ import annotations
 
+import logging
 import re
+import time
 from typing import Any
 
 from cce.core.assembler import assemble
@@ -20,7 +22,13 @@ from cce.core.orchestrator.anchors import AnchorResult, find_anchors
 from cce.storage.graph.repository import GraphRepository
 from cce.storage.vector.store import VectorStore
 
+logger = logging.getLogger("cce.tools.layer3")
+
 _WORD_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _elapsed_ms(start: float) -> float:
+    return round((time.perf_counter() - start) * 1000, 2)
 
 #: How many nearest symbols the automatic semantic anchor pulls in (D1; opt-out via auto_semantic).
 _AUTO_SEMANTIC_LIMIT = 10
@@ -98,11 +106,18 @@ def get_context_for_task(
     """End-to-end: task -> anchors -> expand -> score -> filter -> assemble + coverage (section 6)."""
     tr = get_translator()
     loc = tr.resolve(locale)
+    t0 = time.perf_counter()
 
     # D1: automatic semantic anchor when the caller did not pre-compute one (opt-out: auto_semantic).
     if semantic_candidates is None and auto_semantic and store is not None:
+        stage = time.perf_counter()
         semantic_candidates = _auto_semantic_candidates(store, task_text, repo_ids)
+        logger.debug(
+            "get_context_for_task: auto semantic anchors",
+            extra={"count": len(semantic_candidates), "duration_ms": _elapsed_ms(stage)},
+        )
 
+    stage = time.perf_counter()
     anchors = _build_anchors(
         repository,
         task_text=task_text,
@@ -113,12 +128,26 @@ def get_context_for_task(
         repo_ids=repo_ids,
         semantic_candidates=semantic_candidates,
     )
+    logger.debug(
+        "get_context_for_task: anchors resolved",
+        extra={"anchor_count": len(anchors.anchor_ids), "duration_ms": _elapsed_ms(stage)},
+    )
 
     orchestrator = RetrievalOrchestrator(repository)
     # First pass to know which symbols exist, so task-signals can be computed on the expansion set.
+    stage = time.perf_counter()
     prelim = orchestrator.retrieve(anchors, commit=commit, max_candidates=max_candidates * 4)
     signals = _task_signals(task_text, [c.symbol_id for c in prelim.candidates], repository)
+    logger.debug(
+        "get_context_for_task: preliminary retrieval",
+        extra={
+            "prelim_candidates": len(prelim.candidates),
+            "task_signals": len(signals),
+            "duration_ms": _elapsed_ms(stage),
+        },
+    )
 
+    stage = time.perf_counter()
     result = orchestrator.retrieve(
         anchors,
         commit=commit,
@@ -126,10 +155,24 @@ def get_context_for_task(
         max_candidates=max_candidates,
         scope_filter=scope.allows if scope is not None else None,
     )
+    logger.debug(
+        "get_context_for_task: final retrieval",
+        extra={"candidates": len(result.candidates), "duration_ms": _elapsed_ms(stage)},
+    )
 
+    stage = time.perf_counter()
     items = _enrich_items(repository, result.candidates)
     package = assemble(items, max_tokens=max_tokens)
     coverage = compute_coverage(result, repository)
+    logger.debug(
+        "get_context_for_task: assembled",
+        extra={
+            "included": package.get("included"),
+            "confidence": (coverage or {}).get("confidence"),
+            "duration_ms": _elapsed_ms(stage),
+            "total_ms": _elapsed_ms(t0),
+        },
+    )
 
     message = coverage_message(coverage, loc)
     return {
@@ -291,11 +334,18 @@ def suggest_change_sites(
     """Scored change-site candidates for a task (does NOT decide; narrows the space, P3)."""
     tr = get_translator()
     loc = tr.resolve(locale)
+    t0 = time.perf_counter()
 
     # D1: automatic semantic anchor when the caller did not pre-compute one (opt-out: auto_semantic).
     if semantic_candidates is None and auto_semantic and store is not None:
+        stage = time.perf_counter()
         semantic_candidates = _auto_semantic_candidates(store, task_text, repo_ids)
+        logger.debug(
+            "suggest_change_sites: auto semantic anchors",
+            extra={"count": len(semantic_candidates), "duration_ms": _elapsed_ms(stage)},
+        )
 
+    stage = time.perf_counter()
     anchors = _build_anchors(
         repository,
         task_text=task_text,
@@ -306,7 +356,12 @@ def suggest_change_sites(
         repo_ids=repo_ids,
         semantic_candidates=semantic_candidates,
     )
+    logger.debug(
+        "suggest_change_sites: anchors resolved",
+        extra={"anchor_count": len(anchors.anchor_ids), "duration_ms": _elapsed_ms(stage)},
+    )
     orchestrator = RetrievalOrchestrator(repository)
+    stage = time.perf_counter()
     prelim = orchestrator.retrieve(anchors, commit=commit, max_candidates=max_candidates * 4)
     signals = _task_signals(task_text, [c.symbol_id for c in prelim.candidates], repository)
     result = orchestrator.retrieve(
@@ -315,6 +370,14 @@ def suggest_change_sites(
         task_signals=signals,
         max_candidates=max_candidates,
         scope_filter=scope.allows if scope is not None else None,
+    )
+    logger.debug(
+        "suggest_change_sites: retrieval done",
+        extra={
+            "candidates": len(result.candidates),
+            "duration_ms": _elapsed_ms(stage),
+            "total_ms": _elapsed_ms(t0),
+        },
     )
 
     sites = _enrich_items(repository, result.candidates)

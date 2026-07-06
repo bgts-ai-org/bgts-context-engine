@@ -146,7 +146,9 @@ def test_all_layers_are_registered() -> None:
         "/v1/semantic-search", "/v1/hybrid-search", "/v1/find-similar-code",
         "/v1/get-context-for-task", "/v1/suggest-change-sites", "/v1/expand-blast-radius",
         "/v1/select-repos", "/v1/assemble-context",
-        "/v1/index", "/v1/index-remote",
+        "/v1/index", "/v1/index-remote", "/v1/reindex",
+        "/v1/jobs/index", "/v1/jobs/index-remote", "/v1/jobs/reindex",
+        "/v1/jobs", "/v1/jobs/{job_id}", "/v1/jobs/{job_id}/cancel",
     ):
         assert path in paths, f"missing endpoint: {path}"
 

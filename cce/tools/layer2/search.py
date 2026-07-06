@@ -15,7 +15,9 @@ localized (P1 i18n boundary).
 
 from __future__ import annotations
 
+import logging
 import re
+import time
 from typing import Any
 
 from cce.core.i18n import get_translator
@@ -33,6 +35,8 @@ _EXACT_NAME_BOOST = 0.15
 _HYBRID_WEIGHTS_VERSION = "hybrid-v2"
 
 _TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+logger = logging.getLogger("cce.tools.layer2")
 
 
 def _query_tokens(query: str) -> list[str]:
@@ -63,8 +67,21 @@ def semantic_search(
     tr = get_translator()
     loc = tr.resolve(locale)
     enc = encoder or _default_encoder()
+    t0 = time.perf_counter()
     vector = enc.encode_query(query)
+    encode_ms = round((time.perf_counter() - t0) * 1000, 2)
+    t1 = time.perf_counter()
     hits = store.search(vector, limit=limit, repo_ids=repo_ids, kind="symbol")
+    logger.debug(
+        "semantic_search",
+        extra={
+            "query": query,
+            "model": enc.model_id,
+            "hits": len(hits),
+            "encode_ms": encode_ms,
+            "search_ms": round((time.perf_counter() - t1) * 1000, 2),
+        },
+    )
     candidates = [
         {
             "symbol_id": h["ref_id"],
@@ -97,6 +114,7 @@ def hybrid_search(
     tr = get_translator()
     loc = tr.resolve(locale)
     enc = encoder or _default_encoder()
+    t0 = time.perf_counter()
 
     pool = max(limit * 3, 30)
     tokens = _query_tokens(query)
@@ -111,8 +129,21 @@ def hybrid_search(
             sid = row["symbol_id"]
             lexical_rows.setdefault(sid, row)
             matched_tokens.setdefault(sid, set()).add(token)
+    lexical_ms = round((time.perf_counter() - t0) * 1000, 2)
 
+    t1 = time.perf_counter()
     semantic = store.search(enc.encode_query(query), limit=pool, repo_ids=repo_ids, kind="symbol")
+    logger.debug(
+        "hybrid_search: channels",
+        extra={
+            "query": query,
+            "tokens": tokens,
+            "lexical_rows": len(lexical_rows),
+            "semantic_hits": len(semantic),
+            "lexical_ms": lexical_ms,
+            "semantic_ms": round((time.perf_counter() - t1) * 1000, 2),
+        },
+    )
 
     scores: dict[str, dict[str, Any]] = {}
 
@@ -157,6 +188,15 @@ def hybrid_search(
         )
 
     ranked = sorted(scores.values(), key=lambda e: (-e["score"], e["symbol_id"]))[:limit]
+    logger.debug(
+        "hybrid_search: ranked",
+        extra={
+            "query": query,
+            "scored": len(scores),
+            "returned": len(ranked),
+            "total_ms": round((time.perf_counter() - t0) * 1000, 2),
+        },
+    )
     message = tr.translate("tool.hybrid_search.count", loc, count=len(ranked), query=query)
     return {
         "tool": "hybrid_search",
@@ -209,7 +249,16 @@ def find_similar_code(
     tr = get_translator()
     loc = tr.resolve(locale)
     enc = encoder or _default_encoder()
+    t0 = time.perf_counter()
     hits = store.search(enc.encode(code), limit=limit, repo_ids=repo_ids, kind="symbol")
+    logger.debug(
+        "find_similar_code",
+        extra={
+            "code_chars": len(code or ""),
+            "hits": len(hits),
+            "total_ms": round((time.perf_counter() - t0) * 1000, 2),
+        },
+    )
     candidates = [
         {
             "symbol_id": h["ref_id"],

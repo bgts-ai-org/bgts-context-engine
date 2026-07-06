@@ -61,6 +61,18 @@ class Settings(BaseSettings):
     # Voyage AI API key (used only when embedding_provider == 'voyage').
     voyage_api_key: str = ""
 
+    # --- Logging (JSON to stdout; optional rotating file sink) ---
+    log_level: str = "INFO"
+    log_file_enabled: bool = False
+    log_file_path: str = ".cce_data/logs/cce.log"
+    log_file_max_bytes: int = 10 * 1024 * 1024
+    log_file_backup_count: int = 5
+
+    # --- Background jobs (DB-backed queue; workers run inside the API process) ---
+    job_workers: int = 1
+    # Seconds a worker sleeps between polls when the queue is empty.
+    job_poll_interval: float = 2.0
+
     @property
     def dsn(self) -> str:
         return (

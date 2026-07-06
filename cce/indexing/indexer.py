@@ -10,6 +10,8 @@ the graph upserter together, and stamps every node with the commit the index was
 
 from __future__ import annotations
 
+import logging
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -32,6 +34,8 @@ from cce.storage.vector.store import VectorStore
 
 #: Extensions scanned for cross-language bridge detection (native mobile + JS sides).
 _BRIDGE_EXTS = (".m", ".mm", ".swift", ".kt", ".js", ".jsx", ".ts", ".tsx")
+
+logger = logging.getLogger("cce.indexing")
 
 
 @dataclass(slots=True)
@@ -141,6 +145,11 @@ class Indexer:
     ) -> IndexSummary:
         repo_id = make_repo_id(name)
         default_branch = branch or "main"
+        started = time.perf_counter()
+        logger.info(
+            "full index started",
+            extra={"repo_id": repo_id, "name": name, "commit": commit, "root": str(root)},
+        )
         nodes_before, edges_before = self.repository.counts()
 
         self.upserter.ensure_repo_node(repo_id, name, default_branch, commit, remote_url)
@@ -167,10 +176,28 @@ class Indexer:
                 )
             files += 1
 
+        logger.info(
+            "extraction pass finished",
+            extra={"repo_id": repo_id, "files": files, "commit": commit},
+        )
+
         # Pass 2: cross-file linking, optional SCIP edge synthesis, heuristic bridges.
         self._link_and_upsert(root, fragments)
 
         nodes, edges = self.repository.counts()
+        logger.info(
+            "full index finished",
+            extra={
+                "repo_id": repo_id,
+                "files": files,
+                "nodes": nodes,
+                "edges": edges,
+                "nodes_added": nodes - nodes_before,
+                "edges_added": edges - edges_before,
+                "commit": commit,
+                "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+            },
+        )
         return IndexSummary(
             repo_id=repo_id,
             files=files,
@@ -263,6 +290,11 @@ class Indexer:
                 f"No baseline commit for repo '{name}'; run a full index first or pass since_commit."
             )
         target = current_commit(root) if to_commit == "HEAD" else to_commit
+        started = time.perf_counter()
+        logger.info(
+            "incremental reindex started",
+            extra={"repo_id": repo_id, "name": name, "from_commit": base, "to_commit": target},
+        )
         nodes_before, edges_before = self.repository.counts()
 
         self._apply_scip_resolution(root)
@@ -311,6 +343,19 @@ class Indexer:
 
         self._update_indexed_commit(repo_id, target)
         nodes, edges = self.repository.counts()
+        logger.info(
+            "incremental reindex finished",
+            extra={
+                "repo_id": repo_id,
+                "added": added,
+                "modified": modified,
+                "deleted": deleted,
+                "nodes": nodes,
+                "edges": edges,
+                "to_commit": target,
+                "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+            },
+        )
         return IncrementalSummary(
             repo_id=repo_id,
             from_commit=base,
