@@ -154,6 +154,22 @@ def create_app() -> FastAPI:
         return response
 
     app.include_router(router)
+
+    # --- UI layer (optional, self-contained; see cce/api/rest/ui/__init__.py) ---
+    # To remove the UI layer: delete the cce/api/rest/ui package and this block.
+    from fastapi.middleware.cors import CORSMiddleware
+
+    from cce.api.rest.ui import ui_router
+
+    app.include_router(ui_router)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],  # Read-only visualisation endpoints; no credentials involved.
+        allow_methods=["GET"],
+        allow_headers=["*"],
+    )
+    # --- end UI layer ---
+
     return app
 
 
