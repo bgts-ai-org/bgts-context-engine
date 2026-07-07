@@ -60,12 +60,76 @@ export interface UINeighbors {
   edges: UIEdge[];
 }
 
+export interface TraceExpandNode {
+  symbol_id: string;
+  distance: number;
+  is_anchor: boolean;
+  ref_kind: string | null;
+  provenance: string | null;
+}
+
+export interface TraceRankedCandidate {
+  symbol_id: string;
+  repo_id: string | null;
+  score: number;
+  graph_distance: number;
+  is_anchor: boolean;
+  features: Record<string, number>;
+}
+
+export interface TraceSelected {
+  symbol_id: string;
+  score: number;
+  rank: number;
+}
+
+export interface TraceStage {
+  stage: "semantic" | "anchors" | "expand" | "score" | "narrow" | "assemble";
+  duration_ms: number;
+  candidates?: string[];
+  anchors?: Record<string, string[]>;
+  nodes?: TraceExpandNode[];
+  ranked?: TraceRankedCandidate[];
+  task_signals?: Record<string, number>;
+  selected?: TraceSelected[];
+  context?: { included: number; total: number };
+  coverage?: Record<string, unknown>;
+  error?: string;
+}
+
+export interface TraceSymbolMeta {
+  name: string | null;
+  kind: string | null;
+  file_id: string | null;
+  line: number | null;
+}
+
+export interface TraceResponse {
+  task_text: string;
+  repo_ids: string[] | null;
+  max_candidates: number;
+  stages: TraceStage[];
+  symbols: Record<string, TraceSymbolMeta>;
+}
+
 async function getJson<T>(path: string, params?: Record<string, string>): Promise<T> {
   const url = new URL(API_BASE + path);
   for (const [key, value] of Object.entries(params ?? {})) {
     url.searchParams.set(key, value);
   }
   const resp = await fetch(url);
+  if (!resp.ok) {
+    throw new Error(`${resp.status} ${resp.statusText}: ${await resp.text()}`);
+  }
+  return (await resp.json()) as T;
+}
+
+async function postJson<T>(path: string, body: unknown): Promise<T> {
+  const resp = await fetch(API_BASE + path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
   if (!resp.ok) {
     throw new Error(`${resp.status} ${resp.statusText}: ${await resp.text()}`);
   }
@@ -88,4 +152,10 @@ export const api = {
       "/v1/ui/search",
       repoId ? { q, repo_id: repoId } : { q },
     ).then((r) => r.results),
+  contextTrace: (taskText: string, repoId: string, maxCandidates: number) =>
+    postJson<TraceResponse>("/v1/ui/context-trace", {
+      task_text: taskText,
+      repo_ids: [repoId],
+      max_candidates: maxCandidates,
+    }),
 };

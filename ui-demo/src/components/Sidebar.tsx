@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { UIRepo, UISearchResult } from "../api";
 import { api } from "../api";
 import { EDGE_TYPES, NODE_LABELS, edgeColor, nodeColor } from "../theme";
@@ -12,6 +12,7 @@ interface Props {
   onToggleNodeType: (label: string) => void;
   onToggleEdgeType: (type: string) => void;
   onFocusNode: (gid: string) => void;
+  tracePanel?: ReactNode;
 }
 
 export default function Sidebar({
@@ -23,6 +24,7 @@ export default function Sidebar({
   onToggleNodeType,
   onToggleEdgeType,
   onFocusNode,
+  tracePanel,
 }: Props) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<UISearchResult[]>([]);
@@ -101,6 +103,8 @@ export default function Sidebar({
           </ul>
         )}
       </section>
+
+      {tracePanel}
 
       <section>
         <h2>Dugum tipleri</h2>

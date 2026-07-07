@@ -250,3 +250,149 @@ def test_ui_search_returns_symbols_and_files() -> None:
     labels = {r["label"] for r in results}
     assert labels == {"Symbol", "File"}
     assert all(r["id"] for r in results)
+
+
+# --- /v1/ui/context-trace (pipeline trace for the animated visualisation) ---
+
+_ANCHOR = "py::app::auth::login_handler#a1"
+_CALLER = "py::app::api::api_login#b2"
+_CALLEE = "py::app::auth::validate_token#c3"
+
+_TRACE_SYMBOLS: dict[str, dict[str, Any]] = {
+    _ANCHOR: {
+        "symbol_id": _ANCHOR, "name": "login_handler", "kind": "function",
+        "signature": "(req)", "file_id": "demo:app/auth.py", "line": 10,
+        "indexed_at_commit": "c0ffee",
+    },
+    _CALLER: {
+        "symbol_id": _CALLER, "name": "api_login", "kind": "function",
+        "signature": "()", "file_id": "demo:app/api.py", "line": 5,
+        "indexed_at_commit": "c0ffee",
+    },
+    _CALLEE: {
+        "symbol_id": _CALLEE, "name": "validate_token", "kind": "function",
+        "signature": "(tok)", "file_id": "demo:app/auth.py", "line": 30,
+        "indexed_at_commit": "c0ffee",
+    },
+}
+
+
+class _TraceFakeRepository:
+    """Tiny call graph: api_login -CALLS-> login_handler -CALLS-> validate_token."""
+
+    def resolve_symbol(self, name: str, repo_id: Any = None) -> list[dict[str, Any]]:
+        if name == "login_handler":
+            return [_TRACE_SYMBOLS[_ANCHOR]]
+        return []
+
+    def lexical_search(self, term: str, *, repo_ids: Any = None, limit: int = 20) -> list[dict[str, Any]]:
+        if term == "login_handler":
+            return [_TRACE_SYMBOLS[_ANCHOR]]
+        return []
+
+    def get_callers(self, symbol_id: str) -> list[dict[str, Any]]:
+        if symbol_id == _ANCHOR:
+            return [{"symbol_id": _CALLER, "provenance": "treesitter"}]
+        return []
+
+    def get_callees(self, symbol_id: str) -> list[dict[str, Any]]:
+        if symbol_id == _ANCHOR:
+            return [{"symbol_id": _CALLEE, "provenance": "treesitter"}]
+        return []
+
+    def get_symbol(self, symbol_id: str) -> dict[str, Any] | None:
+        return _TRACE_SYMBOLS.get(symbol_id)
+
+    def symbols_in_file(self, file_id: str) -> list[dict[str, Any]]:
+        return [s for s in _TRACE_SYMBOLS.values() if s["file_id"] == file_id]
+
+    def repo_of_symbol(self, symbol_id: str) -> str | None:
+        return "demo"
+
+    def symbol_degree(self, symbol_id: str) -> int:
+        return 2 if symbol_id == _ANCHOR else 1
+
+    # Empty surfaces the pipeline touches but this scenario does not exercise.
+    def find_routes(self, path: Any) -> list[dict[str, Any]]: return []
+    def get_referrers(self, symbol_id: str) -> list[dict[str, Any]]: return []
+    def get_supertypes(self, symbol_id: str) -> list[dict[str, Any]]: return []
+    def get_subtypes(self, symbol_id: str) -> list[dict[str, Any]]: return []
+    def find_implementers(self, symbol_id: str) -> list[dict[str, Any]]: return []
+    def get_design_notes(self, symbol_id: str) -> list[dict[str, Any]]: return []
+
+
+class _TraceFakeVectorStore:
+    def search(self, vector: Any, *, limit: int = 20, repo_ids: Any = None, kind: Any = None):
+        return [{"ref_id": _CALLEE}]
+
+
+def _trace_client() -> TestClient:
+    from cce.api.rest.deps import get_vector_store
+
+    app = create_app()
+    app.dependency_overrides[get_repository] = lambda: _TraceFakeRepository()
+    app.dependency_overrides[get_vector_store] = lambda: _TraceFakeVectorStore()
+    return TestClient(app)
+
+
+def test_ui_context_trace_stage_order_and_contents() -> None:
+    resp = _trace_client().post(
+        "/v1/ui/context-trace",
+        json={"task_text": "fix login_handler timeout", "max_candidates": 2},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert [s["stage"] for s in body["stages"]] == [
+        "semantic", "anchors", "expand", "score", "narrow", "assemble",
+    ]
+    by_name = {s["stage"]: s for s in body["stages"]}
+
+    # Semantic candidates come from the (fake) vector store and land as anchors.
+    assert by_name["semantic"]["candidates"] == [_CALLEE]
+    anchors = by_name["anchors"]["anchors"]
+    assert set(anchors[_ANCHOR]) == {"explicit", "lexical"}
+    assert anchors[_CALLEE] == ["semantic"]
+
+    # Expansion reaches the caller at distance 1 and keeps anchors at distance 0.
+    expand_nodes = {n["symbol_id"]: n for n in by_name["expand"]["nodes"]}
+    assert expand_nodes[_ANCHOR]["distance"] == 0 and expand_nodes[_ANCHOR]["is_anchor"]
+    assert expand_nodes[_CALLER]["distance"] == 1 and not expand_nodes[_CALLER]["is_anchor"]
+
+    # login_handler appears in the task text -> task signal 1.0; ranked list carries scores.
+    score_stage = by_name["score"]
+    assert score_stage["task_signals"].get(_ANCHOR) == 1.0
+    assert all("score" in c and "features" in c for c in score_stage["ranked"])
+
+    # Narrowing keeps max_candidates entries with 1-based ranks; anchors float to the top.
+    selected = by_name["narrow"]["selected"]
+    assert len(selected) == 2
+    assert [c["rank"] for c in selected] == [1, 2]
+    assert selected[0]["symbol_id"] in (_ANCHOR, _CALLEE)
+
+    # Assembly + coverage summary present.
+    assert by_name["assemble"]["context"]["included"] == 2
+    assert by_name["assemble"]["coverage"]["confidence"] in ("high", "medium", "low")
+
+    # Symbol metadata covers every expansion node (for frontend labels/ghost nodes).
+    assert set(body["symbols"]) == {_ANCHOR, _CALLER, _CALLEE}
+    assert body["symbols"][_ANCHOR]["name"] == "login_handler"
+
+
+def test_ui_context_trace_without_semantic_stage() -> None:
+    resp = _trace_client().post(
+        "/v1/ui/context-trace",
+        json={"task_text": "fix login_handler timeout", "auto_semantic": False},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    by_name = {s["stage"]: s for s in body["stages"]}
+    assert by_name["semantic"]["candidates"] == []
+    assert _CALLEE not in by_name["anchors"]["anchors"] or (
+        "semantic" not in by_name["anchors"]["anchors"].get(_CALLEE, [])
+    )
+
+
+def test_ui_context_trace_registered_in_openapi() -> None:
+    paths = set(create_app().openapi()["paths"])
+    assert "/v1/ui/context-trace" in paths

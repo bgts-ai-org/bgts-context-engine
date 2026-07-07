@@ -86,3 +86,41 @@ class UISearchResult(BaseModel):
 class UISearchResponse(BaseModel):
     query: str
     results: list[UISearchResult]
+
+
+class UITraceRequest(BaseModel):
+    """Request for the pipeline trace (mirrors get_context_for_task's core inputs)."""
+
+    task_text: str = Field(..., min_length=1, description="Task title + description text.")
+    max_candidates: int = Field(default=8, ge=1, le=100, description="Top-N narrowing size.")
+    max_tokens: int = Field(default=4000, ge=1, le=200000, description="Assembly token budget.")
+    repo_ids: list[str] | None = Field(default=None, description="Restrict retrieval to these repos.")
+    auto_semantic: bool = Field(
+        default=True, description="Run the automatic semantic anchor stage (D1)."
+    )
+
+
+class UITraceStage(BaseModel):
+    """One pipeline stage snapshot; the payload key depends on the stage name."""
+
+    model_config = {"extra": "allow"}
+
+    stage: str = Field(description="semantic | anchors | expand | score | narrow | assemble.")
+    duration_ms: float
+
+
+class UITraceSymbol(BaseModel):
+    name: str | None = None
+    kind: str | None = None
+    file_id: str | None = None
+    line: int | None = None
+
+
+class UITraceResponse(BaseModel):
+    task_text: str
+    repo_ids: list[str] | None = None
+    max_candidates: int
+    stages: list[UITraceStage]
+    symbols: dict[str, UITraceSymbol] = Field(
+        description="Metadata for every symbol appearing in the trace (for labels/ghost nodes)."
+    )

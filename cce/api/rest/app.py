@@ -165,7 +165,7 @@ def create_app() -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],  # Read-only visualisation endpoints; no credentials involved.
-        allow_methods=["GET"],
+        allow_methods=["GET", "POST"],  # POST: /v1/ui/context-trace (read-only pipeline trace).
         allow_headers=["*"],
     )
     # --- end UI layer ---

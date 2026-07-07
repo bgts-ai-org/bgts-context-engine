@@ -15,7 +15,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from cce.api.rest.deps import get_repository
+from cce.api.rest.deps import get_repository, get_vector_store
 from cce.api.rest.ui import queries
 from cce.api.rest.ui.schemas import (
     UIGraphResponse,
@@ -24,8 +24,11 @@ from cce.api.rest.ui.schemas import (
     UIRepoListResponse,
     UISearchResponse,
     UIStatsResponse,
+    UITraceRequest,
+    UITraceResponse,
 )
 from cce.storage.graph.repository import GraphRepository
+from cce.storage.vector.store import VectorStore
 
 router = APIRouter(prefix="/v1/ui", tags=["ui"])
 
@@ -104,6 +107,26 @@ def ui_node_neighbors(
     """Direct neighbors + connecting edges of a node (click-to-expand in the graph view)."""
     return queries.node_neighbors(
         repository.client, gid, edge_types=_csv(edge_types), limit=limit
+    )
+
+
+@router.post("/context-trace", response_model=UITraceResponse)
+def ui_context_trace(
+    body: UITraceRequest,
+    repository: GraphRepository = Depends(get_repository),
+    store: VectorStore = Depends(get_vector_store),
+) -> dict[str, Any]:
+    """Stage-by-stage trace of the get_context_for_task pipeline (for animated visualisation)."""
+    from cce.api.rest.ui.trace import trace_context_for_task
+
+    return trace_context_for_task(
+        repository,
+        task_text=body.task_text,
+        max_candidates=body.max_candidates,
+        max_tokens=body.max_tokens,
+        repo_ids=body.repo_ids,
+        store=store,
+        auto_semantic=body.auto_semantic,
     )
 
 
