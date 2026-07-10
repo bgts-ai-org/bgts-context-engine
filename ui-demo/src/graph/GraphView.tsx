@@ -10,6 +10,8 @@ interface Props {
   selectedId: string | null;
   focusId: string | null;
   traceStep: PlaybackStep | null;
+  /** While true, walk random edges as a "searching" animation. */
+  searching?: boolean;
   onSelect: (id: string | null) => void;
   onExpand: (id: string) => void;
 }
@@ -19,6 +21,86 @@ const DIMMED_EDGE = "#1a1f29";
 const TRACE_DIMMED_NODE = "#1c212c";
 const TRACE_EDGE = "#3d4658";
 
+const SEARCH_DIMMED_NODE = "#1a1f2a";
+const SEARCH_HEAD = "#67e8f9";
+const SEARCH_TRAIL = ["#22d3ee", "#0ea5e9", "#2563eb", "#1e3a5f"];
+const SEARCH_EDGE = "#38bdf8";
+const SEARCH_STEP_MS = 220;
+const SEARCH_TRAIL_LEN = 10;
+
+interface SearchFrame {
+  current: string;
+  trail: string[];
+  edgeKeys: Set<string>;
+}
+
+function isVisibleNode(
+  graph: Graph,
+  node: string,
+  hiddenNodeTypes: Set<string>,
+): boolean {
+  if (!graph.hasNode(node)) return false;
+  if (graph.getNodeAttribute(node, "ghost")) return false;
+  const nodeType = graph.getNodeAttribute(node, "nodeType") as string;
+  return !hiddenNodeTypes.has(nodeType);
+}
+
+function visibleNeighbors(
+  graph: Graph,
+  node: string,
+  hiddenNodeTypes: Set<string>,
+  hiddenEdgeTypes: Set<string>,
+): string[] {
+  const out: string[] = [];
+  graph.forEachEdge(node, (_edge, attrs, src, dst) => {
+    if (hiddenEdgeTypes.has(attrs.edgeType as string)) return;
+    const other = src === node ? dst : src;
+    if (isVisibleNode(graph, other, hiddenNodeTypes)) out.push(other);
+  });
+  return out;
+}
+
+function pickRandomStart(
+  graph: Graph,
+  hiddenNodeTypes: Set<string>,
+): string | null {
+  const candidates: string[] = [];
+  const preferred: string[] = [];
+  graph.forEachNode((node, attrs) => {
+    if (!isVisibleNode(graph, node, hiddenNodeTypes)) return;
+    candidates.push(node);
+    if (attrs.nodeType === "Symbol" || attrs.nodeType === "File") {
+      preferred.push(node);
+    }
+  });
+  const pool = preferred.length > 0 ? preferred : candidates;
+  if (pool.length === 0) return null;
+  return pool[Math.floor(Math.random() * pool.length)] ?? null;
+}
+
+function nextHop(
+  graph: Graph,
+  current: string,
+  recent: Set<string>,
+  hiddenNodeTypes: Set<string>,
+  hiddenEdgeTypes: Set<string>,
+): string {
+  const neighbors = visibleNeighbors(graph, current, hiddenNodeTypes, hiddenEdgeTypes);
+  if (neighbors.length === 0) {
+    return pickRandomStart(graph, hiddenNodeTypes) ?? current;
+  }
+  const fresh = neighbors.filter((n) => !recent.has(n));
+  const pool = fresh.length > 0 ? fresh : neighbors;
+  return pool[Math.floor(Math.random() * pool.length)] ?? current;
+}
+
+function edgeBetween(graph: Graph, a: string, b: string): string | null {
+  const forward = graph.edges(a, b);
+  if (forward[0]) return forward[0]!;
+  const backward = graph.edges(b, a);
+  return backward[0] ?? null;
+}
+
 /** Sigma.js canvas: renders the graphology graph and wires hover/click/double-click. */
 export default function GraphView({
   graph,
@@ -27,14 +109,22 @@ export default function GraphView({
   selectedId,
   focusId,
   traceStep,
+  searching = false,
   onSelect,
   onExpand,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const sigmaRef = useRef<Sigma | null>(null);
   const hoveredRef = useRef<string | null>(null);
-  const stateRef = useRef({ hiddenNodeTypes, hiddenEdgeTypes, selectedId, traceStep });
-  stateRef.current = { hiddenNodeTypes, hiddenEdgeTypes, selectedId, traceStep };
+  const searchRef = useRef<SearchFrame | null>(null);
+  const stateRef = useRef({
+    hiddenNodeTypes,
+    hiddenEdgeTypes,
+    selectedId,
+    traceStep,
+    searching,
+  });
+  stateRef.current = { hiddenNodeTypes, hiddenEdgeTypes, selectedId, traceStep, searching };
 
   useEffect(() => {
     if (!containerRef.current || !graph) return;
@@ -50,7 +140,8 @@ export default function GraphView({
       minCameraRatio: 0.02,
       maxCameraRatio: 20,
       nodeReducer: (node, data) => {
-        const { hiddenNodeTypes, hiddenEdgeTypes, selectedId, traceStep } = stateRef.current;
+        const { hiddenNodeTypes, hiddenEdgeTypes, selectedId, traceStep, searching } =
+          stateRef.current;
         const res = { ...data };
 
         // Trace playback mode overrides normal filtering/hover behaviour entirely.
@@ -71,6 +162,39 @@ export default function GraphView({
             res.color = TRACE_DIMMED_NODE;
             res.label = "";
             res.size = Math.min((data.size as number) ?? 3, 4);
+            res.zIndex = 0;
+          }
+          return res;
+        }
+
+        // Searching walk: highlight the active path, dim everything else.
+        if (searching && searchRef.current) {
+          const { current, trail } = searchRef.current;
+          if (data.ghost) {
+            res.hidden = true;
+            return res;
+          }
+          if (hiddenNodeTypes.has(data.nodeType as string)) {
+            res.hidden = true;
+            return res;
+          }
+          const trailIdx = trail.indexOf(node);
+          if (node === current) {
+            res.color = SEARCH_HEAD;
+            res.size = Math.max((data.size as number) ?? 5, 14);
+            res.zIndex = 4;
+            res.forceLabel = true;
+            res.highlighted = true;
+          } else if (trailIdx >= 0) {
+            const age = trail.length - 1 - trailIdx;
+            res.color = SEARCH_TRAIL[Math.min(age, SEARCH_TRAIL.length - 1)] ?? SEARCH_TRAIL[0];
+            res.size = Math.max(((data.size as number) ?? 4) * (1 - age * 0.08), 5);
+            res.zIndex = 2;
+            res.label = age < 3 ? (data.label as string) : "";
+          } else {
+            res.color = SEARCH_DIMMED_NODE;
+            res.label = "";
+            res.size = Math.min((data.size as number) ?? 3, 3.5);
             res.zIndex = 0;
           }
           return res;
@@ -104,7 +228,8 @@ export default function GraphView({
         return res;
       },
       edgeReducer: (edge, data) => {
-        const { hiddenNodeTypes, hiddenEdgeTypes, selectedId, traceStep } = stateRef.current;
+        const { hiddenNodeTypes, hiddenEdgeTypes, selectedId, traceStep, searching } =
+          stateRef.current;
         const res = { ...data };
         const [src, dst] = graph.extremities(edge);
 
@@ -113,6 +238,27 @@ export default function GraphView({
           if (bothLit) {
             res.color = TRACE_EDGE;
             res.zIndex = 1;
+          } else {
+            res.hidden = true;
+          }
+          return res;
+        }
+
+        if (searching && searchRef.current) {
+          if (
+            hiddenEdgeTypes.has(data.edgeType as string) ||
+            hiddenNodeTypes.has(graph.getNodeAttribute(src, "nodeType") as string) ||
+            hiddenNodeTypes.has(graph.getNodeAttribute(dst, "nodeType") as string) ||
+            graph.getNodeAttribute(src, "ghost") ||
+            graph.getNodeAttribute(dst, "ghost")
+          ) {
+            res.hidden = true;
+            return res;
+          }
+          if (searchRef.current.edgeKeys.has(edge)) {
+            res.color = SEARCH_EDGE;
+            res.size = Math.max((data.size as number) ?? 1, 2.2);
+            res.zIndex = 2;
           } else {
             res.hidden = true;
           }
@@ -163,6 +309,54 @@ export default function GraphView({
   useEffect(() => {
     sigmaRef.current?.refresh({ skipIndexation: true });
   }, [hiddenNodeTypes, hiddenEdgeTypes, selectedId]);
+
+  // Random edge-walk while the pipeline is running.
+  useEffect(() => {
+    const sigma = sigmaRef.current;
+    if (!sigma || !graph || !searching || traceStep) {
+      searchRef.current = null;
+      if (sigma && !traceStep) sigma.refresh({ skipIndexation: true });
+      return;
+    }
+
+    const start = pickRandomStart(graph, hiddenNodeTypes);
+    if (!start) return;
+
+    searchRef.current = { current: start, trail: [start], edgeKeys: new Set() };
+    sigma.refresh({ skipIndexation: true });
+
+    // Keep a wide overview so the walk is visible across the whole graph.
+    sigma.getCamera().animate({ x: 0.5, y: 0.5, ratio: 1 }, { duration: 350 });
+
+    const timer = window.setInterval(() => {
+      const frame = searchRef.current;
+      if (!frame) return;
+
+      const recent = new Set(frame.trail.slice(-6));
+      const next = nextHop(
+        graph,
+        frame.current,
+        recent,
+        hiddenNodeTypes,
+        hiddenEdgeTypes,
+      );
+
+      const trail = [...frame.trail, next].slice(-SEARCH_TRAIL_LEN);
+      const edgeKeys = new Set<string>();
+      for (let i = 1; i < trail.length; i++) {
+        const key = edgeBetween(graph, trail[i - 1]!, trail[i]!);
+        if (key) edgeKeys.add(key);
+      }
+
+      searchRef.current = { current: next, trail, edgeKeys };
+      sigma.refresh({ skipIndexation: true });
+    }, SEARCH_STEP_MS);
+
+    return () => {
+      window.clearInterval(timer);
+      searchRef.current = null;
+    };
+  }, [searching, traceStep, graph, hiddenNodeTypes, hiddenEdgeTypes]);
 
   // Trace step changes: re-render highlights and fly the camera to fit the step's focus nodes.
   useEffect(() => {

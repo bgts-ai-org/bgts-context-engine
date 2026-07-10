@@ -83,14 +83,19 @@ export default function App() {
   );
 
   const runTrace = useCallback(
-    async (taskText: string, maxCandidates: number) => {
+    async (taskText: string, maxCandidates: number, maxTokens: number) => {
       if (!selectedRepo || !graph) return;
       closeTrace();
       setSelectedId(null);
       setTraceRunning(true);
       setError(null);
       try {
-        const result = await api.contextTrace(taskText, selectedRepo, maxCandidates);
+        const result = await api.contextTrace(
+          taskText,
+          selectedRepo,
+          maxCandidates,
+          maxTokens,
+        );
         const steps = buildSteps(result);
         if (steps.length === 0) {
           setError("Pipeline hicbir aday uretmedi; farkli bir gorev metni deneyin.");
@@ -200,6 +205,9 @@ export default function App() {
         onFocusNode={focusAndSelect}
         tracePanel={
           <TracePanel
+            repoName={
+              repos.find((r) => r.repo_id === selectedRepo)?.name ?? selectedRepo
+            }
             disabled={!selectedRepo || !graph}
             running={traceRunning}
             onRun={runTrace}
@@ -220,10 +228,16 @@ export default function App() {
               </p>
             </div>
           )}
-          {(loading || traceRunning) && (
+          {loading && (
             <div className="empty-state">
               <div className="spinner" />
-              <p>{traceRunning ? "Pipeline calisiyor..." : "Graph yukleniyor ve yerlesim hesaplaniyor..."}</p>
+              <p>Graph yukleniyor ve yerlesim hesaplaniyor...</p>
+            </div>
+          )}
+          {traceRunning && !loading && (
+            <div className="search-status" aria-live="polite">
+              <span className="search-status-dot" />
+              Bağlam aranıyor...
             </div>
           )}
           <GraphView
@@ -233,6 +247,7 @@ export default function App() {
             selectedId={selectedId}
             focusId={focusId}
             traceStep={currentStep}
+            searching={traceRunning}
             onSelect={setSelectedId}
             onExpand={expandNode}
           />

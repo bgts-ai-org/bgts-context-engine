@@ -152,10 +152,16 @@ export const api = {
       "/v1/ui/search",
       repoId ? { q, repo_id: repoId } : { q },
     ).then((r) => r.results),
-  contextTrace: (taskText: string, repoId: string, maxCandidates: number) =>
+  contextTrace: (
+    taskText: string,
+    repoId: string,
+    maxCandidates: number,
+    maxTokens: number,
+  ) =>
     postJson<TraceResponse>("/v1/ui/context-trace", {
       task_text: taskText,
       repo_ids: [repoId],
       max_candidates: maxCandidates,
+      max_tokens: maxTokens,
     }),
 };
