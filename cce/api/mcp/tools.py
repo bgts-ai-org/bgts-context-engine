@@ -39,6 +39,7 @@ from cce.tools.layer3 import (
 _STR = {"type": "string"}
 _STR_LIST = {"type": "array", "items": {"type": "string"}}
 _INT = {"type": "integer"}
+_BOOL = {"type": "boolean"}
 
 
 def _schema(props: dict[str, Any], required: list[str]) -> dict[str, Any]:
@@ -108,6 +109,7 @@ TOOL_SPECS: dict[str, dict[str, Any]] = {
                 "history_file_ids": _STR_LIST,
                 "component_repo_ids": _STR_LIST,
                 "semantic_candidates": _STR_LIST,
+                "auto_semantic": _BOOL,
                 "locale": _STR,
             },
             ["task_text"],
@@ -116,7 +118,13 @@ TOOL_SPECS: dict[str, dict[str, Any]] = {
     "suggest_change_sites": {
         "description": "Layer 3: scored change-site candidates for a task.",
         "schema": _schema(
-            {"task_text": _STR, "max_candidates": _INT, "commit": _STR, "locale": _STR},
+            {
+                "task_text": _STR,
+                "max_candidates": _INT,
+                "commit": _STR,
+                "auto_semantic": _BOOL,
+                "locale": _STR,
+            },
             ["task_text"],
         ),
     },
@@ -192,9 +200,13 @@ def dispatch_tool(
             limit=args.get("limit", 10), locale=locale,
         )
     if name == "get_context_for_task":
-        return get_context_for_task(repository, scope=scope, locale=locale, **_l3_kwargs(args))
+        return get_context_for_task(
+            repository, store=store, scope=scope, locale=locale, **_l3_kwargs(args)
+        )
     if name == "suggest_change_sites":
-        return suggest_change_sites(repository, scope=scope, locale=locale, **_l3_kwargs(args))
+        return suggest_change_sites(
+            repository, store=store, scope=scope, locale=locale, **_l3_kwargs(args)
+        )
     if name == "expand_blast_radius":
         return expand_blast_radius(
             repository, target_symbols=args["target_symbols"], scope=scope, locale=locale
@@ -221,6 +233,6 @@ def _l3_kwargs(args: dict[str, Any]) -> dict[str, Any]:
     allowed = {
         "task_text", "task_id", "max_tokens", "max_candidates", "commit", "repo_ids",
         "explicit_symbols", "route_paths", "history_file_ids", "component_repo_ids",
-        "semantic_candidates",
+        "semantic_candidates", "auto_semantic",
     }
     return {k: v for k, v in args.items() if k in allowed}

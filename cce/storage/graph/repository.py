@@ -7,12 +7,16 @@ parameters.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
+from cce.domain.enums import NodeLabel
 from cce.domain.models import GraphEdge, GraphFragment, GraphNode
 from cce.storage.graph.client import GraphClient
 
-_REFERENCE_EDGE_TYPES = "['CALLS', 'REFERENCES', 'ROUTES_TO']"
+_REFERENCE_EDGE_TYPES = "['CALLS', 'REFERENCES']"
+
+_FTS_TOKEN_RE = re.compile(r"\w+", re.UNICODE)
 
 
 def _set_clause(alias: str, props: dict[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -33,6 +37,8 @@ def _set_clause(alias: str, props: dict[str, Any]) -> tuple[str, dict[str, Any]]
 class GraphRepository:
     def __init__(self, client: GraphClient) -> None:
         self.client = client
+        # Lazily probed: whether the symbol_fts table exists (migration 0006 applied).
+        self._fts_ready: bool | None = None
 
     # --- write path (incremental upsert) ---
 
@@ -43,6 +49,50 @@ class GraphRepository:
         if set_sql:
             query += f" SET {set_sql}"
         self.client.execute(query, params)
+        if node.label is NodeLabel.SYMBOL:
+            self._upsert_symbol_fts(node)
+
+    def _fts_available(self) -> bool:
+        if self._fts_ready is None:
+            conn = getattr(self.client, "conn", None)
+            if conn is None:
+                self._fts_ready = False
+            else:
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute("SELECT to_regclass('symbol_fts')")
+                        row = cur.fetchone()
+                    self._fts_ready = bool(row and row[0] is not None)
+                except Exception:
+                    self._fts_ready = False
+        return self._fts_ready
+
+    def _upsert_symbol_fts(self, node: GraphNode) -> None:
+        """Mirror a Symbol node into the FTS side table (same transaction, P5)."""
+        if not self._fts_available():
+            return
+        props = node.properties
+        file_id = str(props.get("file_id") or "")
+        repo_id = file_id.split(":", 1)[0] if ":" in file_id else ""
+        self.client.conn.execute(
+            "INSERT INTO symbol_fts (symbol_id, repo_id, name, kind, signature, docstring, "
+            "file_id, line, indexed_at_commit) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) "
+            "ON CONFLICT (symbol_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, "
+            "name = EXCLUDED.name, kind = EXCLUDED.kind, signature = EXCLUDED.signature, "
+            "docstring = EXCLUDED.docstring, file_id = EXCLUDED.file_id, line = EXCLUDED.line, "
+            "indexed_at_commit = EXCLUDED.indexed_at_commit",
+            (
+                node.node_id,
+                repo_id,
+                str(props.get("name") or ""),
+                props.get("kind"),
+                props.get("signature"),
+                props.get("docstring"),
+                file_id or None,
+                props.get("line"),
+                props.get("indexed_at_commit"),
+            ),
+        )
 
     def upsert_edge(self, edge: GraphEdge) -> None:
         set_sql, params = _set_clause("r", edge.merged_properties())
@@ -70,14 +120,17 @@ class GraphRepository:
             {"fid": file_id},
         )
         self.client.execute("MATCH (f:File {file_id: $fid}) DETACH DELETE f", {"fid": file_id})
+        if self._fts_available():
+            self.client.conn.execute("DELETE FROM symbol_fts WHERE file_id = %s", (file_id,))
 
     # --- read path (Layer-1 primitives) ---
 
     def resolve_symbol(self, name: str, repo_id: str | None = None) -> list[dict[str, Any]]:
         columns = ["symbol_id", "kind", "signature", "docstring", "file_id", "line", "indexed_at_commit"]
+        # ORDER BY symbol_id: multi-match order must not depend on storage order (determinism, P1).
         ret = (
             "RETURN s.symbol_id, s.kind, s.signature, s.docstring, s.file_id, s.line, "
-            "s.indexed_at_commit"
+            "s.indexed_at_commit ORDER BY s.symbol_id"
         )
         if repo_id:
             query = (
@@ -92,15 +145,34 @@ class GraphRepository:
         return [dict(zip(columns, row, strict=False)) for row in rows]
 
     def find_references(self, symbol_id: str) -> list[dict[str, Any]]:
-        columns = ["caller_id", "file_id", "line", "edge_type", "ref_kind", "provenance"]
+        """Incoming CALLS/REFERENCES from symbols plus ROUTES_TO from routes, merged deterministically.
+
+        ``line`` is the caller's definition line; ``call_line`` is the call/reference site line
+        (an edge property written by the linker/extractor) when known.
+        """
+        columns = ["caller_id", "file_id", "line", "call_line", "edge_type", "ref_kind", "provenance"]
         query = (
             "MATCH (caller:Symbol)-[r]->(t:Symbol {symbol_id: $sym}) "
             f"WHERE type(r) IN {_REFERENCE_EDGE_TYPES} "
-            "RETURN caller.symbol_id, caller.file_id, caller.line, type(r), r.ref_kind, r.provenance "
-            "ORDER BY caller.symbol_id, caller.line"
+            "RETURN caller.symbol_id, caller.file_id, caller.line, r.line, type(r), r.ref_kind, "
+            "r.provenance ORDER BY caller.symbol_id, caller.line"
         )
         rows = self.client.cypher(query, {"sym": symbol_id}, columns)
-        return [dict(zip(columns, row, strict=False)) for row in rows]
+        references = [dict(zip(columns, row, strict=False)) for row in rows]
+
+        # Route -> Symbol handlers are references too, but Route is not a Symbol: separate MATCH.
+        route_query = (
+            "MATCH (rt:Route)-[r:ROUTES_TO]->(t:Symbol {symbol_id: $sym}) "
+            "RETURN rt.route_id, rt.file_id, rt.line, rt.line, type(r), r.ref_kind, r.provenance "
+            "ORDER BY rt.route_id"
+        )
+        route_rows = self.client.cypher(route_query, {"sym": symbol_id}, columns)
+        references.extend(dict(zip(columns, row, strict=False)) for row in route_rows)
+
+        references.sort(
+            key=lambda ref: (ref.get("caller_id") or "", ref.get("line") or 0, ref.get("edge_type") or "")
+        )
+        return references
 
     def get_symbol(self, symbol_id: str) -> dict[str, Any] | None:
         """Return a single symbol's core properties (or None if it does not exist)."""
@@ -188,15 +260,43 @@ class GraphRepository:
         return [dict(zip(columns, row, strict=False)) for row in rows]
 
     def get_file_imports(self, file_id: str) -> list[dict[str, Any]]:
-        """Direct IMPORTS edges out of a file (to modules/files)."""
+        """Direct IMPORTS edges out of a file *or* module (matched by gid).
+
+        Matching by ``gid`` lets a transitive dependency walk follow the
+        ``File -> Module -> File`` chain: the linker adds a ``Module -[IMPORTS]-> File`` edge
+        when a module namespace maps onto a repo file (A5).
+        """
         columns = ["target_id", "namespace", "provenance"]
         query = (
-            "MATCH (f:File {file_id: $fid})-[r:IMPORTS]->(m) "
+            "MATCH (f {gid: $fid})-[r:IMPORTS]->(m) "
             "RETURN m.gid, m.namespace, r.provenance "
             "ORDER BY m.gid"
         )
         rows = self.client.cypher(query, {"fid": file_id}, columns)
         return [dict(zip(columns, row, strict=False)) for row in rows]
+
+    def file_importers(self, file_id: str) -> list[dict[str, Any]]:
+        """Files that import the given file, via the ``File -> Module -> File`` chain (A5).
+
+        Used by blast-radius (D2): a change to a file potentially impacts every file that imports
+        its module. Deterministic order by importer file_id; de-duplicated (a file may reach the
+        module through several bindings).
+        """
+        columns = ["file_id", "repo_id"]
+        query = (
+            "MATCH (src:File)-[:IMPORTS]->(m:Module)-[:IMPORTS]->(f:File {file_id: $fid}) "
+            "RETURN src.file_id, src.repo_id ORDER BY src.file_id"
+        )
+        rows = self.client.cypher(query, {"fid": file_id}, columns)
+        importers: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for row in rows:
+            fid = row[0]
+            if not fid or fid in seen:
+                continue
+            seen.add(fid)
+            importers.append(dict(zip(columns, row, strict=False)))
+        return importers
 
     def find_routes(self, path_substring: str | None = None) -> list[dict[str, Any]]:
         """Route nodes and their handler symbol (anchor source #1: explicit route reference)."""
@@ -269,11 +369,60 @@ class GraphRepository:
     def lexical_search(
         self, term: str, *, repo_ids: list[str] | None = None, limit: int = 20
     ) -> list[dict[str, Any]]:
-        """Deterministic keyword match on symbol name (case-insensitive CONTAINS).
+        """Deterministic keyword match on symbol name/signature/docstring.
 
-        Ordered by name then symbol_id for reproducibility. Feeds hybrid search + anchor source #4
-        (the lexical half) without any model.
+        Prefers the Postgres FTS side table (``ts_rank`` DESC, then symbol_id - reproducible) when
+        migration 0006 is applied; otherwise falls back to the AGE Cypher CONTAINS path (name only,
+        ordered by name then symbol_id). Feeds hybrid search + anchor source #4 without any model.
         """
+        if self._fts_available():
+            rows = self._lexical_search_fts(term, repo_ids, limit)
+            if rows is not None:
+                return rows
+        return self._lexical_search_contains(term, repo_ids, limit)
+
+    def _lexical_search_fts(
+        self, term: str, repo_ids: list[str] | None, limit: int
+    ) -> list[dict[str, Any]] | None:
+        """FTS path: per-token prefix matching (``tok:*``) so 'calc' still finds 'calculate_cost'.
+
+        Returns ``None`` when the term has no indexable tokens (caller falls back to CONTAINS).
+        """
+        tokens = [t.lower() for t in _FTS_TOKEN_RE.findall(term or "") if t]
+        if not tokens:
+            return None
+        tsquery = " & ".join(f"{t}:*" for t in tokens)
+
+        params: list[Any] = [tsquery, tsquery]
+        where = "document @@ to_tsquery('simple', %s)"
+        if repo_ids:
+            where += " AND repo_id = ANY(%s)"
+            params.append(repo_ids)
+        params.append(limit)
+        sql = (
+            "SELECT symbol_id, name, kind, file_id, line, indexed_at_commit, "
+            "ts_rank(document, to_tsquery('simple', %s)) AS rank "
+            f"FROM symbol_fts WHERE {where} "
+            "ORDER BY rank DESC, symbol_id ASC LIMIT %s"
+        )
+        with self.client.conn.cursor() as cur:
+            cur.execute(sql, params)
+            rows = cur.fetchall()
+        return [
+            {
+                "symbol_id": r[0],
+                "name": r[1],
+                "kind": r[2],
+                "file_id": r[3],
+                "line": r[4],
+                "indexed_at_commit": r[5],
+            }
+            for r in rows
+        ]
+
+    def _lexical_search_contains(
+        self, term: str, repo_ids: list[str] | None, limit: int
+    ) -> list[dict[str, Any]]:
         columns = ["symbol_id", "name", "kind", "file_id", "line", "indexed_at_commit"]
         term_l = (term or "").lower()
         ret = (

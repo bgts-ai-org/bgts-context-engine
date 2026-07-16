@@ -9,6 +9,8 @@ Deterministic metrics over a retrieval result:
 - orphan_ratio                     - candidates not attached to any anchor (weak retrieval)
 - provenance_distribution          - {scip, treesitter, heuristic} share of candidate edges (F3)
 - touches_god_node / max_centrality_in_context - hub-symbol warning (F4)
+- commit_mismatch / commit_mismatch_count - result symbols indexed at a different commit than the
+  pinned one (minimal commit-consistency signal; full pinning enforcement is out of scope)
 
 The confidence *level* (high/medium/low) maps to the consumer behaviour in the spec table.
 """
@@ -30,7 +32,7 @@ class ConfidenceLevel(StrEnum):
     LOW = "low"
 
 
-def compute_coverage(result: RetrievalResult) -> dict[str, Any]:
+def compute_coverage(result: RetrievalResult, repository: Any | None = None) -> dict[str, Any]:
     candidates = result.candidates
     n = len(candidates)
 
@@ -59,6 +61,15 @@ def compute_coverage(result: RetrievalResult) -> dict[str, Any]:
     max_centrality = max((c.degree for c in candidates), default=0)
     touches_god_node = max_centrality >= GOD_NODE_DEGREE
 
+    # Commit consistency (D4): warn when result symbols were indexed at a different commit than
+    # the requested pin. Needs the repository to look up indexed_at_commit per symbol.
+    commit_mismatch_count = 0
+    if result.commit and repository is not None:
+        for cand in candidates:
+            indexed_at = (repository.get_symbol(cand.symbol_id) or {}).get("indexed_at_commit")
+            if indexed_at and indexed_at != result.commit:
+                commit_mismatch_count += 1
+
     level = _confidence_level(
         source_count=source_count,
         connected_component_ratio=connected_component_ratio,
@@ -79,6 +90,8 @@ def compute_coverage(result: RetrievalResult) -> dict[str, Any]:
         "provenance_distribution": provenance_distribution,
         "touches_god_node": touches_god_node,
         "max_centrality_in_context": max_centrality,
+        "commit_mismatch": commit_mismatch_count > 0,
+        "commit_mismatch_count": commit_mismatch_count,
     }
 
 

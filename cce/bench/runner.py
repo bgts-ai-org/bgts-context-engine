@@ -46,6 +46,8 @@ class CaseResult:
     latency_ms: float
     recall: float
     precision: float
+    precision_at_1: float
+    mrr: float
     deterministic: bool
     rls_ok: bool
     returned_symbol_ids: list[str]
@@ -58,6 +60,8 @@ class BenchReport:
     latency_p95_ms: float
     recall_mean: float
     precision_mean: float
+    precision_at_1_mean: float
+    mrr_mean: float
     determinism_ok: bool
     rls_ok: bool
 
@@ -69,6 +73,8 @@ class BenchReport:
                 "latency_p95_ms": round(self.latency_p95_ms, 3),
                 "recall_mean": round(self.recall_mean, 4),
                 "precision_mean": round(self.precision_mean, 4),
+                "precision_at_1_mean": round(self.precision_at_1_mean, 4),
+                "mrr_mean": round(self.mrr_mean, 4),
                 "determinism_ok": self.determinism_ok,
                 "rls_ok": self.rls_ok,
             },
@@ -78,6 +84,8 @@ class BenchReport:
                     "latency_ms": round(c.latency_ms, 3),
                     "recall": round(c.recall, 4),
                     "precision": round(c.precision, 4),
+                    "precision_at_1": round(c.precision_at_1, 4),
+                    "mrr": round(c.mrr, 4),
                     "deterministic": c.deterministic,
                     "rls_ok": c.rls_ok,
                     "returned_symbol_ids": c.returned_symbol_ids,
@@ -130,6 +138,18 @@ def _run_case(
     recall = len(hit) / len(relevant) if relevant else 1.0
     precision = len(hit) / len(returned_set) if returned_set else (1.0 if not relevant else 0.0)
 
+    # Rank-sensitive metrics (order of `returned` matters).
+    if not relevant:
+        precision_at_1 = 1.0
+        mrr = 1.0
+    else:
+        precision_at_1 = 1.0 if returned and returned[0] in relevant else 0.0
+        mrr = 0.0
+        for rank, sid in enumerate(returned, start=1):
+            if sid in relevant:
+                mrr = 1.0 / rank
+                break
+
     # Determinism: repeat and require identical ordered output.
     deterministic = True
     for _ in range(max(0, determinism_runs - 1)):
@@ -156,6 +176,8 @@ def _run_case(
         latency_ms=latency_ms,
         recall=recall,
         precision=precision,
+        precision_at_1=precision_at_1,
+        mrr=mrr,
         deterministic=deterministic,
         rls_ok=rls_ok,
         returned_symbol_ids=returned,
@@ -179,6 +201,8 @@ def run_benchmark(
         latency_p95_ms=_percentile(latencies, 95),
         recall_mean=statistics.mean([r.recall for r in results]) if results else 0.0,
         precision_mean=statistics.mean([r.precision for r in results]) if results else 0.0,
+        precision_at_1_mean=statistics.mean([r.precision_at_1 for r in results]) if results else 0.0,
+        mrr_mean=statistics.mean([r.mrr for r in results]) if results else 0.0,
         determinism_ok=all(r.deterministic for r in results),
         rls_ok=all(r.rls_ok for r in results),
     )

@@ -15,6 +15,7 @@ from cce.indexing.parser.scip.resolver import (
     ScipResolution,
     ScipResolver,
     build_scip_resolver,
+    moniker_display_name,
 )
 
 __all__ = [
@@ -22,4 +23,5 @@ __all__ = [
     "ScipResolution",
     "NullScipResolver",
     "build_scip_resolver",
+    "moniker_display_name",
 ]

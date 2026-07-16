@@ -181,6 +181,11 @@ Migrasyonlar `cce/storage/relational/migrations/` altındaki SQL dosyalarını s
 | `0003_vector.sql` | `embeddings` tablosu (768 boyut, HNSW indeks) |
 | `0004_rls.sql` | Row-Level Security politikaları (`repos`, `embeddings`); `cce.user_id` session değişkeni ile scope |
 | `0005_embeddings_dim.sql` | `embeddings.embedding` → `vector(1024)` (Voyage `voyage-code-3`); HNSW indeks yeniden kurulur (reindex sınırı) |
+| `0006_fts.sql` | `symbol_fts` tablosu (tsvector + GIN): Layer-2 lexical kanalın FTS yolu |
+
+> **Not:** Embedding içeriğine sembol gövdesi (kırpılmış) eklendi ve lexical arama FTS tablosunu
+> kullanıyor; daha önce indekslenmiş repolar için tam re-index (`cce index`) gerekir — embedding'ler
+> Voyage API ile yeniden üretilir.
 
 ---
 
@@ -334,8 +339,15 @@ Sunucu başlatıldığında OpenAPI dokümantasyonu şu adreste:
 |--------|------|--------|----------|
 | `GET` | `/healthz` | meta | Canlılık + DB erişilebilirliği |
 | `GET` | `/v1/languages` | meta | Desteklenen diller/uzantılar |
-| `POST` | `/v1/index` | indeksleme | Yerel repo indeksle |
-| `POST` | `/v1/index-remote` | indeksleme | Bitbucket repo indeksle |
+| `POST` | `/v1/index` | indeksleme | Yerel repo indeksle (senkron) |
+| `POST` | `/v1/index-remote` | indeksleme | Bitbucket repo indeksle (senkron) |
+| `POST` | `/v1/reindex` | indeksleme | Artımlı re-index (git-diff, senkron) |
+| `POST` | `/v1/jobs/index` | jobs | Yerel indeksi kuyruğa al (202 + job_id) |
+| `POST` | `/v1/jobs/index-remote` | jobs | Uzak indeksi kuyruğa al (202 + job_id) |
+| `POST` | `/v1/jobs/reindex` | jobs | Artımlı re-index'i kuyruğa al (202 + job_id) |
+| `GET` | `/v1/jobs/{job_id}` | jobs | Job durumu + sonuç/hata |
+| `GET` | `/v1/jobs?status=&repo=&limit=` | jobs | Job listesi (en yeni önce) |
+| `POST` | `/v1/jobs/{job_id}/cancel` | jobs | Bekleyen job'ı iptal et (running kesilemez) |
 | `GET` | `/v1/resolve-symbol?name=...&repo=...` | 1 | Sembol çözümle |
 | `GET` | `/v1/find-references?symbol_id=...` | 1 | Referans bul |
 | `GET` | `/v1/find-implementers?symbol_id=...` | 1 | Implement eden tipler |
@@ -376,6 +388,41 @@ curl -X POST http://127.0.0.1:8000/v1/index-remote \
 ```bash
 curl "http://127.0.0.1:8000/v1/resolve-symbol?name=MyClass&locale=tr"
 ```
+
+### Asenkron indeksleme (jobs)
+
+Senkron `/v1/index*` uçları iş bitene kadar bloklar. Uzun süren indekslemeler için `POST /v1/jobs/*`
+uçları isteği DB tabanlı kuyruğa (`jobs` tablosu) yazar ve hemen `202 Accepted` + `job_id` döner;
+API süreci içindeki worker thread'leri (`CCE_JOB_WORKERS`, varsayılan 1) kuyruğu sırayla işler.
+
+```bash
+# 1. Kuyruğa al
+curl -X POST http://127.0.0.1:8000/v1/jobs/index \
+  -H "Content-Type: application/json" \
+  -d '{"repo_path": "/path/to/repo", "name": "my-org/my-repo"}'
+# -> {"tool": "job_index", "payload": {"job": {"job_id": "...", "status": "pending", ...}}, ...}
+
+# 2. Durumu sorgula (pending -> running -> succeeded | failed)
+curl http://127.0.0.1:8000/v1/jobs/<job_id>
+
+# 3. Gerekirse bekleyen job'ı iptal et
+curl -X POST http://127.0.0.1:8000/v1/jobs/<job_id>/cancel
+```
+
+Notlar:
+
+- `jobs` tablosu `0007_jobs.sql` migration'ı ile gelir (`cce migrate`). Worker'lar job'ları
+  `FOR UPDATE SKIP LOCKED` ile sahiplenir; birden çok worker aynı job'ı alamaz.
+- `POST /v1/jobs/index-remote` gövdesindeki `token`/`username` alanları **saklanmaz**; worker
+  kimlik bilgilerini her zaman `CCE_BITBUCKET_USERNAME` / `CCE_BITBUCKET_TOKEN` ortam
+  değişkenlerinden okur. İstek başına kimlik bilgisi gerekiyorsa senkron `/v1/index-remote` kullanın.
+- Yalnızca `pending` durumdaki job iptal edilebilir; `running` bir job kesilmez (409 döner).
+
+### Loglama
+
+Sunucu JSON satırları halinde stdout'a loglar (istek metod/path/durum/süre, indeksleme aşamaları,
+job yaşam döngüsü). `CCE_LOG_LEVEL` ile seviye, `CCE_LOG_FILE_ENABLED=true` ile ek olarak dönen
+(rotating) dosya çıktısı (`CCE_LOG_FILE_PATH`) açılır. Ayrıntılar için `.env.example`'a bakın.
 
 ### Yanıt zarfı
 

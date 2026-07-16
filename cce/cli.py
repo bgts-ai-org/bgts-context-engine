@@ -78,6 +78,8 @@ def index(
             "files": summary.files,
             "nodes": summary.nodes,
             "edges": summary.edges,
+            "nodes_added": summary.nodes_added,
+            "edges_added": summary.edges_added,
             "commit": summary.commit,
         }
     )
@@ -146,6 +148,8 @@ def index_remote_cmd(
             "files": summary.files,
             "nodes": summary.nodes,
             "edges": summary.edges,
+            "nodes_added": summary.nodes_added,
+            "edges_added": summary.edges_added,
             "commit": summary.commit,
         }
     )
@@ -201,6 +205,8 @@ def reindex(
             "deleted": summary.deleted,
             "nodes": summary.nodes,
             "edges": summary.edges,
+            "nodes_added": summary.nodes_added,
+            "edges_added": summary.edges_added,
         }
     )
 
@@ -255,6 +261,7 @@ def context(
     from cce.storage.graph.client import GraphClient
     from cce.storage.graph.repository import GraphRepository
     from cce.storage.relational.db import connection
+    from cce.storage.vector.store import VectorStore
     from cce.tools.layer3 import get_context_for_task
 
     with connection() as conn:
@@ -265,6 +272,7 @@ def context(
             max_tokens=max_tokens,
             max_candidates=max_candidates,
             commit=commit,
+            store=VectorStore(conn),
             locale=locale,
         )
     if result["message"]:
@@ -319,6 +327,9 @@ def serve(
     """Run the REST API server (Layer 1-2-3 endpoints) via uvicorn."""
     import uvicorn
 
+    from cce.core.logging import setup_logging
+
+    setup_logging()
     uvicorn.run("cce.api.rest.app:app", host=host, port=port, reload=reload)
 
 

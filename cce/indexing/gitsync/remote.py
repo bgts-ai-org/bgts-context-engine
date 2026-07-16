@@ -7,10 +7,13 @@ stored ``origin`` is always reset to the clean URL afterwards, so a token is nev
 
 from __future__ import annotations
 
+import logging
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote
+
+logger = logging.getLogger("cce.indexing.gitsync")
 
 
 class GitError(RuntimeError):
@@ -105,6 +108,7 @@ def sync_repo(
     base = ["-c", f"http.sslVerify={'true' if ssl_verify else 'false'}"]
 
     if (dest / ".git").exists():
+        logger.info("git fetch", extra={"url": https_url, "dest": str(dest), "branch": branch})
         try:
             _run_git([*base, "-C", str(dest), "remote", "set-url", "origin", auth_url], secrets=secrets)
             _run_git([*base, "-C", str(dest), "fetch", "--prune", "--tags", "origin"], secrets=secrets)
@@ -114,6 +118,7 @@ def sync_repo(
         finally:
             _restore_origin(dest, https_url, base=base, secrets=secrets)
     else:
+        logger.info("git clone", extra={"url": https_url, "dest": str(dest), "branch": branch})
         clone_args = [*base, "clone"]
         if branch:
             clone_args += ["--branch", branch]
