@@ -148,7 +148,7 @@ class Indexer:
         started = time.perf_counter()
         logger.info(
             "full index started",
-            extra={"repo_id": repo_id, "name": name, "commit": commit, "root": str(root)},
+            extra={"repo_id": repo_id, "repo_name": name, "commit": commit, "root": str(root)},
         )
         nodes_before, edges_before = self.repository.counts()
 
@@ -293,7 +293,7 @@ class Indexer:
         started = time.perf_counter()
         logger.info(
             "incremental reindex started",
-            extra={"repo_id": repo_id, "name": name, "from_commit": base, "to_commit": target},
+            extra={"repo_id": repo_id, "repo_name": name, "from_commit": base, "to_commit": target},
         )
         nodes_before, edges_before = self.repository.counts()
 
