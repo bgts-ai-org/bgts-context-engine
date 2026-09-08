@@ -1,6 +1,6 @@
 """i18n tests: locale resolution + translation, and the determinism boundary (payload neutral)."""
 
-from cce.core.i18n import Translator, normalize_locale, resolve_locale
+from bce.core.i18n import Translator, normalize_locale, resolve_locale
 
 
 def test_normalize_drops_region():

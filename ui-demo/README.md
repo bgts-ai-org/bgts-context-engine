@@ -1,6 +1,6 @@
-# CCE Graph Explorer (demo UI)
+# BCE Graph Explorer (demo UI)
 
-Cortex Context Engine'in indexlediği kod graph'ını (düğümler + kenarlar) görselleştiren
+BGTS Context Engine'in indexlediği kod graph'ını (düğümler + kenarlar) görselleştiren
 bağımsız demo arayüz. Ana projeyle hiçbir kod bağı yoktur; yalnızca `/v1/ui/*` REST
 uçlarını tüketir. Bu klasör `.gitignore`'dadır.
 
@@ -9,7 +9,7 @@ uçlarını tüketir. Bu klasör `.gitignore`'dadır.
 1. Ana projede API'yi başlat (varsayılan `http://127.0.0.1:8000`):
 
 ```bash
-cce serve
+bce serve
 ```
 
 2. Bu klasörde:
@@ -21,8 +21,8 @@ npm run dev
 
 Tarayıcıda `http://localhost:5173` açılır.
 
-API farklı bir adresteyse `VITE_CCE_API` ortam değişkeniyle belirtin
-(ör. `.env.local` içine `VITE_CCE_API=http://localhost:9000`).
+API farklı bir adresteyse `VITE_BCE_API` ortam değişkeniyle belirtin
+(ör. `.env.local` içine `VITE_BCE_API=http://localhost:9000`).
 
 ## Özellikler
 

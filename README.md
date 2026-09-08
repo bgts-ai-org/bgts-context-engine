@@ -1,6 +1,6 @@
-# Cortex Context Engine (CCE)
+# BGTS Context Engine (BCE)
 
-**Cortex Context Engine**, çok dilli kod depolarını deterministik bir **kod grafiğine** dönüştüren ve bu grafik üzerinden bağlam (context) sorguları sunan bir motorudur. LLM içermez; aynı kaynak kodu her zaman aynı düğüm/kenar yapısını üretir.
+**BGTS Context Engine**, çok dilli kod depolarını deterministik bir **kod grafiğine** dönüştüren ve bu grafik üzerinden bağlam (context) sorguları sunan bir motorudur. LLM içermez; aynı kaynak kodu her zaman aynı düğüm/kenar yapısını üretir.
 
 | Özellik | Açıklama |
 |---------|----------|
@@ -17,7 +17,7 @@
 | **Uzak indeksleme** | Bitbucket Cloud URL'den clone/fetch + indeks |
 | **i18n** | Mesajlar `en` / `tr`; payload locale'den etkilenmez |
 
-> **Sürüm:** 0.0.1 — Faz 0-5 mimarisi (Katman 1-2-3, indeksleme, skorlama, coverage, auth/RLS, REST+MCP) implemente edildi. Embedding **Voyage AI** (`voyage-code-3`, 1024 boyut) ile çalışır (`CCE_EMBEDDING_PROVIDER=voyage`); ağ/anahtar yoksa deterministik hash tabanlı encoder'a düşer (P2 fallback). Embedding yalnızca çapa bulmada; genişletme/skorlama/montaj %100 deterministik.
+> **Sürüm:** 0.0.1 — Faz 0-5 mimarisi (Katman 1-2-3, indeksleme, skorlama, coverage, auth/RLS, REST+MCP) implemente edildi. Embedding **Voyage AI** (`voyage-code-3`, 1024 boyut) ile çalışır (`BCE_EMBEDDING_PROVIDER=voyage`); ağ/anahtar yoksa deterministik hash tabanlı encoder'a düşer (P2 fallback). Embedding yalnızca çapa bulmada; genişletme/skorlama/montaj %100 deterministik.
 
 ---
 
@@ -40,7 +40,7 @@
 
 ## Mimari
 
-CCE üç ana hattadan oluşur: **indeksleme**, **depolama** ve **sorgulama**.
+BCE üç ana hattadan oluşur: **indeksleme**, **depolama** ve **sorgulama**.
 
 ```mermaid
 flowchart LR
@@ -63,7 +63,7 @@ flowchart LR
     end
 
     subgraph Query
-        CLI[cce CLI]
+        CLI[bce CLI]
         API[FastAPI REST]
         MCP[MCP Server]
         L3[Layer-3\nget_context_for_task ...]
@@ -85,7 +85,7 @@ flowchart LR
 
 ### İndeksleme hattı
 
-1. **Git sync** — Yerel dizin veya Bitbucket Cloud URL'si; uzak repolar `.cce_data/repos` altında önbelleğe alınır (re-index'te `git fetch` yeterli).
+1. **Git sync** — Yerel dizin veya Bitbucket Cloud URL'si; uzak repolar `.bce_data/repos` altında önbelleğe alınır (re-index'te `git fetch` yeterli).
 2. **Extractor** — Dosya uzantısına göre dil sağlayıcısı seçilir, AST ayrıştırılır, `GraphFragment` üretilir.
 3. **Upserter** — Düğüm/kenarlar Apache AGE grafiğine `MERGE` ile yazılır; repo meta verisi SQL tablolarına kaydedilir.
 
@@ -130,17 +130,17 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
-Kurulum sonrası `cce` komutu kullanılabilir olur:
+Kurulum sonrası `bce` komutu kullanılabilir olur:
 
 ```bash
-cce --help
+bce --help
 ```
 
 ---
 
 ## Veritabanı
 
-CCE tek bir PostgreSQL sunucusunda üç katmanı birleştirir:
+BCE tek bir PostgreSQL sunucusunda üç katmanı birleştirir:
 
 - **Apache AGE** — Kod grafiği (`code_graph`)
 - **pgvector** — Sembol/dosya embedding'leri (Phase 2)
@@ -152,7 +152,7 @@ CCE tek bir PostgreSQL sunucusunda üç katmanı birleştirir:
 docker compose -f deploy/docker-compose.yml up -d
 ```
 
-Bu komut PostgreSQL 16 + pgvector + Apache AGE içeren `cce-postgres-age-pgvector:pg16` imajını derler ve `localhost:5432` üzerinde ayağa kaldırır.
+Bu komut PostgreSQL 16 + pgvector + Apache AGE içeren `bce-postgres-age-pgvector:pg16` imajını derler ve `localhost:5432` üzerinde ayağa kaldırır.
 
 Varsayılan kimlik bilgileri:
 
@@ -160,31 +160,31 @@ Varsayılan kimlik bilgileri:
 |----------|-------|
 | Host | `localhost` |
 | Port | `5432` |
-| Database | `cce` |
-| User | `cce` |
-| Password | `cce` |
+| Database | `bce` |
+| User | `bce` |
+| Password | `bce` |
 
 ### Migrasyon
 
 Veritabanı hazır olduktan sonra şemayı uygulayın:
 
 ```bash
-cce migrate
+bce migrate
 ```
 
-Migrasyonlar `cce/storage/relational/migrations/` altındaki SQL dosyalarını sırayla çalıştırır:
+Migrasyonlar `bce/storage/relational/migrations/` altındaki SQL dosyalarını sırayla çalıştırır:
 
 | Dosya | İçerik |
 |-------|--------|
 | `0001_extensions_graph.sql` | AGE + pgvector extension, `code_graph` oluşturma |
 | `0002_relational.sql` | `repos`, `tasks`, `users`, `scopes`, `audit_log` |
 | `0003_vector.sql` | `embeddings` tablosu (768 boyut, HNSW indeks) |
-| `0004_rls.sql` | Row-Level Security politikaları (`repos`, `embeddings`); `cce.user_id` session değişkeni ile scope |
+| `0004_rls.sql` | Row-Level Security politikaları (`repos`, `embeddings`); `bce.user_id` session değişkeni ile scope |
 | `0005_embeddings_dim.sql` | `embeddings.embedding` → `vector(1024)` (Voyage `voyage-code-3`); HNSW indeks yeniden kurulur (reindex sınırı) |
 | `0006_fts.sql` | `symbol_fts` tablosu (tsvector + GIN): Layer-2 lexical kanalın FTS yolu |
 
 > **Not:** Embedding içeriğine sembol gövdesi (kırpılmış) eklendi ve lexical arama FTS tablosunu
-> kullanıyor; daha önce indekslenmiş repolar için tam re-index (`cce index`) gerekir — embedding'ler
+> kullanıyor; daha önce indekslenmiş repolar için tam re-index (`bce index`) gerekir — embedding'ler
 > Voyage API ile yeniden üretilir.
 
 ---
@@ -197,30 +197,30 @@ Migrasyonlar `cce/storage/relational/migrations/` altındaki SQL dosyalarını s
 cp .env.example .env
 ```
 
-Tüm ayarlar `CCE_` öneki ile ortam değişkenlerinden okunur:
+Tüm ayarlar `BCE_` öneki ile ortam değişkenlerinden okunur:
 
 ```env
 # PostgreSQL
-CCE_DB_HOST=localhost
-CCE_DB_PORT=5432
-CCE_DB_NAME=cce
-CCE_DB_USER=cce
-CCE_DB_PASSWORD=cce
+BCE_DB_HOST=localhost
+BCE_DB_PORT=5432
+BCE_DB_NAME=bce
+BCE_DB_USER=bce
+BCE_DB_PASSWORD=bce
 
 # i18n (yalnızca mesajlar; payload etkilenmez)
-CCE_DEFAULT_LOCALE=en
+BCE_DEFAULT_LOCALE=en
 
 # Embedding (Faz 2; yalnızca çapa bulma, P2)
-CCE_EMBEDDING_PROVIDER=voyage        # "voyage" veya "hashing" (fallback)
-CCE_EMBEDDING_MODEL=voyage-code-3
-CCE_EMBEDDING_DIM=1024
-CCE_VOYAGE_API_KEY=                   # provider=voyage için gerekli
+BCE_EMBEDDING_PROVIDER=voyage        # "voyage" veya "hashing" (fallback)
+BCE_EMBEDDING_MODEL=voyage-code-3
+BCE_EMBEDDING_DIM=1024
+BCE_VOYAGE_API_KEY=                   # provider=voyage için gerekli
 
 # Bitbucket Cloud uzak indeksleme
-CCE_BITBUCKET_USERNAME=
-CCE_BITBUCKET_TOKEN=
-CCE_REPO_CACHE_DIR=.cce_data/repos
-CCE_GIT_SSL_VERIFY=true
+BCE_BITBUCKET_USERNAME=
+BCE_BITBUCKET_TOKEN=
+BCE_REPO_CACHE_DIR=.bce_data/repos
+BCE_GIT_SSL_VERIFY=true
 ```
 
 Voyage embedding'i için: `pip install -e ".[embed]"`. Ek dil grameri için: `pip install -e ".[langs]"` (Java/C#/Go).
@@ -241,13 +241,13 @@ Token'lar `.git/config` dosyasına **asla yazılmaz**; yalnızca tek seferlik gi
 ### Desteklenen dilleri listele (DB gerekmez)
 
 ```bash
-cce languages
+bce languages
 ```
 
 ### Yerel repo indeksle
 
 ```bash
-cce index --repo /path/to/my-repo --name my-org/my-repo
+bce index --repo /path/to/my-repo --name my-org/my-repo
 ```
 
 Opsiyonel parametreler:
@@ -258,7 +258,7 @@ Opsiyonel parametreler:
 ### Bitbucket'dan uzak indeksle
 
 ```bash
-cce index-remote \
+bce index-remote \
   --url https://bitbucket.org/workspace/repo-slug \
   --name workspace/repo-slug \
   --branch main
@@ -276,9 +276,9 @@ Desteklenen URL biçimleri:
 Sadece son indekslemeden bu yana değişen dosyaları yeniden işler:
 
 ```bash
-cce reindex --repo ./my-repo --name my-org/my-repo
+bce reindex --repo ./my-repo --name my-org/my-repo
 # Belirli commit aralığı:
-cce reindex --repo ./my-repo --name my-org/my-repo --since <sha> --to HEAD
+bce reindex --repo ./my-repo --name my-org/my-repo --since <sha> --to HEAD
 ```
 
 REST karşılığı: `POST /v1/reindex` (`{repo_path, name, since_commit?, to_commit?}`).
@@ -288,40 +288,40 @@ REST karşılığı: `POST /v1/reindex` (`{repo_path, name, since_commit?, to_co
 Bir task seti üzerinde latency/recall/precision/determinizm/RLS ölçer ve JSON rapor yazar:
 
 ```bash
-cce bench --cases cases.json --out report.json
+bce bench --cases cases.json --out report.json
 ```
 
 ### Sembol çözümle
 
 ```bash
-cce resolve-symbol --name MyClass --repo my-org/my-repo
+bce resolve-symbol --name MyClass --repo my-org/my-repo
 ```
 
 ### Referans bul
 
 ```bash
-cce find-references --symbol-id "python::pkg::ns::MyClass#abc123..."
+bce find-references --symbol-id "python::pkg::ns::MyClass#abc123..."
 ```
 
 ### Task için context derle (Katman 3)
 
 ```bash
-cce context --task "login endpoint 500 hatası veriyor" --max-tokens 4000 --locale tr
+bce context --task "login endpoint 500 hatası veriyor" --max-tokens 4000 --locale tr
 ```
 
 ### REST API sunucusu
 
 ```bash
-cce serve --host 0.0.0.0 --port 8000
+bce serve --host 0.0.0.0 --port 8000
 # Geliştirme modu (auto-reload)
-cce serve --reload
+bce serve --reload
 ```
 
 ### MCP sunucusu (agent-native, opsiyonel)
 
 ```bash
 pip install -e ".[mcp]"
-cce serve-mcp   # stdio üzerinden MCP server
+bce serve-mcp   # stdio üzerinden MCP server
 ```
 
 ---
@@ -363,7 +363,7 @@ Sunucu başlatıldığında OpenAPI dokümantasyonu şu adreste:
 | `POST` | `/v1/select-repos` | 3 | Task için aday repo kümesi |
 | `POST` | `/v1/assemble-context` | 3 | Sembol listesini budget'a montaj |
 
-> Katman-3 uçları isteğe bağlı `X-CCE-User` başlığı ile scope filtresi uygular (RLS, §9). Başlık yoksa sistem principal'ı (allow-all) kullanılır.
+> Katman-3 uçları isteğe bağlı `X-BCE-User` başlığı ile scope filtresi uygular (RLS, §9). Başlık yoksa sistem principal'ı (allow-all) kullanılır.
 
 ### Örnek istekler
 
@@ -393,7 +393,7 @@ curl "http://127.0.0.1:8000/v1/resolve-symbol?name=MyClass&locale=tr"
 
 Senkron `/v1/index*` uçları iş bitene kadar bloklar. Uzun süren indekslemeler için `POST /v1/jobs/*`
 uçları isteği DB tabanlı kuyruğa (`jobs` tablosu) yazar ve hemen `202 Accepted` + `job_id` döner;
-API süreci içindeki worker thread'leri (`CCE_JOB_WORKERS`, varsayılan 1) kuyruğu sırayla işler.
+API süreci içindeki worker thread'leri (`BCE_JOB_WORKERS`, varsayılan 1) kuyruğu sırayla işler.
 
 ```bash
 # 1. Kuyruğa al
@@ -411,18 +411,18 @@ curl -X POST http://127.0.0.1:8000/v1/jobs/<job_id>/cancel
 
 Notlar:
 
-- `jobs` tablosu `0007_jobs.sql` migration'ı ile gelir (`cce migrate`). Worker'lar job'ları
+- `jobs` tablosu `0007_jobs.sql` migration'ı ile gelir (`bce migrate`). Worker'lar job'ları
   `FOR UPDATE SKIP LOCKED` ile sahiplenir; birden çok worker aynı job'ı alamaz.
 - `POST /v1/jobs/index-remote` gövdesindeki `token`/`username` alanları **saklanmaz**; worker
-  kimlik bilgilerini her zaman `CCE_BITBUCKET_USERNAME` / `CCE_BITBUCKET_TOKEN` ortam
+  kimlik bilgilerini her zaman `BCE_BITBUCKET_USERNAME` / `BCE_BITBUCKET_TOKEN` ortam
   değişkenlerinden okur. İstek başına kimlik bilgisi gerekiyorsa senkron `/v1/index-remote` kullanın.
 - Yalnızca `pending` durumdaki job iptal edilebilir; `running` bir job kesilmez (409 döner).
 
 ### Loglama
 
 Sunucu JSON satırları halinde stdout'a loglar (istek metod/path/durum/süre, indeksleme aşamaları,
-job yaşam döngüsü). `CCE_LOG_LEVEL` ile seviye, `CCE_LOG_FILE_ENABLED=true` ile ek olarak dönen
-(rotating) dosya çıktısı (`CCE_LOG_FILE_PATH`) açılır. Ayrıntılar için `.env.example`'a bakın.
+job yaşam döngüsü). `BCE_LOG_LEVEL` ile seviye, `BCE_LOG_FILE_ENABLED=true` ile ek olarak dönen
+(rotating) dosya çıktısı (`BCE_LOG_FILE_PATH`) açılır. Ayrıntılar için `.env.example`'a bakın.
 
 ### Yanıt zarfı
 
@@ -531,9 +531,9 @@ Her kenar kaynağını taşır:
 
 ```
 context-engine/
-├── cce/                          # Ana Python paketi
+├── bce/                          # Ana Python paketi
 │   ├── cli.py                    # Typer CLI giriş noktası
-│   ├── config.py                 # Pydantic Settings (CCE_* env)
+│   ├── config.py                 # Pydantic Settings (BCE_* env)
 │   ├── api/
 │   │   ├── rest/                 # FastAPI REST katmanı (Katman 1-2-3)
 │   │   └── mcp/                  # MCP tool kataloğu + server adaptörü
@@ -579,7 +579,7 @@ context-engine/
 ```bash
 pytest
 # Coverage ile
-pytest --cov=cce
+pytest --cov=bce
 ```
 
 Test kapsamı: API, git sync, Bitbucket URL parsing, Python/JS-TS extractor, symbol_id, i18n.
@@ -587,8 +587,8 @@ Test kapsamı: API, git sync, Bitbucket URL parsing, Python/JS-TS extractor, sym
 ### Lint
 
 ```bash
-ruff check cce tests
-ruff format cce tests
+ruff check bce tests
+ruff format bce tests
 ```
 
 ### Yerel geliştirme akışı
@@ -598,16 +598,16 @@ ruff format cce tests
 docker compose -f deploy/docker-compose.yml up -d
 
 # 2. Migrasyon
-cce migrate
+bce migrate
 
 # 3. Örnek repo indeksle
-cce index --repo . --name context-engine
+bce index --repo . --name context-engine
 
 # 4. Sorgula
-cce resolve-symbol --name Indexer --repo context-engine
+bce resolve-symbol --name Indexer --repo context-engine
 
 # 5. API (opsiyonel)
-cce serve --reload
+bce serve --reload
 ```
 
 ---
@@ -625,12 +625,12 @@ cce serve --reload
 
 **Faz 5 detayları:**
 
-- **Voyage embedding** — `CCE_EMBEDDING_PROVIDER=voyage` ile `voyage-code-3` (1024 boyut); `document`/`query` input ayrımı; ağ yoksa deterministik hash fallback. Boyut migration: `0005_embeddings_dim.sql`.
+- **Voyage embedding** — `BCE_EMBEDDING_PROVIDER=voyage` ile `voyage-code-3` (1024 boyut); `document`/`query` input ayrımı; ağ yoksa deterministik hash fallback. Boyut migration: `0005_embeddings_dim.sql`.
 - **`REFERENCES.ref_kind`** — define/write/read/pass çıkarımı (Python + JS/TS + Java/C#/Go); genişletme `get_referrers` ile besler, skorlamada define/write >> read/pass (§6.4).
-- **Incremental re-index** — `Indexer.index_incremental` (git-diff), `cce reindex` CLI + `POST /v1/reindex`; değişen/silinen dosyalar için subgraph + embedding güncelleme.
+- **Incremental re-index** — `Indexer.index_incremental` (git-diff), `bce reindex` CLI + `POST /v1/reindex`; değişen/silinen dosyalar için subgraph + embedding güncelleme.
 - **SCIP adaptörü** — opsiyonel `scip-python`/`scip-typescript`; binary varsa ilgili kenarların provenance'ı `scip`'e yükseltilir, yoksa tree-sitter davranışı korunur.
 - **Dil genişletme** — Java (Spring), C# (ASP.NET), Go (Gin) tree-sitter sağlayıcıları (`pip install -e ".[langs]"`); diller-arası köprüler (RN/Expo/Swift-ObjC) `provenance='heuristic'` + `synthesized_by`.
-- **POC benchmark** — `cce bench --cases cases.json` → JSON rapor (latency, recall, precision, determinizm regresyon, RLS sızıntı kontrolü).
+- **POC benchmark** — `bce bench --cases cases.json` → JSON rapor (latency, recall, precision, determinizm regresyon, RLS sızıntı kontrolü).
 
 **Sonraki adımlar (ürünleştirme öncesi):**
 

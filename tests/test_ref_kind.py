@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from cce.domain.enums import EdgeLabel, RefKind
-from cce.indexing.extractor import Extractor
+from bce.domain.enums import EdgeLabel, RefKind
+from bce.indexing.extractor import Extractor
 
 PY_SOURCE = b'''
 CONFIG = {}
@@ -70,7 +70,7 @@ def test_ref_kind_extraction_is_deterministic():
 
 def test_references_feed_scoring_via_expansion():
     """A referrer edge should tag an expansion candidate with its ref_kind."""
-    from cce.core.orchestrator.expand import expand_from_anchors
+    from bce.core.orchestrator.expand import expand_from_anchors
 
     class _Repo:
         def repo_of_symbol(self, sid):

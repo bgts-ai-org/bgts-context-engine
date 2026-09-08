@@ -66,6 +66,7 @@ src/bce/api/rest/static/
 # Runtime data (repo clones, logs, generated benchmark reports)
 # ---------------------------------------------------------------------------
 .bce_data/
+# Legacy name, kept so pre-rename working copies stay ignored.
 .cce_data/
 repos_cache/
 reports/

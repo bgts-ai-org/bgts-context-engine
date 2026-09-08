@@ -66,7 +66,7 @@ export default function Sidebar({
       <div className="brand">
         <span className="brand-dot" />
         <div>
-          <h1>CCE Graph Explorer</h1>
+          <h1>BCE Graph Explorer</h1>
           <p>Kod Graph Görselleştirici</p>
         </div>
       </div>

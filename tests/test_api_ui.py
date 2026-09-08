@@ -12,8 +12,8 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 
-from cce.api.rest.app import create_app
-from cce.api.rest.deps import get_repository
+from bce.api.rest.app import create_app
+from bce.api.rest.deps import get_repository
 
 _SYMBOL_VERTEX = {
     "label": "Symbol",
@@ -327,7 +327,7 @@ class _TraceFakeVectorStore:
 
 
 def _trace_client() -> TestClient:
-    from cce.api.rest.deps import get_vector_store
+    from bce.api.rest.deps import get_vector_store
 
     app = create_app()
     app.dependency_overrides[get_repository] = lambda: _TraceFakeRepository()

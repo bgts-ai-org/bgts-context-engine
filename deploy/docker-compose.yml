@@ -6,19 +6,19 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: cce-postgres-age-pgvector:pg16
-    container_name: cce-db
+    image: bce-postgres-age-pgvector:pg16
+    container_name: bce-db
     environment:
-      POSTGRES_USER: cce
-      POSTGRES_PASSWORD: cce
-      POSTGRES_DB: cce
+      POSTGRES_USER: bce
+      POSTGRES_PASSWORD: bce
+      POSTGRES_DB: bce
     ports:
       - "5432:5432"
     volumes:
       - cce_pgdata:/var/lib/postgresql/data
       - ./initdb:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U cce -d cce"]
+      test: ["CMD-SHELL", "pg_isready -U bce -d bce"]
       interval: 5s
       timeout: 5s
       retries: 10

@@ -42,7 +42,7 @@ export default function App() {
       .then(setRepos)
       .catch((e) =>
         setError(
-          `API'ye ulasilamadi (${API_BASE}). 'cce serve' calisiyor mu? Detay: ${e}`,
+          `API'ye ulasilamadi (${API_BASE}). 'bce serve' calisiyor mu? Detay: ${e}`,
         ),
       );
   }, []);

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from cce.indexing.gitsync.local import FileChange, _parse_name_status
+from bce.indexing.gitsync.local import FileChange, _parse_name_status
 
 
 def test_parse_name_status_added_modified_deleted():

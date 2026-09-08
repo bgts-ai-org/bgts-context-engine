@@ -13,10 +13,10 @@ from __future__ import annotations
 
 from conftest import symbols_by_name
 
-from cce.domain.enums import EdgeLabel, NodeLabel
-from cce.indexing.extractor import Extractor
-from cce.indexing.linker import link_fragments
-from cce.indexing.parser.symbol_id import make_file_id
+from bce.domain.enums import EdgeLabel, NodeLabel
+from bce.indexing.extractor import Extractor
+from bce.indexing.linker import link_fragments
+from bce.indexing.parser.symbol_id import make_file_id
 
 COST_PY = b'''
 def calculate_cost(tokens, rate):

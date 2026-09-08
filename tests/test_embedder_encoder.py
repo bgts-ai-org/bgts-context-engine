@@ -6,7 +6,7 @@ import math
 
 import pytest
 
-from cce.indexing.embedder.encoder import (
+from bce.indexing.embedder.encoder import (
     HashingEncoder,
     VoyageEncoder,
     build_default_encoder,
@@ -48,7 +48,7 @@ def test_similar_text_closer_than_unrelated():
 @pytest.fixture
 def hashing_settings(monkeypatch):
     """Force the deterministic hashing provider regardless of the ambient .env."""
-    from cce import config
+    from bce import config
 
     monkeypatch.setattr(
         config,
@@ -60,13 +60,13 @@ def hashing_settings(monkeypatch):
 
 def test_default_encoder_pins_model_id(hashing_settings):
     enc = build_default_encoder(dim=64, model_id="unset")
-    assert enc.model_id == "cce-hashing-v1"
+    assert enc.model_id == "bce-hashing-v1"
     enc2 = build_default_encoder(dim=64, model_id="my-pinned-model")
     assert enc2.model_id == "my-pinned-model"
 
 
 def test_default_encoder_falls_back_to_hashing_without_key(monkeypatch):
-    from cce import config
+    from bce import config
 
     monkeypatch.setattr(
         config,
@@ -79,7 +79,7 @@ def test_default_encoder_falls_back_to_hashing_without_key(monkeypatch):
 
 def test_default_encoder_selects_voyage_when_ready(monkeypatch):
     pytest.importorskip("voyageai")
-    from cce import config
+    from bce import config
 
     monkeypatch.setattr(
         config,

@@ -15,11 +15,11 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-import cce.api.rest.routes as routes_module
-from cce.api.rest.app import create_app
-from cce.api.rest.deps import get_repository
-from cce.jobs.store import _valid_uuid, enqueue_job
-from cce.jobs.worker import execute_job
+import bce.api.rest.routes as routes_module
+from bce.api.rest.app import create_app
+from bce.api.rest.deps import get_repository
+from bce.jobs.store import _valid_uuid, enqueue_job
+from bce.jobs.worker import execute_job
 
 _JOB_ID = "11111111-2222-3333-4444-555555555555"
 
@@ -73,7 +73,7 @@ class _RecordingIndexer:
         return self._record("index_incremental", kwargs)
 
     def _record(self, method: str, kwargs: dict[str, Any]) -> Any:
-        from cce.indexing.indexer import IndexSummary
+        from bce.indexing.indexer import IndexSummary
 
         _RecordingIndexer.calls.append((method, kwargs))
         return IndexSummary(repo_id="r", files=1, nodes=2, edges=3, commit="c1")
@@ -82,12 +82,12 @@ class _RecordingIndexer:
 @pytest.fixture()
 def recording_indexer(monkeypatch: pytest.MonkeyPatch) -> type[_RecordingIndexer]:
     _RecordingIndexer.calls = []
-    import cce.indexing.indexer as indexer_module
+    import bce.indexing.indexer as indexer_module
 
     monkeypatch.setattr(indexer_module, "Indexer", _RecordingIndexer)
     # execute_job builds a repository from the connection; a bare object suffices with the fake.
-    import cce.storage.graph.client as client_module
-    import cce.storage.graph.repository as repo_module
+    import bce.storage.graph.client as client_module
+    import bce.storage.graph.repository as repo_module
 
     monkeypatch.setattr(client_module, "GraphClient", lambda conn: conn)
     monkeypatch.setattr(repo_module, "GraphRepository", lambda client: client)

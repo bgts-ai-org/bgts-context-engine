@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from cce.domain.enums import EdgeLabel, Provenance
-from cce.indexing.extractor.bridges import (
+from bce.domain.enums import EdgeLabel, Provenance
+from bce.indexing.extractor.bridges import (
     BRIDGE_RN,
     BRIDGE_RN_EVENT,
     BridgeFile,

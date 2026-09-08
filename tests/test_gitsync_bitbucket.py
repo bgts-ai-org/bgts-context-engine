@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from cce.indexing.gitsync import (
+from bce.indexing.gitsync import (
     GitCredentials,
     build_auth_url,
     mask_secrets,

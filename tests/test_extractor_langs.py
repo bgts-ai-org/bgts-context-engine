@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import pytest
 
-from cce.domain.enums import EdgeLabel, NodeLabel
+from bce.domain.enums import EdgeLabel, NodeLabel
 
 
 def _extract(path: str, source: bytes):
-    from cce.indexing.extractor import Extractor
+    from bce.indexing.extractor import Extractor
 
     return Extractor().extract_file(repo_id="demo", path=path, source=source)
 

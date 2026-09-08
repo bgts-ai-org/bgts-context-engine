@@ -1,7 +1,7 @@
-/** Thin client for the CCE `/v1/ui/*` endpoints. */
+/** Thin client for the BCE `/v1/ui/*` endpoints. */
 
 export const API_BASE: string =
-  (import.meta.env.VITE_CCE_API as string | undefined) ?? "http://127.0.0.1:8000";
+  (import.meta.env.VITE_BCE_API as string | undefined) ?? "http://127.0.0.1:8000";
 
 export interface UIRepo {
   repo_id: string;

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from cce.core.scoring.engine import Candidate, score_candidates
-from cce.domain.enums import Provenance, RefKind
+from bce.core.scoring.engine import Candidate, score_candidates
+from bce.domain.enums import Provenance, RefKind
 
 
 def test_define_outranks_read_carrier():

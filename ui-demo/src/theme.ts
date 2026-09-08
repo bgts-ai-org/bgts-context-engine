@@ -30,10 +30,10 @@ export const edgeColor = (type: string): string => EDGE_COLORS[type] ?? "#374151
 /**
  * Official GitHub Linguist language colors
  * (https://github.com/github-linguist/linguist/blob/master/lib/linguist/languages.yml).
- * Keys are lowercase API / display aliases used by CCE.
+ * Keys are lowercase API / display aliases used by BCE.
  */
 export const LANG_COLORS: Record<string, string> = {
-  // Core languages indexed by CCE
+  // Core languages indexed by BCE
   csharp: "#7355dd",
   "c#": "#7355dd",
   python: "#3572A5",

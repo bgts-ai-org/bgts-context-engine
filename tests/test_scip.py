@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from cce.domain.enums import EdgeLabel, Provenance
-from cce.indexing.extractor import Extractor
-from cce.indexing.parser.scip import (
+from bce.domain.enums import EdgeLabel, Provenance
+from bce.indexing.extractor import Extractor
+from bce.indexing.parser.scip import (
     NullScipResolver,
     ScipResolution,
     build_scip_resolver,

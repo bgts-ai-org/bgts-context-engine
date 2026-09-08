@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from cce.bench.runner import BenchCase, run_benchmark
+from bce.bench.runner import BenchCase, run_benchmark
 
 
 class _FakeRepo:

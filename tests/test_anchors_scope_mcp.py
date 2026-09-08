@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from cce.api.mcp.tools import TOOL_SPECS, dispatch_tool
-from cce.core.auth.scope import Principal, ScopeFilter
-from cce.core.orchestrator.anchors import find_anchors
+from bce.api.mcp.tools import TOOL_SPECS, dispatch_tool
+from bce.core.auth.scope import Principal, ScopeFilter
+from bce.core.orchestrator.anchors import find_anchors
 
 
 class _FakeRepo:

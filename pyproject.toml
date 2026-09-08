@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "cortex-context-engine"
+name = "bgts-context-engine"
 version = "0.0.1"
-description = "Cortex Context Engine (CCE) - deterministic, multi-language code-graph context engine"
+description = "BGTS Context Engine (BCE) - deterministic, multi-language code-graph context engine"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Proprietary" }
@@ -48,15 +48,15 @@ langs = [
 ]
 
 [project.scripts]
-cce = "cce.cli:main"
+bce = "bce.cli:main"
 
 [tool.setuptools.packages.find]
-where = ["."]
-include = ["cce*"]
+where = ["src"]
+include = ["bce*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["."]
+pythonpath = ["src"]
 addopts = "-q"
 
 [tool.ruff]

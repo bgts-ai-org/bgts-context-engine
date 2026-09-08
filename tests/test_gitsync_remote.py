@@ -11,8 +11,8 @@ from pathlib import Path
 
 import pytest
 
-from cce.indexing.gitsync import GitCredentials, sync_repo
-from cce.indexing.gitsync.local import current_commit
+from bce.indexing.gitsync import GitCredentials, sync_repo
+from bce.indexing.gitsync.local import current_commit
 
 pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git is not installed")
 

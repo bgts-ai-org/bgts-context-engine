@@ -1,6 +1,6 @@
 """Tests for stable id generation (determinism is the core guarantee, P1)."""
 
-from cce.indexing.parser.symbol_id import (
+from bce.indexing.parser.symbol_id import (
     make_file_id,
     make_repo_id,
     make_symbol_id,

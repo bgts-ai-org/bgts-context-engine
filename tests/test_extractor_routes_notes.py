@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from cce.domain.enums import DesignNoteKind, EdgeLabel, NodeLabel, Provenance
-from cce.indexing.extractor import Extractor
+from bce.domain.enums import DesignNoteKind, EdgeLabel, NodeLabel, Provenance
+from bce.indexing.extractor import Extractor
 
 FASTAPI_SOURCE = b'''"""API module."""
 from fastapi import FastAPI

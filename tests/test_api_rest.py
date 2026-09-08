@@ -15,9 +15,9 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 
-from cce.api.rest.app import create_app
-from cce.api.rest.deps import get_repository, get_scope, get_vector_store
-from cce.core.auth.scope import Principal, ScopeFilter
+from bce.api.rest.app import create_app
+from bce.api.rest.deps import get_repository, get_scope, get_vector_store
+from bce.core.auth.scope import Principal, ScopeFilter
 
 
 class _FakeRepository:

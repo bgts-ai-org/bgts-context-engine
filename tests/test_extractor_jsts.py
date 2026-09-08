@@ -2,8 +2,8 @@
 
 from conftest import has_edge, module_namespaces, symbols_by_name
 
-from cce.domain.enums import EdgeLabel, SymbolKind
-from cce.indexing.extractor import Extractor
+from bce.domain.enums import EdgeLabel, SymbolKind
+from bce.indexing.extractor import Extractor
 
 JS_SOURCE = b"""import { foo } from "./util";
 

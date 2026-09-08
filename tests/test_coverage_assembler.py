@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from cce.core.assembler import DetailLevel, assemble
-from cce.core.coverage import compute_coverage
-from cce.core.coverage.confidence import GOD_NODE_DEGREE
-from cce.core.orchestrator.anchors import AnchorResult
-from cce.core.orchestrator.orchestrator import RetrievalResult
-from cce.core.scoring.engine import Candidate
+from bce.core.assembler import DetailLevel, assemble
+from bce.core.coverage import compute_coverage
+from bce.core.coverage.confidence import GOD_NODE_DEGREE
+from bce.core.orchestrator.anchors import AnchorResult
+from bce.core.orchestrator.orchestrator import RetrievalResult
+from bce.core.scoring.engine import Candidate
 
 
 def _result(candidates, anchors: AnchorResult) -> RetrievalResult:

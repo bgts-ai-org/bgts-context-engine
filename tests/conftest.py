@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from cce.domain.enums import EdgeLabel, NodeLabel
-from cce.domain.models import GraphFragment
+from bce.domain.enums import EdgeLabel, NodeLabel
+from bce.domain.models import GraphFragment
 
 
 def symbols_by_name(fragment: GraphFragment) -> dict[str, str]:
