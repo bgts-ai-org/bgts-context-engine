@@ -1,36 +1,81 @@
+# ---------------------------------------------------------------------------
 # Python
+# ---------------------------------------------------------------------------
 __pycache__/
 *.py[cod]
-*.egg-info/
-.eggs/
+*$py.class
+*.so
 build/
 dist/
+sdist/
+wheels/
+develop-eggs/
+.eggs/
+*.egg
+*.egg-info/
+MANIFEST
+
+# Virtual environments
 .venv/
 venv/
 env/
+ENV/
 
-# Tooling
+# Test and tooling caches
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.tox/
+.nox/
 .coverage
+.coverage.*
+coverage.xml
 htmlcov/
 
-# Local data / repos cloned by git-sync
+# ---------------------------------------------------------------------------
+# Node / frontend
+# ---------------------------------------------------------------------------
+node_modules/
+web/dist/
+.vite/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# The frontend bundle is built into the Python package at release time and is
+# never committed; see scripts/build_ui.py.
+src/bce/api/rest/static/
+
+# ---------------------------------------------------------------------------
+# Environment and secrets
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Office documents are internal working material and never part of a release.
+*.pptx
+*.docx
+*.xlsx
+
+# ---------------------------------------------------------------------------
+# Runtime data (repo clones, logs, generated benchmark reports)
+# ---------------------------------------------------------------------------
+.bce_data/
 .cce_data/
 repos_cache/
 reports/
-docs/
 
-
-
-# Env / secrets
-.env
-*.local
-
-# IDE
+# ---------------------------------------------------------------------------
+# Editors and operating systems
+# ---------------------------------------------------------------------------
 .idea/
 .vscode/
-
-CCE_Onerilen_Ozellikler.md
-Cortex_Context_Engine_Mimari.pdf
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
