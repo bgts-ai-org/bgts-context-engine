@@ -1,0 +1,27 @@
+cff-version: 1.2.0
+title: "BGTS Context Engine"
+message: "If you use this software, please cite it as below."
+type: software
+abstract: >-
+  A deterministic, multi-language code-graph context engine for AI coding agents. It
+  indexes a repository into a property graph over PostgreSQL with Apache AGE and pgvector,
+  then assembles reproducible context packages through anchor discovery, graph expansion,
+  scoring and narrowing, exposed over MCP and REST.
+authors:
+  - given-names: Oğuz
+    family-names: Öztürk
+    affiliation: BilgeAdam Technology
+  - given-names: Enes
+    family-names: İyidil
+    affiliation: BilgeAdam Technology
+repository-code: "https://github.com/bilgeadamtechnology/BGTS-Context-Engine"
+license: MIT
+version: 0.1.0
+date-released: "2026-09-08"
+keywords:
+  - context engineering
+  - code graph
+  - retrieval
+  - model context protocol
+  - static analysis
+  - developer tools
