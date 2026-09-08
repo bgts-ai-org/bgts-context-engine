@@ -1,0 +1,240 @@
+<div align="center">
+
+<img src="web/public/favicon.svg" alt="" width="72" height="72">
+
+# BGTS Context Engine
+
+**Yapay zekâ kodlama ajanları için deterministik kod-graf bağlamı.**
+
+*"Toplantı webhook'unda login timeout neden tetikleniyor?"* diye sorun; cevabı gerçekten
+veren sekiz sembolü sıralanmış, bütçelenmiş ve yeniden üretilebilir şekilde alın.
+
+[![PyPI](https://img.shields.io/pypi/v/bgts-context-engine.svg)](https://pypi.org/project/bgts-context-engine/)
+[![Python](https://img.shields.io/pypi/pyversions/bgts-context-engine.svg)](https://pypi.org/project/bgts-context-engine/)
+[![CI](https://github.com/bilgeadamtechnology/BGTS-Context-Engine/actions/workflows/ci.yml/badge.svg)](https://github.com/bilgeadamtechnology/BGTS-Context-Engine/actions/workflows/ci.yml)
+[![Lisans: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![MCP](https://img.shields.io/badge/MCP-uyumlu-000000.svg)](docs/mcp.md)
+
+[Hızlı başlangıç](#hızlı-başlangıç) · [Nasıl çalışır](#nasıl-çalışır) · [Dokümantasyon](#dokümantasyon) · [English](README.md)
+
+</div>
+
+> Dokümantasyonun tamamı İngilizcedir. Bu dosya projeye Türkçe bir giriş sunar; teknik
+> referanslar için [`docs/`](docs/) klasörüne bakın.
+
+---
+
+## Neden var
+
+Tanımadığı bir depoda çalışan bir ajan, neyi değiştireceğine karar vermeden önce neyi
+okuyacağına karar vermek zorundadır. Bunun alışılmış cevabı, parçalanmış dosyalar üzerinde
+embedding aramasıdır. Kurmak ucuzdur ve çok belirli bir biçimde yanlıştır: davranışa
+*katılan* kodu değil, soruya *benzeyen* metni döner. Login timeout'u sorduğunuzda,
+timeout'tan bahseden beş dosyayı alırsınız; onu ayarlayan tek fonksiyonu ve
+değiştirdiğinizde bozulacak üç çağıranı almazsınız.
+
+Bu bilgi yapısaldır ve kesin bir cevabı vardır. `handleLogin`, `refreshSession`'ı çağırır;
+o da `SESSION_TTL`'i okur; ona da tam olarak tek bir yerde değer atanır. Bu bir graf
+gezinmesidir.
+
+BGTS Context Engine depolarınızı bu grafa indeksler — semboller, çağrılar, referanslar, tip
+hiyerarşileri, HTTP route'ları, diller arası köprüler — ve soruları bu grafı gezerek
+yanıtlar. Embedding yalnızca tek bir yerde kullanılır: görev metni tanıdık hiçbir şey
+adlandırmadığında giriş noktalarını bulmak için. Sıralamayı asla etkilemez.
+
+**Aynı görev metni, aynı commit üzerinde, aynı bağlam paketini döner.** Getirme yolunda
+model yok, saat yok, rastgelelik yok. Bir ajan hatalı bir değişiklik yaptığında, ona tam
+olarak ne söylendiğini yeniden oynatabilir, yanlış sembolü yüzeye çıkaran aşamayı bulabilir
+ve o aşamayı düzeltebilirsiniz.
+
+## Hızlı başlangıç
+
+```bash
+# 1. Tek veritabanında Apache AGE + pgvector ile PostgreSQL 16
+docker compose -f deploy/docker-compose.yml up -d
+
+# 2. Kur ve migrasyonları uygula
+pip install bgts-context-engine
+cp .env.example .env
+bce migrate
+
+# 3. Bir depoyu indeksle
+bce index --repo /path/to/your/repo --name my-service
+
+# 4. Sor
+bce context --task "toplanti webhook'undaki login timeout'u duzelt"
+```
+
+Ardından servis edin:
+
+```bash
+bce serve        # :8000/docs adresinde REST, :8000/ui/ adresinde web arayüzü
+bce serve-mcp    # ajanlar için stdio üzerinden MCP
+```
+
+Herhangi bir MCP istemcisini yönlendirin:
+
+```json
+{
+  "mcpServers": {
+    "bgts-context-engine": { "command": "bce", "args": ["serve-mcp"] }
+  }
+}
+```
+
+## Ne döner
+
+Dosya yolu listesi değil. Gerekçesi ekli, sıralanmış bir paket:
+
+```json
+{
+  "anchors": {
+    "python::api::webhooks::handle_meeting_webhook#a3f1": ["explicit", "lexical"],
+    "python::auth::session::refresh_session#88c2":        ["lexical", "semantic"]
+  },
+  "context": {
+    "items": [
+      { "symbol_id": "...refresh_session#88c2", "detail_level": "full",
+        "graph_distance": 0, "score": 11.42, "tokens": 214, "content": "def refresh_session(...)" },
+      { "symbol_id": "...SESSION_TTL#4b0d",     "detail_level": "signature",
+        "graph_distance": 2, "score": 6.10,  "tokens": 31,  "content": "SESSION_TTL: int" }
+    ],
+    "used_tokens": 2913, "budget": 4000, "included": 8, "skipped": 0
+  },
+  "coverage": {
+    "anchor_source_count": 3, "connected_component_ratio": 0.875,
+    "top_candidate_margin": 1.84, "orphan_ratio": 0.0,
+    "touches_god_node": false, "commit_mismatch": false,
+    "confidence": "high"
+  }
+}
+```
+
+Burada bir vektör veritabanının veremeyeceği üç şey var:
+
+**`anchors`**, motorun *neden* oraya baktığını ve hangi bağımsız kaynakların hemfikir
+olduğunu söyler. Üç kaynağın uyuşması genellikle doğrudur; bir kaynak tahmindir.
+
+**`coverage`** bir güven raporudur. `confidence: "low"`, motorun bir şey bulduğu ama
+doğrulayamadığı anlamına gelir — bir ajanın düzenlemeye başlamak yerine soru sorması
+gereken an. `commit_mismatch` ise indeksin çalışma ağacınızın gerisinde kaldığını söyler.
+
+**`detail_level`** graf mesafesiyle azalır: değiştirdiğiniz sembol tam gövdesiyle,
+komşuları imza olarak, dış halka `name @ dosya:satır` biçiminde gelir. Gerçekten ilgili
+sekiz sembolün 4000 token'a sığması bu sayede olur.
+
+## Nasıl çalışır
+
+```
+görev metni
+   │
+   ├─ çapalar       dört bağımsız kaynak giriş noktası önerir:
+   │                açık isimler, görev geçmişi, tam metin, vektör
+   ├─ genişletme    sabit şekilli graf gezinmesi: çağıranlar 2 hop, çağrılanlar 1,
+   │                referanslar, tip hiyerarşisi, aynı dosyadaki kardeşler
+   ├─ skorlama      referans türü, görev sinyali, merkezîlik, mesafe,
+   │                yaprak cezası ve kenar kaynağı üzerinden ağırlıklı toplam
+   ├─ kapsam        çağıranın göremeyeceği depoları düşür
+   ├─ daraltma      en iyi N tanesini tut
+   ├─ birleştirme   token bütçesine sığdır, uzaklaştıkça daha ucuz detay
+   └─ kapsama       sonucun ne kadarının güvenilir olduğunu raporla
+```
+
+Çağıranlar iki hop, çağrılanlar bir hop uzağa gider; bu bilinçlidir: bir fonksiyonu
+değiştirdiğinizde bozulan şey onun yukarısındadır. En ağır ağırlığı referans türü taşır,
+çünkü bir değere *yazan* yer hatanın yaşadığı yerdir, *okuyan* yer ise genelde yalnızca
+sonuçtur. Merkezîlik derece 20'de doyar, çünkü bir logger her şeye dokunur ve hiçbir şeyi
+açıklamaz.
+
+Formülün tamamı, her ağırlık ve güven eşikleri
+[docs/retrieval.md](docs/retrieval.md) içindedir.
+
+## Öne çıkanlar
+
+- **Parçalar değil, kod grafı.** Semboller, `CALLS`, `REFERENCES`, `INHERITS`,
+  `IMPLEMENTS`, `IMPORTS`, HTTP `ROUTES_TO` handler'ları ve açıkladıkları sembole bağlanmış
+  `WHY:` yorumları.
+- **Yapısı gereği deterministik.** Sıralı gezinme, kararlı eşitlik bozma, sürümlenmiş
+  skorlama ağırlıkları. `bce bench` her vakayı tekrar tekrar koşup çıktıyı karşılaştırarak
+  bunu doğrular.
+- **Altı dil.** Python, JavaScript ve TypeScript yerleşik; Java, C# ve Go `langs` ekiyle.
+  [Yeni bir dil eklemek](docs/languages.md#adding-a-language) iki dosyaya dokunur.
+- **Diller arası çağrı kenarları.** React Native ve Expo köprüleri, TypeScript'teki
+  `NativeModules.Foo.bar()` çağrısını Objective-C, Swift veya Kotlin'deki `bar` ile
+  birleştirir — tek bir parser'ın göremeyeceği bir boşluk.
+- **Denetlenebilir kenar kaynağı.** Gerçek bir derleyici indeksinden `scip`, sözdiziminden
+  `treesitter`, örüntü eşleşmesinden `heuristic`. Farklı skorlanır, her yanıtta raporlanır.
+- **Artımlı yeniden indeksleme.** Neyin yeniden ayrıştırılacağına `git diff` karar verir.
+  Sembol kimlikleri dosya taşımalarından ve yeniden biçimlendirmeden sağ çıkar.
+- **Tek veritabanı.** Apache AGE ve pgvector aynı PostgreSQL içinde; tek sorgu bir graf
+  gezinmesini, bir vektör aramasını ve bir SQL filtresini birleştirir.
+- **Tek gerçeklemeden MCP ve REST.** stdio üzerinden on dört araç, HTTP üzerinden aynı
+  fonksiyonlar. Aralarında kayma olacak bir şey yok.
+- **Kendini açıklayan bir arayüz.** `/ui` wheel içinde gelir ve gerçek bir getirme çağrısını
+  aşama aşama oynatır: çapaların yanması, genişlemenin yayılması, adayların skorlanıp
+  kesilmesi.
+- **Çevrimdışı çalışır.** Varsayılan embedding sağlayıcısı, token özetleri üzerinde
+  deterministik aritmetiktir. API anahtarı yok, ağ yok, tekrarlanabilir ölçümler.
+
+## Nereye oturur
+
+|  | Embedding RAG | Language server | BGTS Context Engine |
+| --- | --- | --- | --- |
+| Getirme temeli | metin benzerliği | derleyici indeksi | kod grafı + çapalar |
+| Dosyalar/depolar arası | zayıf | proje bazlı | evet |
+| Diller arası kenarlar | yok | yok | evet, sezgisel |
+| Aynı sorgu, aynı cevap | hayır | evet | evet |
+| *Bir göreve* göre sıralı | benzerliğe göre | sıralı değil | evet, kapsama ile |
+| Token bütçesi farkında | parça sayısı | hayır | evet, mesafeye göre detay |
+| Kendi cevabını açıklar | hayır | hayır | çapa + kaynak + güven |
+
+Bir language server kesindir ama açık olanla sınırlıdır. Embedding araması geniştir ama
+hesap veremez. Bu proje ikisinin arasında durur: ilki gibi depo çapında ve diller arası,
+ikincisi gibi kesin ve yeniden üretilebilir.
+
+## Dokümantasyon
+
+Tümü İngilizcedir.
+
+| | |
+| --- | --- |
+| [Architecture](docs/architecture.md) | deterministik hat, üç katman, indeksleme |
+| [Retrieval](docs/retrieval.md) | çapalar, genişletme, her skorlama ağırlığı, güven |
+| [Data model](docs/data-model.md) | düğüm etiketleri, kenar tipleri, tablolar, sembol kimliği |
+| [MCP and API](docs/mcp.md) | 14 aracın tamamı, her uç nokta, CLI |
+| [Languages](docs/languages.md) | her parser'ın çıkardıkları ve yeni dil ekleme |
+| [Deployment](docs/deployment.md) | yapılandırma referansı, işler, yedekleme, ölçüm |
+| [Web interface](web/README.md) | arayüz geliştirme |
+
+## Katkı
+
+Katkılar memnuniyetle karşılanır — özellikle yeni diller, ki hattın en hazır olduğu katkı
+türü budur.
+
+Önce [CONTRIBUTING.md](CONTRIBUTING.md) dosyasını okuyun. Baştan bilinmesi gereken tek
+kural: **determinizm ürünün kendisidir.** Aynı görevin farklı sonuç döndürmesine yol açan
+bir değişiklik, açık bir opt-in bayrağı olmadan birleştirilmez; skorlamaya veya sıralamaya
+dokunan her şey çıktıyı sabitleyen bir test gerektirir.
+
+Kod, yorumlar, docstring'ler, commit mesajları ve arayüz metinleri İngilizcedir. Türkçe
+yalnızca bu dosyada ve `tr` çeviri kataloglarında bulunur.
+
+```bash
+pip install -e ".[dev,mcp]"
+ruff check src tests scripts && pytest
+cd web && npm ci && npm test
+```
+
+## Güvenlik
+
+Motorun kendine ait bir kimlik doğrulaması yoktur ve önünde bunu yapan bir katman
+beklemektedir. Kullanıcı bazlı depo kapsamını yalnızca Layer-3 uç noktaları uygular. Bir
+portu dışa açmadan önce [SECURITY.md](SECURITY.md) dosyasını okuyun ve güvenlik açıklarını
+issue olarak değil, özel kanaldan bildirin.
+
+## Lisans
+
+[MIT](LICENSE) © BilgeAdam Technology.
+
+[Oğuz Öztürk](https://github.com/oztrkoguz) ve
+[Enes İyidil](https://github.com/enesiyidil) tarafından geliştirildi.
