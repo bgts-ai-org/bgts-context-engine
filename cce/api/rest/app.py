@@ -26,6 +26,7 @@ from fastapi import FastAPI, Request, Response
 
 from cce import __version__
 from cce.api.rest.routes import router
+from cce.config import get_settings
 from cce.core.logging import get_logger, setup_logging
 
 logger = get_logger("api.rest")
@@ -164,7 +165,7 @@ def create_app() -> FastAPI:
     app.include_router(ui_router)
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],  # Read-only visualisation endpoints; no credentials involved.
+        allow_origins=list(get_settings().cors_origins),
         allow_methods=["GET", "POST"],  # POST: /v1/ui/context-trace (read-only pipeline trace).
         allow_headers=["*"],
     )

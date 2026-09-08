@@ -46,6 +46,12 @@ class Settings(BaseSettings):
     default_locale: str = "en"
     supported_locales: tuple[str, ...] = ("en", "tr")
 
+    # --- CORS ---
+    # Browser origins allowed to call the API. The bundled UI is served from the API's own origin
+    # and therefore needs no entry here; this list only matters for a separately hosted frontend,
+    # such as the Vite dev server. Set to ``["*"]`` to allow any origin (development only).
+    cors_origins: tuple[str, ...] = ("http://localhost:5173", "http://127.0.0.1:5173")
+
     # --- Embedding (Phase 2; pinned for determinism, P2) ---
     # Provider selects the encoder: "hashing" (default, dependency-free, deterministic fallback) or
     # "voyage" (Voyage AI code embeddings). Model + dim are pinned; a change is a reindex boundary.
