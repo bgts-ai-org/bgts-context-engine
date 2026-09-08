@@ -1,7 +1,15 @@
 /** Thin client for the BCE `/v1/ui/*` endpoints. */
 
-export const API_BASE: string =
-  (import.meta.env.VITE_BCE_API as string | undefined) ?? "http://127.0.0.1:8000";
+/**
+ * Empty by default so requests stay relative: the production bundle is served by the API
+ * itself under `/ui`, and the dev server proxies `/v1` to the API (see vite.config.ts).
+ * Set VITE_BCE_API to target an API on a different origin.
+ */
+export const API_BASE: string = (import.meta.env.VITE_BCE_API as string | undefined) ?? "";
+
+/** Upper bounds for a single whole-repo graph fetch; override via VITE_BCE_* if needed. */
+export const GRAPH_NODE_LIMIT: string = (import.meta.env.VITE_BCE_NODE_LIMIT as string) ?? "20000";
+export const GRAPH_EDGE_LIMIT: string = (import.meta.env.VITE_BCE_EDGE_LIMIT as string) ?? "100000";
 
 export interface UIRepo {
   repo_id: string;
@@ -113,7 +121,7 @@ export interface TraceResponse {
 }
 
 async function getJson<T>(path: string, params?: Record<string, string>): Promise<T> {
-  const url = new URL(API_BASE + path);
+  const url = new URL(API_BASE + path, window.location.origin);
   for (const [key, value] of Object.entries(params ?? {})) {
     url.searchParams.set(key, value);
   }
@@ -141,8 +149,8 @@ export const api = {
   graph: (repoId: string) =>
     getJson<UIGraph>("/v1/ui/graph", {
       repo_id: repoId,
-      node_limit: "20000",
-      edge_limit: "100000",
+      node_limit: GRAPH_NODE_LIMIT,
+      edge_limit: GRAPH_EDGE_LIMIT,
     }),
   stats: (repoId: string) => getJson<UIStats>("/v1/ui/stats", { repo_id: repoId }),
   node: (gid: string) => getJson<UINode>("/v1/ui/node", { gid }),

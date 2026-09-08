@@ -54,6 +54,14 @@ bce = "bce.cli:main"
 where = ["src"]
 include = ["bce*"]
 
+[tool.setuptools.package-data]
+bce = [
+    "core/i18n/catalogs/*.json",
+    "storage/relational/migrations/*.sql",
+    # Compiled frontend served at /ui; vendored by scripts/build_ui.py before a release build.
+    "api/rest/static/**/*",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]

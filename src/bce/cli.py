@@ -323,14 +323,24 @@ def serve(
     host: str = typer.Option("127.0.0.1", "--host", help="Bind host"),
     port: int = typer.Option(8000, "--port", help="Bind port"),
     reload: bool = typer.Option(False, "--reload", help="Auto-reload on code changes (dev)"),
+    ui: bool = typer.Option(True, "--ui/--no-ui", help="Serve the bundled web UI at /ui"),
 ) -> None:
     """Run the REST API server (Layer 1-2-3 endpoints) via uvicorn."""
     import uvicorn
 
+    from bce.api.rest.app import ui_is_bundled
     from bce.core.logging import setup_logging
 
     setup_logging()
-    uvicorn.run("bce.api.rest.app:app", host=host, port=port, reload=reload)
+
+    typer.echo(f"API docs:  http://{host}:{port}/docs")
+    if ui and ui_is_bundled():
+        typer.echo(f"Web UI:    http://{host}:{port}/ui/")
+    elif ui:
+        typer.echo("Web UI:    not bundled in this installation (see web/README.md to run it)")
+
+    factory = "bce.api.rest.app:app" if ui else "bce.api.rest.app:create_api_only_app"
+    uvicorn.run(factory, host=host, port=port, reload=reload, factory=not ui)
 
 
 @app.command(name="serve-mcp")

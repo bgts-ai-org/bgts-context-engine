@@ -11,6 +11,9 @@ Request logging has two levels:
 - DEBUG (``BCE_LOG_LEVEL=DEBUG``): additionally logs the request start, query params, the JSON
   request body (secrets masked, size-capped) and the response body (size-capped) for **every**
   endpoint.
+
+Released distributions carry a compiled frontend which is served under ``/ui``. A source
+checkout has no bundle, so that mount is skipped and the Vite dev server is used instead.
 """
 
 from __future__ import annotations
@@ -20,9 +23,12 @@ import logging
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Request, Response
+from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
 from bce import __version__
 from bce.api.rest.routes import router
@@ -80,7 +86,37 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         pool.stop()
 
 
-def create_app() -> FastAPI:
+#: Directory the compiled frontend is vendored into at build time (scripts/build_ui.py).
+UI_DIST_DIR = Path(__file__).parent / "static"
+
+
+def ui_is_bundled() -> bool:
+    """True when a compiled frontend ships with this installation."""
+    return (UI_DIST_DIR / "index.html").is_file()
+
+
+def _mount_ui(app: FastAPI) -> None:
+    """Serve the compiled frontend under ``/ui``.
+
+    Does nothing when the bundle is absent, which is the normal case for a source checkout:
+    developers run the Vite dev server instead (see web/README.md).
+    """
+    if not ui_is_bundled():
+        logger.debug("ui bundle not present; skipping /ui mount", extra={"path": str(UI_DIST_DIR)})
+        return
+
+    @app.get("/ui", include_in_schema=False)
+    async def ui_root() -> RedirectResponse:
+        return RedirectResponse(url="/ui/")
+
+    # html=True serves index.html for the directory root. There is deliberately no catch-all
+    # fallback: the UI is a single view with no client-side router, so a missing asset should
+    # surface as a 404 rather than be masked by an HTML response.
+    app.mount("/ui/", StaticFiles(directory=UI_DIST_DIR, html=True), name="ui")
+    logger.info("ui bundle mounted", extra={"path": str(UI_DIST_DIR), "url": "/ui/"})
+
+
+def create_app(*, serve_ui: bool = True) -> FastAPI:
     setup_logging()
     app = FastAPI(
         title="BGTS Context Engine",
@@ -169,9 +205,16 @@ def create_app() -> FastAPI:
         allow_methods=["GET", "POST"],  # POST: /v1/ui/context-trace (read-only pipeline trace).
         allow_headers=["*"],
     )
+    if serve_ui:
+        _mount_ui(app)
     # --- end UI layer ---
 
     return app
+
+
+def create_api_only_app() -> FastAPI:
+    """Application without the ``/ui`` mount, for ``bce serve --no-ui``."""
+    return create_app(serve_ui=False)
 
 
 app = create_app()

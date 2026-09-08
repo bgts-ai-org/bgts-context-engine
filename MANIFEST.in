@@ -1,0 +1,15 @@
+include LICENSE
+include README.md
+include README.tr.md
+include CHANGELOG.md
+recursive-include src/bce/core/i18n/catalogs *.json
+recursive-include src/bce/storage/relational/migrations *.sql
+
+# Compiled frontend, vendored by scripts/build_ui.py before a release build.
+recursive-include src/bce/api/rest/static *
+
+prune tests
+prune web
+prune deploy
+prune docs
+prune scripts
