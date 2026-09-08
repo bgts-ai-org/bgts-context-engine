@@ -32,8 +32,8 @@ from cce.core.auth.scope import ScopeFilter
 from cce.core.i18n import get_translator
 from cce.indexing.gitsync import GitCredentials, GitError
 from cce.indexing.indexer import Indexer
-from cce.jobs.store import cancel_job, enqueue_job, get_job, list_jobs
 from cce.indexing.parser.registry import build_default_registry
+from cce.jobs.store import cancel_job, enqueue_job, get_job, list_jobs
 from cce.storage.graph.repository import GraphRepository
 from cce.storage.vector.store import VectorStore
 from cce.tools.layer1 import (

@@ -47,7 +47,7 @@ class _FakeCursor:
     def __init__(self, rows: list[tuple[Any, ...]]) -> None:
         self._rows = rows
 
-    def __enter__(self) -> "_FakeCursor":
+    def __enter__(self) -> _FakeCursor:
         return self
 
     def __exit__(self, *args: Any) -> None:
