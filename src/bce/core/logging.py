@@ -71,7 +71,7 @@ def setup_logging(settings: Settings | None = None) -> None:
     """Configure the ``bce`` logger tree (console always; rotating file when enabled)."""
     settings = settings or get_settings()
     root = logging.getLogger("bce")
-    if getattr(root, "_cce_configured", False):
+    if getattr(root, "_bce_configured", False):
         return
 
     root.setLevel(settings.log_level.upper())
@@ -93,7 +93,7 @@ def setup_logging(settings: Settings | None = None) -> None:
         file_handler.setFormatter(JsonFormatter())
         root.addHandler(file_handler)
 
-    root._cce_configured = True  # type: ignore[attr-defined]
+    root._bce_configured = True  # type: ignore[attr-defined]
 
 
 def get_logger(name: str) -> logging.Logger:
