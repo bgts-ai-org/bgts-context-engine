@@ -1,4 +1,5 @@
-import { defineConfig } from "vite";
+// Imported from vitest/config rather than vite so the `test` block is typed.
+import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 
 // The bundle is served by the API under /ui, so asset URLs must be prefixed to match.
@@ -9,6 +10,10 @@ export default defineConfig({
   build: {
     outDir: "dist",
     emptyOutDir: true,
+  },
+  test: {
+    environment: "node",
+    include: ["src/**/*.test.ts"],
   },
   server: {
     port: 5173,
