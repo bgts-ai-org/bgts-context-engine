@@ -1,14 +1,15 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { UIRepo, UISearchResult } from "../api";
 import { api } from "../api";
+import { LOCALES, LOCALE_NAMES, isLocale, useTranslation, type TranslationKey } from "../i18n";
 import { EDGE_TYPES, NODE_LABELS, edgeColor, nodeColor } from "../theme";
 
 type SidebarTab = "explore" | "analyze" | "filters";
 
-const TABS: { id: SidebarTab; label: string }[] = [
-  { id: "explore", label: "Keşfet" },
-  { id: "analyze", label: "Analiz" },
-  { id: "filters", label: "Filtreler" },
+const TABS: { id: SidebarTab; labelKey: TranslationKey }[] = [
+  { id: "explore", labelKey: "nav.explore" },
+  { id: "analyze", labelKey: "nav.analyze" },
+  { id: "filters", labelKey: "nav.filters" },
 ];
 
 interface Props {
@@ -34,30 +35,37 @@ export default function Sidebar({
   onFocusNode,
   tracePanel,
 }: Props) {
+  const { t, locale, setLocale } = useTranslation();
   const [tab, setTab] = useState<SidebarTab>("explore");
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<UISearchResult[]>([]);
   const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
   const debounceRef = useRef<number>(0);
 
   useEffect(() => {
     window.clearTimeout(debounceRef.current);
     if (!query.trim() || !selectedRepo) {
       setResults([]);
+      setSearchError(null);
       return;
     }
     debounceRef.current = window.setTimeout(async () => {
       setSearching(true);
+      setSearchError(null);
       try {
         setResults(await api.search(query.trim(), selectedRepo));
-      } catch {
+      } catch (e) {
+        // Surfaced rather than swallowed: an empty result list and a failed request look
+        // identical to the user otherwise.
         setResults([]);
+        setSearchError(t("search.failed", { details: String(e) }));
       } finally {
         setSearching(false);
       }
     }, 250);
     return () => window.clearTimeout(debounceRef.current);
-  }, [query, selectedRepo]);
+  }, [query, selectedRepo, t]);
 
   const hiddenFilterCount = hiddenNodeTypes.size + hiddenEdgeTypes.size;
 
@@ -66,24 +74,27 @@ export default function Sidebar({
       <div className="brand">
         <span className="brand-dot" />
         <div>
-          <h1>BCE Graph Explorer</h1>
-          <p>Kod Graph Görselleştirici</p>
+          <h1>{t("app.title")}</h1>
+          <p>{t("app.subtitle")}</p>
         </div>
       </div>
 
-      <nav className="sidebar-tabs" aria-label="Sidebar sekmeleri">
-        {TABS.map((t) => (
+      <nav className="sidebar-tabs" aria-label={t("nav.tabsLabel")}>
+        {TABS.map((entry) => (
           <button
-            key={t.id}
+            key={entry.id}
             type="button"
             role="tab"
-            aria-selected={tab === t.id}
-            className={`sidebar-tab${tab === t.id ? " active" : ""}`}
-            onClick={() => setTab(t.id)}
+            aria-selected={tab === entry.id}
+            className={`sidebar-tab${tab === entry.id ? " active" : ""}`}
+            onClick={() => setTab(entry.id)}
           >
-            {t.label}
-            {t.id === "filters" && hiddenFilterCount > 0 && (
-              <span className="tab-badge" aria-label={`${hiddenFilterCount} gizli`}>
+            {t(entry.labelKey)}
+            {entry.id === "filters" && hiddenFilterCount > 0 && (
+              <span
+                className="tab-badge"
+                aria-label={t("nav.hiddenCount", { count: hiddenFilterCount })}
+              >
                 {hiddenFilterCount}
               </span>
             )}
@@ -95,13 +106,13 @@ export default function Sidebar({
         {tab === "explore" && (
           <>
             <section>
-              <h2>Repo</h2>
+              <h2>{t("repo.heading")}</h2>
               <select
                 value={selectedRepo ?? ""}
                 onChange={(e) => e.target.value && onSelectRepo(e.target.value)}
               >
                 <option value="" disabled>
-                  Repo secin...
+                  {t("repo.placeholder")}
                 </option>
                 {repos.map((r) => (
                   <option key={r.repo_id} value={r.repo_id}>
@@ -112,15 +123,23 @@ export default function Sidebar({
             </section>
 
             <section>
-              <h2>Arama</h2>
+              <h2>{t("search.heading")}</h2>
               <input
                 type="search"
-                placeholder="Sembol veya dosya ara..."
+                placeholder={t("search.placeholder")}
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 disabled={!selectedRepo}
               />
-              {searching && <p className="muted">araniyor...</p>}
+              {searching && <p className="muted">{t("search.searching")}</p>}
+              {searchError && (
+                <p className="error" role="alert">
+                  {searchError}
+                </p>
+              )}
+              {!searching && !searchError && query.trim() && results.length === 0 && (
+                <p className="muted">{t("search.noResults")}</p>
+              )}
               {results.length > 0 && (
                 <ul className="search-results">
                   {results.map((r) => (
@@ -145,7 +164,7 @@ export default function Sidebar({
         {tab === "filters" && (
           <>
             <section>
-              <h2>Dugum tipleri</h2>
+              <h2>{t("filters.nodeTypes")}</h2>
               <ul className="filter-list">
                 {NODE_LABELS.map((label) => (
                   <li key={label}>
@@ -164,7 +183,7 @@ export default function Sidebar({
             </section>
 
             <section>
-              <h2>Kenar tipleri</h2>
+              <h2>{t("filters.edgeTypes")}</h2>
               <ul className="filter-list">
                 {EDGE_TYPES.map((type) => (
                   <li key={type}>
@@ -186,7 +205,21 @@ export default function Sidebar({
       </div>
 
       <footer className="sidebar-footer">
-        <p>BilgeAdam Technology & Software</p>
+        <label className="locale-picker">
+          <span className="visually-hidden">{t("app.language")}</span>
+          <select
+            value={locale}
+            onChange={(e) => isLocale(e.target.value) && setLocale(e.target.value)}
+            aria-label={t("app.language")}
+          >
+            {LOCALES.map((code) => (
+              <option key={code} value={code}>
+                {LOCALE_NAMES[code]}
+              </option>
+            ))}
+          </select>
+        </label>
+        <p>{t("app.company")}</p>
       </footer>
     </aside>
   );

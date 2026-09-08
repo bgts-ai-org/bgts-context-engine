@@ -1,4 +1,5 @@
 import type { UIStats } from "../api";
+import { useTranslation } from "../i18n";
 import { langColor, nodeColor } from "../theme";
 
 interface Props {
@@ -61,17 +62,19 @@ const formatPct = (count: number, total: number): string => {
 };
 
 export default function StatsBar({ stats, truncated, loading }: Props) {
+  const { t } = useTranslation();
+
   if (loading) {
     return (
       <div className="stats-bar">
-        <span className="muted">graph yukleniyor...</span>
+        <span className="muted">{t("stats.loading")}</span>
       </div>
     );
   }
   if (!stats) {
     return (
       <div className="stats-bar">
-        <span className="muted">Baslamak icin soldan bir repo secin.</span>
+        <span className="muted">{t("stats.selectRepo")}</span>
       </div>
     );
   }
@@ -83,11 +86,11 @@ export default function StatsBar({ stats, truncated, loading }: Props) {
     <div className="stats-bar">
       <div className="stat">
         <span className="stat-value">{formatCount(stats.total_nodes)}</span>
-        <span className="stat-label">dugum</span>
+        <span className="stat-label">{t("stats.nodes")}</span>
       </div>
       <div className="stat">
         <span className="stat-value">{formatCount(stats.total_edges)}</span>
-        <span className="stat-label">kenar</span>
+        <span className="stat-label">{t("stats.edges")}</span>
       </div>
 
       <div className="divider" />
@@ -140,7 +143,7 @@ export default function StatsBar({ stats, truncated, loading }: Props) {
         </>
       )}
 
-      {truncated && <span className="warn">graph limit nedeniyle kirpildi</span>}
+      {truncated && <span className="warn">{t("stats.truncated")}</span>}
     </div>
   );
 }

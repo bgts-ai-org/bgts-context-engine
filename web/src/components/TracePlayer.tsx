@@ -1,3 +1,4 @@
+import { useTranslation } from "../i18n";
 import type { PlaybackStep } from "../trace/tracePlayback";
 
 interface Props {
@@ -22,6 +23,7 @@ export default function TracePlayer({
   onSpeed,
   onClose,
 }: Props) {
+  const { t } = useTranslation();
   const step = steps[index];
   if (!step) return null;
 
@@ -37,18 +39,18 @@ export default function TracePlayer({
           className="icon-btn"
           onClick={() => onSeek(Math.max(index - 1, 0))}
           disabled={index === 0}
-          title="Onceki adim"
+          title={t("player.prev")}
         >
           {"|<"}
         </button>
-        <button className="icon-btn play-btn" onClick={onTogglePlay} title="Oynat / duraklat">
+        <button className="icon-btn play-btn" onClick={onTogglePlay} title={t("player.playPause")}>
           {playing ? "||" : ">"}
         </button>
         <button
           className="icon-btn"
           onClick={() => onSeek(Math.min(index + 1, steps.length - 1))}
           disabled={index === steps.length - 1}
-          title="Sonraki adim"
+          title={t("player.next")}
         >
           {">|"}
         </button>
@@ -68,14 +70,14 @@ export default function TracePlayer({
           className="speed-select"
           value={speed}
           onChange={(e) => onSpeed(Number(e.target.value))}
-          title="Oynatma hizi"
+          title={t("player.speed")}
         >
           <option value={0.5}>0.5x</option>
           <option value={1}>1x</option>
           <option value={2}>2x</option>
         </select>
 
-        <button className="icon-btn" onClick={onClose} title="Analizi kapat">
+        <button className="icon-btn" onClick={onClose} title={t("player.close")}>
           x
         </button>
       </div>

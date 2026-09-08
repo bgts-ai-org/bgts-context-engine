@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Graph from "graphology";
 import type { TraceResponse, UIRepo, UIStats } from "./api";
-import { api, API_BASE } from "./api";
+import { api } from "./api";
+import { useTranslation } from "./i18n";
 import { buildGraph, mergeNeighbors } from "./graph/buildGraph";
 import GraphView from "./graph/GraphView";
 import DetailPanel from "./components/DetailPanel";
@@ -15,6 +16,7 @@ import { buildSteps, ensureTraceNodes, type PlaybackStep } from "./trace/tracePl
 const STEP_DURATION_MS = 2600;
 
 export default function App() {
+  const { t } = useTranslation();
   const [repos, setRepos] = useState<UIRepo[]>([]);
   const [selectedRepo, setSelectedRepo] = useState<string | null>(null);
   const [graph, setGraph] = useState<Graph | null>(null);
@@ -40,12 +42,8 @@ export default function App() {
     api
       .repos()
       .then(setRepos)
-      .catch((e) =>
-        setError(
-          `API'ye ulasilamadi (${API_BASE}). 'bce serve' calisiyor mu? Detay: ${e}`,
-        ),
-      );
-  }, []);
+      .catch((e) => setError(t("error.apiUnreachable", { details: String(e) })));
+  }, [t]);
 
   const closeTrace = useCallback(() => {
     window.clearTimeout(traceTimerRef.current);
@@ -74,12 +72,12 @@ export default function App() {
         setTruncated(graphData.truncated);
         setStats(statsData);
       } catch (e) {
-        setError(`Graph yuklenemedi: ${e}`);
+        setError(t("error.graphLoad", { details: String(e) }));
       } finally {
         setLoading(false);
       }
     },
-    [closeTrace],
+    [closeTrace, t],
   );
 
   const runTrace = useCallback(
@@ -96,9 +94,9 @@ export default function App() {
           maxCandidates,
           maxTokens,
         );
-        const steps = buildSteps(result);
+        const steps = buildSteps(result, t);
         if (steps.length === 0) {
-          setError("Pipeline hicbir aday uretmedi; farkli bir gorev metni deneyin.");
+          setError(t("error.noCandidates"));
           return;
         }
         ensureTraceNodes(graph, result);
@@ -107,12 +105,12 @@ export default function App() {
         setTraceIndex(0);
         setTracePlaying(true);
       } catch (e) {
-        setError(`Analiz calistirilamadi: ${e}`);
+        setError(t("error.traceRun", { details: String(e) }));
       } finally {
         setTraceRunning(false);
       }
     },
-    [selectedRepo, graph, closeTrace],
+    [selectedRepo, graph, closeTrace, t],
   );
 
   // Auto-advance playback; pauses at the last step.
@@ -153,10 +151,10 @@ export default function App() {
         mergeNeighbors(graph, gid, data.nodes, data.edges);
         setSelectedId(gid);
       } catch (e) {
-        setError(`Komsular genisletilemedi: ${e}`);
+        setError(t("error.expandNeighbors", { details: String(e) }));
       }
     },
-    [graph],
+    [graph, t],
   );
 
   const focusNode = useCallback((gid: string) => {
@@ -221,23 +219,20 @@ export default function App() {
           {error && <div className="toast error">{error}</div>}
           {!graph && !loading && !error && (
             <div className="empty-state">
-              <h2>Kod graph'inizi kesfedin</h2>
-              <p>
-                Soldan indexlenmis bir repo secin; dosyalar, semboller ve aralarindaki
-                cagri/iliski kenarlari interaktif olarak cizilir.
-              </p>
+              <h2>{t("empty.title")}</h2>
+              <p>{t("empty.body")}</p>
             </div>
           )}
           {loading && (
             <div className="empty-state">
               <div className="spinner" />
-              <p>Graph yukleniyor ve yerlesim hesaplaniyor...</p>
+              <p>{t("empty.loadingGraph")}</p>
             </div>
           )}
           {traceRunning && !loading && (
             <div className="search-status" aria-live="polite">
               <span className="search-status-dot" />
-              Bağlam aranıyor...
+              {t("empty.searchingContext")}
             </div>
           )}
           <GraphView

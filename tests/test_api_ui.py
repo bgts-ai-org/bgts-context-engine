@@ -10,10 +10,12 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 
 from bce.api.rest.app import create_app
 from bce.api.rest.deps import get_repository
+from bce.config import get_settings
 
 _SYMBOL_VERTEX = {
     "label": "Symbol",
@@ -396,3 +398,23 @@ def test_ui_context_trace_without_semantic_stage() -> None:
 def test_ui_context_trace_registered_in_openapi() -> None:
     paths = set(create_app().openapi()["paths"])
     assert "/v1/ui/context-trace" in paths
+
+
+def test_ui_config_needs_no_database() -> None:
+    """The frontend calls this before anything else, so it must not touch the database."""
+    resp = TestClient(create_app()).get("/v1/ui/config")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["default_locale"] in body["supported_locales"]
+    assert body["version"]
+
+
+def test_ui_config_reports_the_configured_locale(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BCE_DEFAULT_LOCALE", "tr")
+    get_settings.cache_clear()
+    try:
+        resp = TestClient(create_app()).get("/v1/ui/config")
+        assert resp.json()["default_locale"] == "tr"
+    finally:
+        get_settings.cache_clear()

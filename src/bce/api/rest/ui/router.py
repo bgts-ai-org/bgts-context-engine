@@ -15,9 +15,11 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from bce import __version__
 from bce.api.rest.deps import get_repository, get_vector_store
 from bce.api.rest.ui import queries
 from bce.api.rest.ui.schemas import (
+    UIConfigResponse,
     UIGraphResponse,
     UINeighborsResponse,
     UINodeDetailResponse,
@@ -27,6 +29,7 @@ from bce.api.rest.ui.schemas import (
     UITraceRequest,
     UITraceResponse,
 )
+from bce.config import get_settings
 from bce.storage.graph.repository import GraphRepository
 from bce.storage.vector.store import VectorStore
 
@@ -38,6 +41,17 @@ def _csv(value: str | None) -> list[str] | None:
         return None
     items = [part.strip() for part in value.split(",") if part.strip()]
     return items or None
+
+
+@router.get("/config", response_model=UIConfigResponse)
+def ui_config() -> dict[str, Any]:
+    """Presentation settings for the frontend. Needs no database, so it is safe to call first."""
+    settings = get_settings()
+    return {
+        "version": __version__,
+        "default_locale": settings.default_locale,
+        "supported_locales": list(settings.supported_locales),
+    }
 
 
 @router.get("/repos", response_model=UIRepoListResponse)

@@ -9,6 +9,7 @@ import go from "highlight.js/lib/languages/go";
 import "highlight.js/styles/atom-one-dark.css";
 import type { UINeighbors, UINode } from "../api";
 import { api } from "../api";
+import { useTranslation } from "../i18n";
 import { edgeColor, nodeColor } from "../theme";
 
 hljs.registerLanguage("python", python);
@@ -41,6 +42,7 @@ function guessLanguage(node: UINode): string | null {
 }
 
 export default function DetailPanel({ gid, onClose, onFocusNode }: Props) {
+  const { t } = useTranslation();
   const [node, setNode] = useState<UINode | null>(null);
   const [neighbors, setNeighbors] = useState<UINeighbors | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -104,7 +106,7 @@ export default function DetailPanel({ gid, onClose, onFocusNode }: Props) {
           )}
           <h2 title={gid}>{node?.display ?? "..."}</h2>
         </div>
-        <button className="icon-btn" onClick={onClose} title="Kapat">
+        <button className="icon-btn" onClick={onClose} title={t("detail.close")}>
           x
         </button>
       </header>
@@ -126,21 +128,21 @@ export default function DetailPanel({ gid, onClose, onFocusNode }: Props) {
 
           {typeof node.properties.docstring === "string" && node.properties.docstring && (
             <section>
-              <h3>Docstring</h3>
+              <h3>{t("detail.docstring")}</h3>
               <p className="docstring">{node.properties.docstring}</p>
             </section>
           )}
 
           {typeof node.properties.text === "string" && node.properties.text && (
             <section>
-              <h3>Not</h3>
+              <h3>{t("detail.note")}</h3>
               <p className="docstring">{node.properties.text}</p>
             </section>
           )}
 
           {body && (
             <section>
-              <h3>Kod</h3>
+              <h3>{t("detail.code")}</h3>
               <pre className="code-block">
                 {highlighted ? (
                   <code dangerouslySetInnerHTML={{ __html: highlighted }} />
@@ -153,7 +155,7 @@ export default function DetailPanel({ gid, onClose, onFocusNode }: Props) {
 
           {neighbors && neighbors.edges.length > 0 && (
             <section>
-              <h3>Baglantilar ({neighbors.edges.length})</h3>
+              <h3>{t("detail.connections", { count: neighbors.edges.length })}</h3>
               <ul className="neighbor-list">
                 {neighbors.edges.slice(0, 60).map((edge) => {
                   const isOut = edge.source === gid;

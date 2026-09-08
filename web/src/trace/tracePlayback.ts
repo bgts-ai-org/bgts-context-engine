@@ -1,5 +1,6 @@
 import Graph from "graphology";
 import type { TraceResponse } from "../api";
+import type { TranslateFn } from "../i18n";
 
 /** Visual state of one node during a playback step. */
 export interface NodeHighlight {
@@ -44,7 +45,7 @@ function heatColor(t: number): string {
 }
 
 /** Build the ordered animation steps from a pipeline trace. */
-export function buildSteps(trace: TraceResponse): PlaybackStep[] {
+export function buildSteps(trace: TraceResponse, t: TranslateFn): PlaybackStep[] {
   const byName = new Map(trace.stages.map((s) => [s.stage, s]));
   const steps: PlaybackStep[] = [];
 
@@ -64,8 +65,8 @@ export function buildSteps(trace: TraceResponse): PlaybackStep[] {
     }
     steps.push({
       id: "semantic",
-      title: "Semantik adaylar",
-      subtitle: `Embedding aramasi ${semanticIds.length} aday buldu (en dusuk oncelikli capa kaynagi)`,
+      title: t("steps.semantic.title"),
+      subtitle: t("steps.semantic.subtitle", { count: semanticIds.length }),
       highlights,
       focusIds: semanticIds,
     });
@@ -84,8 +85,11 @@ export function buildSteps(trace: TraceResponse): PlaybackStep[] {
     .join(", ");
   steps.push({
     id: "anchors",
-    title: "Capalar",
-    subtitle: `${anchorHighlights.size} capa atildi (${sourceSummary || "kaynak yok"})`,
+    title: t("steps.anchors.title"),
+    subtitle: t("steps.anchors.subtitle", {
+      count: anchorHighlights.size,
+      sources: sourceSummary || t("steps.anchors.noSources"),
+    }),
     highlights: anchorHighlights,
     focusIds: [...anchorHighlights.keys()],
   });
@@ -107,8 +111,12 @@ export function buildSteps(trace: TraceResponse): PlaybackStep[] {
     }
     steps.push({
       id: `expand-${dist}`,
-      title: `Genisleme (${dist}. adim)`,
-      subtitle: `${wave.length} yeni dugum ${dist} mesafede kesfedildi (toplam ${cumulative.size})`,
+      title: t("steps.expand.title", { distance: dist }),
+      subtitle: t("steps.expand.subtitle", {
+        count: wave.length,
+        distance: dist,
+        total: cumulative.size,
+      }),
       highlights: cumulative,
       focusIds: [...cumulative.keys()],
     });
@@ -133,8 +141,8 @@ export function buildSteps(trace: TraceResponse): PlaybackStep[] {
     const signalCount = Object.keys(scoreStage?.task_signals ?? {}).length;
     steps.push({
       id: "score",
-      title: "Skorlama",
-      subtitle: `${ranked.length} aday skorlandi (${signalCount} gorev sinyali); sicak renk = yuksek skor`,
+      title: t("steps.score.title"),
+      subtitle: t("steps.score.subtitle", { count: ranked.length, signals: signalCount }),
       highlights,
       focusIds: ranked.slice(0, 12).map((c) => c.symbol_id),
     });
@@ -154,8 +162,8 @@ export function buildSteps(trace: TraceResponse): PlaybackStep[] {
     }
     steps.push({
       id: "narrow",
-      title: `Daraltma: ilk ${selected.length}`,
-      subtitle: `${ranked.length} aday icinden ilk ${selected.length} secildi`,
+      title: t("steps.narrow.title", { count: selected.length }),
+      subtitle: t("steps.narrow.subtitle", { count: selected.length, total: ranked.length }),
       highlights,
       focusIds: selected.map((s) => s.symbol_id),
     });
@@ -163,10 +171,11 @@ export function buildSteps(trace: TraceResponse): PlaybackStep[] {
     const coverage = assembleStage?.coverage as { confidence?: string } | undefined;
     steps.push({
       id: "result",
-      title: "Sonuc",
-      subtitle: `Baglam paketi hazir - guven: ${coverage?.confidence ?? "?"}, ${
-        assembleStage?.context?.included ?? selected.length
-      } oge dahil`,
+      title: t("steps.result.title"),
+      subtitle: t("steps.result.subtitle", {
+        confidence: coverage?.confidence ?? "?",
+        included: assembleStage?.context?.included ?? selected.length,
+      }),
       highlights,
       focusIds: selected.map((s) => s.symbol_id),
     });

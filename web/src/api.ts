@@ -11,6 +11,12 @@ export const API_BASE: string = (import.meta.env.VITE_BCE_API as string | undefi
 export const GRAPH_NODE_LIMIT: string = (import.meta.env.VITE_BCE_NODE_LIMIT as string) ?? "20000";
 export const GRAPH_EDGE_LIMIT: string = (import.meta.env.VITE_BCE_EDGE_LIMIT as string) ?? "100000";
 
+export interface UIConfig {
+  version: string;
+  default_locale: string;
+  supported_locales: string[];
+}
+
 export interface UIRepo {
   repo_id: string;
   name: string;
@@ -145,6 +151,7 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
 }
 
 export const api = {
+  config: () => getJson<UIConfig>("/v1/ui/config"),
   repos: () => getJson<{ repos: UIRepo[] }>("/v1/ui/repos").then((r) => r.repos),
   graph: (repoId: string) =>
     getJson<UIGraph>("/v1/ui/graph", {

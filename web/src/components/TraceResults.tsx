@@ -1,4 +1,5 @@
 import type { TraceResponse, TraceRankedCandidate } from "../api";
+import { useTranslation } from "../i18n";
 import type { PlaybackStep } from "../trace/tracePlayback";
 
 interface Props {
@@ -11,6 +12,7 @@ const SHOW_RANKED_FROM = new Set(["score", "narrow", "result"]);
 
 /** Right panel during trace playback: ranked candidates, top-N once narrowing happened. */
 export default function TraceResults({ trace, step, onFocusNode }: Props) {
+  const { t } = useTranslation();
   const byName = new Map(trace.stages.map((s) => [s.stage, s]));
   const ranked = byName.get("score")?.ranked ?? [];
   const selected = byName.get("narrow")?.selected ?? [];
@@ -31,9 +33,11 @@ export default function TraceResults({ trace, step, onFocusNode }: Props) {
       <header>
         <div>
           <span className="chip" style={{ borderColor: "#fbbf24" }}>
-            {isFinal ? `TOP ${selected.length}` : "ADAYLAR"}
+            {isFinal
+              ? t("results.topChip", { count: selected.length })
+              : t("results.candidatesChip")}
           </span>
-          <h2>Gorev analizi</h2>
+          <h2>{t("trace.heading")}</h2>
         </div>
       </header>
 
@@ -43,15 +47,15 @@ export default function TraceResults({ trace, step, onFocusNode }: Props) {
         {isFinal && coverage && (
           <dl className="info-grid">
             <div>
-              <dt>guven</dt>
+              <dt>{t("results.confidence")}</dt>
               <dd>{coverage.confidence}</dd>
             </div>
             <div>
-              <dt>capa</dt>
+              <dt>{t("results.anchors")}</dt>
               <dd>{coverage.anchor_count}</dd>
             </div>
             <div>
-              <dt>aday</dt>
+              <dt>{t("results.candidates")}</dt>
               <dd>{coverage.candidate_count}</dd>
             </div>
           </dl>
@@ -59,7 +63,11 @@ export default function TraceResults({ trace, step, onFocusNode }: Props) {
 
         {showRanked && list.length > 0 && (
           <section>
-            <h3>{isFinal ? "Secilen adaylar" : `Skor siralamasi (ilk ${list.length})`}</h3>
+            <h3>
+              {isFinal
+                ? t("results.selectedHeading")
+                : t("results.scoreHeading", { count: list.length })}
+            </h3>
             <ul className="ranked-list">
               {list.map((cand, i) => {
                 const meta = trace.symbols[cand.symbol_id];
@@ -83,11 +91,7 @@ export default function TraceResults({ trace, step, onFocusNode }: Props) {
           </section>
         )}
 
-        {!showRanked && (
-          <p className="muted">
-            Animasyon ilerledikce skorlanan adaylar burada listelenecek.
-          </p>
-        )}
+        {!showRanked && <p className="muted">{t("results.waiting")}</p>}
       </div>
     </aside>
   );

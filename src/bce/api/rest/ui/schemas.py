@@ -11,6 +11,14 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 
+class UIConfigResponse(BaseModel):
+    """Presentation settings the frontend needs before it renders anything."""
+
+    version: str = Field(description="Version of the running engine.")
+    default_locale: str = Field(description="Deployment-wide UI language (BCE_DEFAULT_LOCALE).")
+    supported_locales: list[str] = Field(description="Locales the engine has catalogs for.")
+
+
 class UIRepo(BaseModel):
     repo_id: str
     name: str

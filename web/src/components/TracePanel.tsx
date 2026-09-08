@@ -1,7 +1,23 @@
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "../i18n";
 
-const TOP_N_OPTIONS = [4, 8, 12, 16];
-const MAX_TOKEN_OPTIONS = [2000, 4000, 8000, 16000];
+/** Preset choices for the two pipeline knobs; overridable via VITE_BCE_* at build time. */
+const parsePresets = (raw: string | undefined, fallback: number[]): number[] => {
+  const parsed = (raw ?? "")
+    .split(",")
+    .map((part) => Number(part.trim()))
+    .filter((n) => Number.isFinite(n) && n > 0);
+  return parsed.length > 0 ? parsed : fallback;
+};
+
+const TOP_N_OPTIONS = parsePresets(
+  import.meta.env.VITE_BCE_TOP_N_PRESETS as string | undefined,
+  [4, 8, 12, 16],
+);
+const MAX_TOKEN_OPTIONS = parsePresets(
+  import.meta.env.VITE_BCE_TOKEN_PRESETS as string | undefined,
+  [2000, 4000, 8000, 16000],
+);
 
 interface Props {
   repoName: string | null;
@@ -12,9 +28,14 @@ interface Props {
 
 /** Task input for the pipeline trace: text + params, fires the analysis. */
 export default function TracePanel({ repoName, disabled, running, onRun }: Props) {
+  const { t } = useTranslation();
   const [taskText, setTaskText] = useState("");
-  const [maxCandidates, setMaxCandidates] = useState(8);
-  const [maxTokens, setMaxTokens] = useState(4000);
+  const [maxCandidates, setMaxCandidates] = useState(
+    () => TOP_N_OPTIONS[Math.min(1, TOP_N_OPTIONS.length - 1)],
+  );
+  const [maxTokens, setMaxTokens] = useState(
+    () => MAX_TOKEN_OPTIONS[Math.min(1, MAX_TOKEN_OPTIONS.length - 1)],
+  );
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -31,28 +52,28 @@ export default function TracePanel({ repoName, disabled, running, onRun }: Props
       <div className="trace-repo" title={repoName ?? undefined}>
         {repoName ? (
           <>
-            <span className="trace-repo-label">Repo</span>
+            <span className="trace-repo-label">{t("trace.repoLabel")}</span>
             <span className="trace-repo-name">{repoName}</span>
           </>
         ) : (
-          <span className="muted">Once bir repo secin.</span>
+          <span className="muted">{t("trace.selectRepoFirst")}</span>
         )}
       </div>
 
-      <h2>Gorev analizi</h2>
+      <h2>{t("trace.heading")}</h2>
       <textarea
         ref={textareaRef}
         className="task-input"
         rows={3}
-        placeholder="Gorev metni girin, orn: fix login timeout in meeting webhook..."
+        placeholder={t("trace.taskPlaceholder")}
         value={taskText}
         onChange={(e) => setTaskText(e.target.value)}
         disabled={disabled}
       />
 
       <div className="task-param">
-        <span className="task-param-label">Top-N</span>
-        <div className="task-param-options" role="group" aria-label="Top-N">
+        <span className="task-param-label">{t("trace.topN")}</span>
+        <div className="task-param-options" role="group" aria-label={t("trace.topN")}>
           {TOP_N_OPTIONS.map((n) => (
             <button
               key={n}
@@ -68,8 +89,8 @@ export default function TracePanel({ repoName, disabled, running, onRun }: Props
       </div>
 
       <div className="task-param">
-        <span className="task-param-label">max_tokens</span>
-        <div className="task-param-options" role="group" aria-label="max_tokens">
+        <span className="task-param-label">{t("trace.maxTokens")}</span>
+        <div className="task-param-options" role="group" aria-label={t("trace.maxTokens")}>
           {MAX_TOKEN_OPTIONS.map((n) => (
             <button
               key={n}
@@ -89,7 +110,7 @@ export default function TracePanel({ repoName, disabled, running, onRun }: Props
         disabled={!canRun}
         onClick={() => onRun(taskText.trim(), maxCandidates, maxTokens)}
       >
-        {running ? "Calisiyor..." : "Analiz Et"}
+        {running ? t("trace.running") : t("trace.run")}
       </button>
     </section>
   );

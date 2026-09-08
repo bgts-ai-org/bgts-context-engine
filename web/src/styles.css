@@ -254,6 +254,10 @@ pre {
 
 .sidebar-footer {
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   color: var(--text-dim);
   font-size: 11px;
   border-top: 1px solid var(--border);
@@ -262,6 +266,25 @@ pre {
 
 .sidebar-footer p {
   margin: 0;
+}
+
+.locale-picker select {
+  width: auto;
+  padding: 3px 6px;
+  font-size: 11px;
+}
+
+/* Available to screen readers, removed from the visual layout. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 /* --- Main / stats --- */
