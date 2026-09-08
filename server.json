@@ -1,0 +1,76 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.bilgeadamtechnology/bgts-context-engine",
+  "title": "BGTS Context Engine",
+  "description": "Deterministic code-graph context for AI coding agents over PostgreSQL, Apache AGE and pgvector",
+  "version": "0.1.0",
+  "websiteUrl": "https://github.com/bilgeadamtechnology/BGTS-Context-Engine",
+  "repository": {
+    "url": "https://github.com/bilgeadamtechnology/BGTS-Context-Engine",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "bgts-context-engine",
+      "version": "0.1.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "runtimeHint": "uvx",
+      "runtimeArguments": [
+        {
+          "type": "named",
+          "name": "--from",
+          "value": "bgts-context-engine[mcp]",
+          "description": "The MCP surface lives behind the 'mcp' extra; the REST API does not need it."
+        },
+        {
+          "type": "positional",
+          "valueHint": "executable",
+          "value": "bce",
+          "description": "Console script installed by the package."
+        }
+      ],
+      "packageArguments": [
+        {
+          "type": "positional",
+          "valueHint": "command",
+          "value": "serve-mcp",
+          "description": "Serve the 14 MCP tools over stdio."
+        }
+      ],
+      "environmentVariables": [
+        {
+          "name": "BCE_DB_HOST",
+          "description": "PostgreSQL host running Apache AGE and pgvector.",
+          "default": "localhost",
+          "isRequired": true
+        },
+        {
+          "name": "BCE_DB_PORT",
+          "description": "PostgreSQL port.",
+          "default": "5432",
+          "format": "number"
+        },
+        {
+          "name": "BCE_DB_NAME",
+          "description": "Database holding the code graph.",
+          "default": "bce"
+        },
+        {
+          "name": "BCE_DB_USER",
+          "description": "Database user.",
+          "default": "bce"
+        },
+        {
+          "name": "BCE_DB_PASSWORD",
+          "description": "Database password.",
+          "default": "bce",
+          "isSecret": true
+        }
+      ]
+    }
+  ]
+}

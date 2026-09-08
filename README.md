@@ -1,3 +1,5 @@
+<!-- mcp-name: io.github.bilgeadamtechnology/bgts-context-engine -->
+
 <div align="center">
 
 <!-- Absolute URL: this README is also the PyPI project description, where relative paths break. -->
