@@ -15,8 +15,9 @@ First public release.
 
 - Deterministic retrieval pipeline: anchor discovery, graph expansion, scoring, narrowing
   and context assembly, with coverage and confidence reporting.
-- Code graph over PostgreSQL with Apache AGE and pgvector in a single database, including
-  row-level security scoped by the `X-BCE-User` header.
+- Code graph over PostgreSQL with Apache AGE and pgvector in a single database. Layer-3
+  results are filtered per user against the `scopes` table, resolved from the
+  `X-BCE-User` header.
 - Tree-sitter indexing for Python, JavaScript and TypeScript, with optional grammars for
   Java, C# and Go. Incremental re-indexing driven by `git diff`.
 - Layer 1, 2 and 3 tool surfaces exposed over both REST and MCP.

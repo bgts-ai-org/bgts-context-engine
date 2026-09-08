@@ -29,13 +29,22 @@ credit you in the advisory unless you prefer otherwise.
 These are documented behaviours rather than vulnerabilities, but they affect how safely
 an instance can be exposed:
 
-- **The `/v1/ui/*` endpoints are unauthenticated.** They are read-only, but unlike the
-  Layer-3 endpoints they do not apply the `X-BCE-User` scope filter. Anyone who can reach
-  the port can read the indexed graph, including source bodies. Put the engine behind a
-  reverse proxy that handles authentication before exposing it beyond a trusted network.
-- **`X-BCE-User` is trusted as given.** The header selects a row-level security scope and
-  is not itself verified. Whatever sits in front of the engine is responsible for
-  authenticating the user and setting or overwriting this header.
+- **Only the Layer-3 endpoints apply the scope filter.** Layer 1, Layer 2, the indexing
+  and job endpoints, and everything under `/v1/ui/*` do not. Anyone who can reach the port
+  can read the indexed graph, including symbol bodies. Put the engine behind a reverse
+  proxy that handles authentication before exposing it beyond a trusted network.
+- **`X-BCE-User` is trusted as given.** The header names the user whose rows in the
+  `scopes` table decide which repositories a Layer-3 answer may include; the header itself
+  is not verified. Whatever sits in front of the engine is responsible for authenticating
+  the user and for setting or overwriting this header.
+- **The row-level security policies are not the enforcement path.** Migration
+  `0004_rls.sql` defines policies on `repos` and `embeddings` keyed on the
+  `bce.user_id` session variable, but the application never sets that variable. Scoping is
+  enforced in application code (`ScopeFilter`), and only on Layer 3. Do not rely on RLS
+  alone; if you connect to the database directly, set `bce.user_id` yourself.
+- **The MCP stdio server runs unscoped.** It does not pass a user id, so Layer-3 tools
+  behave as the system principal and can see every indexed repository. Run one process per
+  trust boundary.
 - **The Compose file ships development credentials.** `deploy/docker-compose.yml` and
   `.env.example` use `bce` as database name, role and password so that a local setup works
   immediately. Change all three before running anywhere else.
