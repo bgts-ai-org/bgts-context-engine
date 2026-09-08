@@ -1,15 +1,51 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "bgts-context-engine"
-version = "0.0.1"
-description = "BGTS Context Engine (BCE) - deterministic, multi-language code-graph context engine"
+dynamic = ["version"]
+description = "Deterministic code-graph context engine for AI coding agents - PostgreSQL, Apache AGE and pgvector, over MCP and REST"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "Proprietary" }
-authors = [{ name = "Cortex" }]
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Oğuz Öztürk" },
+    { name = "Enes İyidil" },
+]
+maintainers = [
+    { name = "BilgeAdam Technology" },
+]
+keywords = [
+    "mcp",
+    "mcp-server",
+    "ai-agents",
+    "context-engineering",
+    "code-graph",
+    "code-search",
+    "codebase-indexing",
+    "rag",
+    "tree-sitter",
+    "apache-age",
+    "pgvector",
+    "postgresql",
+    "static-analysis",
+    "developer-tools",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Text Processing :: Indexing",
+    "Typing :: Typed",
+]
 
 dependencies = [
     "fastapi>=0.110",
@@ -49,6 +85,16 @@ langs = [
 
 [project.scripts]
 bce = "bce.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/bilgeadamtechnology/BGTS-Context-Engine"
+Documentation = "https://github.com/bilgeadamtechnology/BGTS-Context-Engine/tree/main/docs"
+Repository = "https://github.com/bilgeadamtechnology/BGTS-Context-Engine"
+Issues = "https://github.com/bilgeadamtechnology/BGTS-Context-Engine/issues"
+Changelog = "https://github.com/bilgeadamtechnology/BGTS-Context-Engine/blob/main/CHANGELOG.md"
+
+[tool.setuptools.dynamic]
+version = { attr = "bce.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["src"]

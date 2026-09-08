@@ -29,6 +29,28 @@ def _echo_json(data: object) -> None:
     typer.echo(json.dumps(data, ensure_ascii=False, indent=2, default=str))
 
 
+def _print_version(value: bool) -> None:
+    if value:
+        from bce import __version__
+
+        typer.echo(f"bce {__version__}")
+        raise typer.Exit()
+
+
+@app.callback()
+def _root(
+    version: bool = typer.Option(
+        False,
+        "--version",
+        "-V",
+        help="Show the engine version and exit",
+        callback=_print_version,
+        is_eager=True,
+    ),
+) -> None:
+    """BGTS Context Engine: deterministic code-graph context for AI coding agents."""
+
+
 @app.command()
 def migrate() -> None:
     """Apply pending database migrations."""
@@ -89,7 +111,9 @@ def index(
 def index_remote_cmd(
     url: str = typer.Option(..., "--url", help="Bitbucket repository URL (https or ssh form)"),
     name: str | None = typer.Option(None, "--name", help="Logical name (default: workspace/repo)"),
-    branch: str | None = typer.Option(None, "--branch", help="Branch to index (default: remote HEAD)"),
+    branch: str | None = typer.Option(
+        None, "--branch", help="Branch to index (default: remote HEAD)"
+    ),
     token: str | None = typer.Option(
         None, "--token", help="Access token / app password (else env BCE_BITBUCKET_TOKEN)"
     ),
@@ -126,7 +150,9 @@ def index_remote_cmd(
         typer.echo(tr.translate("error.invalid_repo_url", loc, detail=str(exc)), err=True)
         raise typer.Exit(code=2) from exc
     except GitError as exc:
-        typer.echo(tr.translate("error.remote_index_failed", loc, url=url, detail=str(exc)), err=True)
+        typer.echo(
+            tr.translate("error.remote_index_failed", loc, url=url, detail=str(exc)), err=True
+        )
         raise typer.Exit(code=1) from exc
 
     typer.echo(
@@ -157,8 +183,12 @@ def index_remote_cmd(
 
 @app.command()
 def reindex(
-    repo: Path = typer.Option(..., "--repo", help="Path to the local repository (git working tree)"),
-    name: str = typer.Option(..., "--name", help="Logical repository name (must match prior index)"),
+    repo: Path = typer.Option(
+        ..., "--repo", help="Path to the local repository (git working tree)"
+    ),
+    name: str = typer.Option(
+        ..., "--name", help="Logical repository name (must match prior index)"
+    ),
     since: str | None = typer.Option(
         None, "--since", help="Baseline commit (default: repo's last_indexed_commit)"
     ),
@@ -253,7 +283,9 @@ def find_references_cmd(
 def context(
     task: str = typer.Option(..., "--task", help="Task title + description text"),
     max_tokens: int = typer.Option(4000, "--max-tokens", help="Token budget for assembly"),
-    max_candidates: int = typer.Option(8, "--max-candidates", help="Narrow to at most N candidates"),
+    max_candidates: int = typer.Option(
+        8, "--max-candidates", help="Narrow to at most N candidates"
+    ),
     commit: str | None = typer.Option(None, "--commit", help="Pinned commit sha (stage 0)"),
     locale: str | None = typer.Option(None, "--locale", help="Message locale (en/tr)"),
 ) -> None:
@@ -284,7 +316,9 @@ def context(
 def bench(
     cases: Path = typer.Option(..., "--cases", help="Path to a JSON file of benchmark cases"),
     out: Path | None = typer.Option(None, "--out", help="Write the JSON report here (else stdout)"),
-    determinism_runs: int = typer.Option(3, "--determinism-runs", help="Repeats for the determinism check"),
+    determinism_runs: int = typer.Option(
+        3, "--determinism-runs", help="Repeats for the determinism check"
+    ),
 ) -> None:
     """POC benchmark: run a task set and report latency/recall/precision/determinism/RLS as JSON."""
     from bce.bench.runner import load_cases, run_benchmark
