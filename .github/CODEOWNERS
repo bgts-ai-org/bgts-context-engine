@@ -1,0 +1,14 @@
+# Default reviewers for everything.
+*                           @oztrkoguz @enesiyidil
+
+# The deterministic line: anchor discovery, expansion, scoring, assembly and coverage.
+# Changes here can silently break reproducibility of context packages.
+/src/bce/core/orchestrator/ @oztrkoguz @enesiyidil
+/src/bce/core/scoring/      @oztrkoguz @enesiyidil
+/src/bce/core/assembler/    @oztrkoguz @enesiyidil
+/src/bce/core/coverage/     @oztrkoguz @enesiyidil
+
+# Packaging, CI and release plumbing.
+/pyproject.toml             @oztrkoguz @enesiyidil
+/.github/workflows/         @oztrkoguz @enesiyidil
+/scripts/                   @oztrkoguz @enesiyidil

@@ -1,0 +1,48 @@
+name: Language support
+description: Request or offer support for a programming language
+labels: ["enhancement", "language-support"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Python, JavaScript and TypeScript are supported out of the box. Java, C# and Go
+        ship as the optional `langs` extra. Adding a language is documented in
+        [docs/languages.md](../../blob/main/docs/languages.md).
+
+  - type: input
+    id: language
+    attributes:
+      label: Language
+      placeholder: Rust
+    validations:
+      required: true
+
+  - type: input
+    id: grammar
+    attributes:
+      label: Tree-sitter grammar
+      description: The PyPI package or grammar repository to build on.
+      placeholder: tree-sitter-rust
+    validations:
+      required: true
+
+  - type: textarea
+    id: constructs
+    attributes:
+      label: Constructs to extract
+      description: >
+        Which declarations should become graph nodes, and which relationships should become
+        edges. Note anything the language does differently from those already supported.
+      placeholder: |
+        Nodes: fn, struct, enum, trait, impl blocks, mod
+        Edges: calls, implements (impl Trait for Type), imports (use paths)
+        Notable: macros expand to code the grammar does not see; generics are monomorphised
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: contribute
+    attributes:
+      label: Would you like to implement this?
+      options:
+        - label: I am willing to open a pull request

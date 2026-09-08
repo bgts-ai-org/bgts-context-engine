@@ -1,0 +1,87 @@
+name: Bug report
+description: Something behaves differently than documented
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. If this is a security issue, please follow
+        [SECURITY.md](../../blob/main/SECURITY.md) instead of filing it here.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you expected, and what you got instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: >
+        The exact commands or requests you ran. A small repository or source file that
+        triggers the problem is the most useful thing you can attach.
+      placeholder: |
+        1. bce index --repo ./example --name example
+        2. curl -X POST localhost:8000/v1/context/pack -d '{"task": "..."}'
+        3. The response omits the caller of `handle_login`
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `bce --version`, or the commit you are on.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: language
+    attributes:
+      label: Indexed language
+      description: Which language was being indexed or queried. Leave blank if unrelated.
+      multiple: true
+      options:
+        - Python
+        - JavaScript
+        - TypeScript
+        - Java
+        - C#
+        - Go
+        - Not language specific
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Where
+      options:
+        - CLI
+        - REST API
+        - MCP server
+        - Web interface (/ui)
+        - Indexing
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Operating system, Python version, and how PostgreSQL is running.
+      placeholder: |
+        OS: Ubuntu 24.04
+        Python: 3.12.3
+        Database: deploy/docker-compose.yml, unmodified
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant output or traceback. Redact anything sensitive.
+      render: shell

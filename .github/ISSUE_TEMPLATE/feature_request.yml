@@ -1,0 +1,45 @@
+name: Feature request
+description: Suggest a capability or a change in behaviour
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: >
+        What are you trying to do that the engine makes hard today? Describe the situation
+        rather than the solution.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you have in mind
+      description: The behaviour, endpoint, tool or flag you would like to see.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you tried instead
+      description: Workarounds you are using now, and why they fall short.
+
+  - type: checkboxes
+    id: determinism
+    attributes:
+      label: Determinism
+      description: >
+        The core promise is that the same task against the same commit yields the same
+        context pack.
+      options:
+        - label: My proposal preserves that, or I have explained below why an opt-in exception is warranted
+          required: true
+
+  - type: checkboxes
+    id: contribute
+    attributes:
+      label: Would you like to implement this?
+      options:
+        - label: I am willing to open a pull request

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question or idea
+    url: https://github.com/bilgeadamtechnology/BGTS-Context-Engine/discussions
+    about: Ask how something works or float an idea before opening an issue.
+  - name: Security vulnerability
+    url: https://github.com/bilgeadamtechnology/BGTS-Context-Engine/security/advisories/new
+    about: Report privately. Please do not open a public issue.
