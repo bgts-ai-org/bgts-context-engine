@@ -38,19 +38,44 @@ class _FakeRepository:
         return self._references
 
     # Broad no-op read surface so Layer-2/3 tools run without a database.
-    def find_implementers(self, symbol_id): return []
-    def get_callers(self, symbol_id): return []
-    def get_callees(self, symbol_id): return []
-    def get_supertypes(self, symbol_id): return []
-    def get_subtypes(self, symbol_id): return []
-    def get_file_imports(self, file_id): return []
-    def find_routes(self, path): return []
-    def get_design_notes(self, symbol_id): return []
-    def symbols_in_file(self, file_id): return []
-    def symbol_degree(self, symbol_id): return 0
-    def repo_of_symbol(self, symbol_id): return None
-    def lexical_search(self, term, repo_ids=None, limit=20): return []
-    def get_symbol(self, symbol_id): return None
+    def find_implementers(self, symbol_id):
+        return []
+
+    def get_callers(self, symbol_id):
+        return []
+
+    def get_callees(self, symbol_id):
+        return []
+
+    def get_supertypes(self, symbol_id):
+        return []
+
+    def get_subtypes(self, symbol_id):
+        return []
+
+    def get_file_imports(self, file_id):
+        return []
+
+    def find_routes(self, path):
+        return []
+
+    def get_design_notes(self, symbol_id):
+        return []
+
+    def symbols_in_file(self, file_id):
+        return []
+
+    def symbol_degree(self, symbol_id):
+        return 0
+
+    def repo_of_symbol(self, symbol_id):
+        return None
+
+    def lexical_search(self, term, repo_ids=None, limit=20):
+        return []
+
+    def get_symbol(self, symbol_id):
+        return None
 
 
 class _FakeVectorStore:
@@ -130,9 +155,7 @@ def test_accept_language_header_selects_locale() -> None:
 def test_index_remote_rejects_invalid_url() -> None:
     # An unparseable URL fails before any clone/DB access -> localized 400.
     client = _client(_FakeRepository(matches=[], references=[]))
-    resp = client.post(
-        "/v1/index-remote", json={"url": "https://bitbucket.org/onlyworkspace"}
-    )
+    resp = client.post("/v1/index-remote", json={"url": "https://bitbucket.org/onlyworkspace"})
     assert resp.status_code == 400
     assert "message" in resp.json()
 
@@ -141,21 +164,42 @@ def test_all_layers_are_registered() -> None:
     app = create_app()
     paths = set(app.openapi()["paths"])
     for path in (
-        "/v1/resolve-symbol", "/v1/find-references", "/v1/find-implementers",
-        "/v1/get-call-graph", "/v1/get-dependencies", "/v1/get-type-hierarchy",
-        "/v1/semantic-search", "/v1/hybrid-search", "/v1/find-similar-code",
-        "/v1/get-context-for-task", "/v1/suggest-change-sites", "/v1/expand-blast-radius",
-        "/v1/select-repos", "/v1/assemble-context",
-        "/v1/index", "/v1/index-remote", "/v1/reindex",
-        "/v1/jobs/index", "/v1/jobs/index-remote", "/v1/jobs/reindex",
-        "/v1/jobs", "/v1/jobs/{job_id}", "/v1/jobs/{job_id}/cancel",
+        "/v1/resolve-symbol",
+        "/v1/find-references",
+        "/v1/find-implementers",
+        "/v1/get-call-graph",
+        "/v1/get-dependencies",
+        "/v1/get-type-hierarchy",
+        "/v1/semantic-search",
+        "/v1/hybrid-search",
+        "/v1/find-similar-code",
+        "/v1/get-context-for-task",
+        "/v1/suggest-change-sites",
+        "/v1/expand-blast-radius",
+        "/v1/select-repos",
+        "/v1/assemble-context",
+        "/v1/index",
+        "/v1/index-remote",
+        "/v1/reindex",
+        "/v1/jobs/index",
+        "/v1/jobs/index-remote",
+        "/v1/jobs/reindex",
+        "/v1/jobs",
+        "/v1/jobs/{job_id}",
+        "/v1/jobs/{job_id}/cancel",
     ):
         assert path in paths, f"missing endpoint: {path}"
 
 
 def test_semantic_search_payload_is_locale_invariant() -> None:
     hits = [
-        {"ref_id": "py::a#1", "repo_id": "r", "content": "a", "indexed_at_commit": "c1", "distance": 0.1},
+        {
+            "ref_id": "py::a#1",
+            "repo_id": "r",
+            "content": "a",
+            "indexed_at_commit": "c1",
+            "distance": 0.1,
+        },
     ]
     client = _client(_FakeRepository(), _FakeVectorStore(hits))
 
@@ -169,7 +213,9 @@ def test_semantic_search_payload_is_locale_invariant() -> None:
 
 def test_get_context_for_task_returns_coverage() -> None:
     client = _client(_FakeRepository(), _FakeVectorStore())
-    resp = client.post("/v1/get-context-for-task", json={"task_text": "fix the thing", "max_tokens": 100})
+    resp = client.post(
+        "/v1/get-context-for-task", json={"task_text": "fix the thing", "max_tokens": 100}
+    )
     assert resp.status_code == 200
     body = resp.json()
     assert body["tool"] == "get_context_for_task"
@@ -189,4 +235,3 @@ def test_assemble_context_endpoint_ok() -> None:
     resp = client.post("/v1/assemble-context", json={"symbol_ids": [], "max_tokens": 100})
     assert resp.status_code == 200
     assert resp.json()["payload"]["context"]["included"] == 0
-

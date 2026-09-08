@@ -110,11 +110,17 @@ def sync_repo(
     if (dest / ".git").exists():
         logger.info("git fetch", extra={"url": https_url, "dest": str(dest), "branch": branch})
         try:
-            _run_git([*base, "-C", str(dest), "remote", "set-url", "origin", auth_url], secrets=secrets)
-            _run_git([*base, "-C", str(dest), "fetch", "--prune", "--tags", "origin"], secrets=secrets)
+            _run_git(
+                [*base, "-C", str(dest), "remote", "set-url", "origin", auth_url], secrets=secrets
+            )
+            _run_git(
+                [*base, "-C", str(dest), "fetch", "--prune", "--tags", "origin"], secrets=secrets
+            )
             target = branch or _default_branch(dest, base=base)
             _run_git([*base, "-C", str(dest), "checkout", target], secrets=secrets)
-            _run_git([*base, "-C", str(dest), "reset", "--hard", f"origin/{target}"], secrets=secrets)
+            _run_git(
+                [*base, "-C", str(dest), "reset", "--hard", f"origin/{target}"], secrets=secrets
+            )
         finally:
             _restore_origin(dest, https_url, base=base, secrets=secrets)
     else:
@@ -130,10 +136,14 @@ def sync_repo(
     return dest
 
 
-def _restore_origin(dest: Path, https_url: str, *, base: list[str], secrets: tuple[str, ...]) -> None:
+def _restore_origin(
+    dest: Path, https_url: str, *, base: list[str], secrets: tuple[str, ...]
+) -> None:
     """Reset ``origin`` to the clean URL so no token lingers in ``.git/config``."""
     if (dest / ".git").exists():
         try:
-            _run_git([*base, "-C", str(dest), "remote", "set-url", "origin", https_url], secrets=secrets)
+            _run_git(
+                [*base, "-C", str(dest), "remote", "set-url", "origin", https_url], secrets=secrets
+            )
         except GitError:
             pass

@@ -189,7 +189,9 @@ class GraphFragment:
             seen_edges.setdefault(edge.dedup_key, edge)
 
         nodes = sorted(seen_nodes.values(), key=lambda n: n.dedup_key)
-        edges = sorted(seen_edges.values(), key=lambda e: tuple("" if p is None else p for p in e.dedup_key))
+        edges = sorted(
+            seen_edges.values(), key=lambda e: tuple("" if p is None else p for p in e.dedup_key)
+        )
         link_data = self.link_data.deduped() if self.link_data is not None else None
         return GraphFragment(nodes=nodes, edges=edges, link_data=link_data)
 

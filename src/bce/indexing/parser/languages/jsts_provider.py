@@ -40,8 +40,14 @@ _REF_KIND_RANK = {RefKind.READ: 0, RefKind.PASS: 1, RefKind.WRITE: 2, RefKind.DE
 # Express-style ``app.get('/x', handler)`` / NestJS ``@Get('/x')`` HTTP verbs.
 _EXPRESS_METHODS = {"get", "post", "put", "patch", "delete", "head", "options", "all"}
 _NEST_DECORATORS = {
-    "Get": "GET", "Post": "POST", "Put": "PUT", "Patch": "PATCH",
-    "Delete": "DELETE", "Head": "HEAD", "Options": "OPTIONS", "All": "ANY",
+    "Get": "GET",
+    "Post": "POST",
+    "Put": "PUT",
+    "Patch": "PATCH",
+    "Delete": "DELETE",
+    "Head": "HEAD",
+    "Options": "OPTIONS",
+    "All": "ANY",
 }
 
 
@@ -97,7 +103,9 @@ class _JsFamilyProvider(LanguageProvider):
         unresolved: list[UnresolvedRef] = []
 
         for child in root.named_children:
-            self._collect(child, ctx, package, source, frag, module_symbols, class_methods, defs, unresolved)
+            self._collect(
+                child, ctx, package, source, frag, module_symbols, class_methods, defs, unresolved
+            )
 
         bindings: list[ImportBinding] = []
         for child in root.named_children:
@@ -111,7 +119,9 @@ class _JsFamilyProvider(LanguageProvider):
             seen_unresolved: set[tuple[str, str | None]] = set()
             for call in self._iter_calls(d.body):
                 line = call.start_point[0] + 1
-                target = self._resolve_call(call, source, module_symbols, class_methods, d.class_name)
+                target = self._resolve_call(
+                    call, source, module_symbols, class_methods, d.class_name
+                )
                 if target is not None and target != d.symbol_id:
                     frag.add_edge(
                         GraphEdge(EdgeLabel.CALLS, d.symbol_id, target, properties={"line": line})
@@ -155,7 +165,9 @@ class _JsFamilyProvider(LanguageProvider):
 
     # --- pass 1 ---
 
-    def _collect(self, node, ctx, package, source, frag, module_symbols, class_methods, defs, unresolved) -> None:
+    def _collect(
+        self, node, ctx, package, source, frag, module_symbols, class_methods, defs, unresolved
+    ) -> None:
         node = self._unwrap_export(node)
         if node.type in _FUNCTION_DECLS:
             d = self._add_symbol(node, ctx, package, "", source, frag, SymbolKind.FUNCTION, node)
@@ -174,7 +186,9 @@ class _JsFamilyProvider(LanguageProvider):
         elif node.type in ("lexical_declaration", "variable_declaration"):
             self._collect_variable(node, ctx, package, source, frag, module_symbols, defs)
 
-    def _collect_methods(self, class_node, ctx, package, source, frag, class_methods, defs, class_name) -> None:
+    def _collect_methods(
+        self, class_node, ctx, package, source, frag, class_methods, defs, class_name
+    ) -> None:
         body = class_node.child_by_field_name("body")
         if body is None:
             return
@@ -198,18 +212,31 @@ class _JsFamilyProvider(LanguageProvider):
             value = declarator.child_by_field_name("value")
             if value is not None and value.type in _FUNCTION_VALUES:
                 d = self._add_symbol(
-                    declarator, ctx, package, "", source, frag, SymbolKind.FUNCTION, value,
+                    declarator,
+                    ctx,
+                    package,
+                    "",
+                    source,
+                    frag,
+                    SymbolKind.FUNCTION,
+                    value,
                     name_override=name,
                 )
             else:
-                kind = SymbolKind.CONSTANT if node.type == "lexical_declaration" else SymbolKind.VARIABLE
+                kind = (
+                    SymbolKind.CONSTANT
+                    if node.type == "lexical_declaration"
+                    else SymbolKind.VARIABLE
+                )
                 d = self._add_symbol(
                     declarator, ctx, package, "", source, frag, kind, None, name_override=name
                 )
             module_symbols.setdefault(d.name, d.symbol_id)
             defs.append(d)
 
-    def _add_symbol(self, node, ctx, package, namespace, source, frag, kind, body_holder, name_override=None) -> _Def:
+    def _add_symbol(
+        self, node, ctx, package, namespace, source, frag, kind, body_holder, name_override=None
+    ) -> _Def:
         if name_override is not None:
             name = name_override
         else:
@@ -249,7 +276,9 @@ class _JsFamilyProvider(LanguageProvider):
         class_name = namespace if kind is SymbolKind.METHOD else None
         return _Def(symbol_id, name, body, class_name)
 
-    def _add_heritage(self, class_node, source, frag, class_symbol_id, module_symbols, unresolved) -> None:
+    def _add_heritage(
+        self, class_node, source, frag, class_symbol_id, module_symbols, unresolved
+    ) -> None:
         line = class_node.start_point[0] + 1
         for child in class_node.named_children:
             if child.type != "class_heritage":
@@ -330,14 +359,18 @@ class _JsFamilyProvider(LanguageProvider):
                     continue
                 if name_node.type == "identifier":
                     bindings.append(
-                        ImportBinding(local_name=node_text(name_node, source), module_path=module_path)
+                        ImportBinding(
+                            local_name=node_text(name_node, source), module_path=module_path
+                        )
                     )
                 elif name_node.type == "object_pattern":
                     for prop in name_node.named_children:
                         if prop.type == "shorthand_property_identifier_pattern":
                             name = node_text(prop, source)
                             bindings.append(
-                                ImportBinding(local_name=name, module_path=module_path, imported_name=name)
+                                ImportBinding(
+                                    local_name=name, module_path=module_path, imported_name=name
+                                )
                             )
                         elif prop.type == "pair_pattern":
                             key = prop.child_by_field_name("key")
@@ -399,12 +432,16 @@ class _JsFamilyProvider(LanguageProvider):
                         name = node_text(name_node, source)
                         local = node_text(alias_node, source) if alias_node is not None else name
                         bindings.append(
-                            ImportBinding(local_name=local, module_path=module_path, imported_name=name)
+                            ImportBinding(
+                                local_name=local, module_path=module_path, imported_name=name
+                            )
                         )
 
     # --- route extraction (feature 1: Express + NestJS) ---
 
-    def extract_routes(self, tree, ctx: ParseContext, symbol_lines: dict[int, str]) -> GraphFragment:
+    def extract_routes(
+        self, tree, ctx: ParseContext, symbol_lines: dict[int, str]
+    ) -> GraphFragment:
         frag = GraphFragment()
         source = ctx.source
         root = tree.root_node
@@ -502,10 +539,15 @@ class _JsFamilyProvider(LanguageProvider):
 
     def _iter_calls(self, node):
         # Do not descend into nested scopes; calls there belong to their own symbol.
-        stop = _FUNCTION_DECLS | _CLASS_DECLS | _FUNCTION_VALUES | {
-            "method_definition",
-            "method_signature",
-        }
+        stop = (
+            _FUNCTION_DECLS
+            | _CLASS_DECLS
+            | _FUNCTION_VALUES
+            | {
+                "method_definition",
+                "method_signature",
+            }
+        )
         stack = [node]
         while stack:
             current = stack.pop()
@@ -524,7 +566,12 @@ class _JsFamilyProvider(LanguageProvider):
         if fn.type == "member_expression":
             obj = fn.child_by_field_name("object")
             prop = fn.child_by_field_name("property")
-            if obj is not None and prop is not None and node_text(obj, source) == "this" and class_name:
+            if (
+                obj is not None
+                and prop is not None
+                and node_text(obj, source) == "this"
+                and class_name
+            ):
                 return class_methods.get(class_name, {}).get(node_text(prop, source))
         return None
 
@@ -612,10 +659,15 @@ class _JsFamilyProvider(LanguageProvider):
             )
 
     def _walk_refs(self, node, source, note) -> None:
-        stop = _FUNCTION_DECLS | _CLASS_DECLS | _FUNCTION_VALUES | {
-            "method_definition",
-            "method_signature",
-        }
+        stop = (
+            _FUNCTION_DECLS
+            | _CLASS_DECLS
+            | _FUNCTION_VALUES
+            | {
+                "method_definition",
+                "method_signature",
+            }
+        )
         stack = [node]
         while stack:
             current = stack.pop()

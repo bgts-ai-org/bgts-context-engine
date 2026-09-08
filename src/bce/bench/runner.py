@@ -201,7 +201,9 @@ def run_benchmark(
         latency_p95_ms=_percentile(latencies, 95),
         recall_mean=statistics.mean([r.recall for r in results]) if results else 0.0,
         precision_mean=statistics.mean([r.precision for r in results]) if results else 0.0,
-        precision_at_1_mean=statistics.mean([r.precision_at_1 for r in results]) if results else 0.0,
+        precision_at_1_mean=statistics.mean([r.precision_at_1 for r in results])
+        if results
+        else 0.0,
         mrr_mean=statistics.mean([r.mrr for r in results]) if results else 0.0,
         determinism_ok=all(r.deterministic for r in results),
         rls_ok=all(r.rls_ok for r in results),

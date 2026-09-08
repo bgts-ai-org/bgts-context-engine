@@ -98,10 +98,7 @@ class GraphRepository:
         set_sql, params = _set_clause("r", edge.merged_properties())
         params["src"] = edge.src_id
         params["dst"] = edge.dst_id
-        query = (
-            "MATCH (a {gid: $src}), (b {gid: $dst}) "
-            f"MERGE (a)-[r:{edge.label}]->(b)"
-        )
+        query = f"MATCH (a {{gid: $src}}), (b {{gid: $dst}}) MERGE (a)-[r:{edge.label}]->(b)"
         if set_sql:
             query += f" SET {set_sql}"
         self.client.execute(query, params)
@@ -126,7 +123,15 @@ class GraphRepository:
     # --- read path (Layer-1 primitives) ---
 
     def resolve_symbol(self, name: str, repo_id: str | None = None) -> list[dict[str, Any]]:
-        columns = ["symbol_id", "kind", "signature", "docstring", "file_id", "line", "indexed_at_commit"]
+        columns = [
+            "symbol_id",
+            "kind",
+            "signature",
+            "docstring",
+            "file_id",
+            "line",
+            "indexed_at_commit",
+        ]
         # ORDER BY symbol_id: multi-match order must not depend on storage order (determinism, P1).
         ret = (
             "RETURN s.symbol_id, s.kind, s.signature, s.docstring, s.file_id, s.line, "
@@ -150,7 +155,15 @@ class GraphRepository:
         ``line`` is the caller's definition line; ``call_line`` is the call/reference site line
         (an edge property written by the linker/extractor) when known.
         """
-        columns = ["caller_id", "file_id", "line", "call_line", "edge_type", "ref_kind", "provenance"]
+        columns = [
+            "caller_id",
+            "file_id",
+            "line",
+            "call_line",
+            "edge_type",
+            "ref_kind",
+            "provenance",
+        ]
         query = (
             "MATCH (caller:Symbol)-[r]->(t:Symbol {symbol_id: $sym}) "
             f"WHERE type(r) IN {_REFERENCE_EDGE_TYPES} "
@@ -170,7 +183,11 @@ class GraphRepository:
         references.extend(dict(zip(columns, row, strict=False)) for row in route_rows)
 
         references.sort(
-            key=lambda ref: (ref.get("caller_id") or "", ref.get("line") or 0, ref.get("edge_type") or "")
+            key=lambda ref: (
+                ref.get("caller_id") or "",
+                ref.get("line") or 0,
+                ref.get("edge_type") or "",
+            )
         )
         return references
 
@@ -444,8 +461,7 @@ class GraphRepository:
     def repo_of_symbol(self, symbol_id: str) -> str | None:
         columns = ["repo_id"]
         query = (
-            "MATCH (s:Symbol {symbol_id: $sym})-[:DEFINED_IN]->(f:File) "
-            "RETURN f.repo_id LIMIT 1"
+            "MATCH (s:Symbol {symbol_id: $sym})-[:DEFINED_IN]->(f:File) RETURN f.repo_id LIMIT 1"
         )
         rows = self.client.cypher(query, {"sym": symbol_id}, columns)
         return rows[0][0] if rows else None

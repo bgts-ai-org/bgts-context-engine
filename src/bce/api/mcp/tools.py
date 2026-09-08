@@ -138,7 +138,9 @@ TOOL_SPECS: dict[str, dict[str, Any]] = {
     },
     "assemble_context": {
         "description": "Layer 3: dedup a symbol list and fit it into a token budget.",
-        "schema": _schema({"symbol_ids": _STR_LIST, "max_tokens": _INT, "locale": _STR}, ["symbol_ids"]),
+        "schema": _schema(
+            {"symbol_ids": _STR_LIST, "max_tokens": _INT, "locale": _STR}, ["symbol_ids"]
+        ),
     },
 }
 
@@ -186,18 +188,28 @@ def dispatch_tool(
         return get_type_hierarchy(repository, args["symbol_id"], locale=locale)
     if name == "semantic_search":
         return semantic_search(
-            store, args["query"], repo_ids=args.get("repo_ids"),
-            limit=args.get("limit", 10), locale=locale,
+            store,
+            args["query"],
+            repo_ids=args.get("repo_ids"),
+            limit=args.get("limit", 10),
+            locale=locale,
         )
     if name == "hybrid_search":
         return hybrid_search(
-            repository, store, args["query"], repo_ids=args.get("repo_ids"),
-            limit=args.get("limit", 10), locale=locale,
+            repository,
+            store,
+            args["query"],
+            repo_ids=args.get("repo_ids"),
+            limit=args.get("limit", 10),
+            locale=locale,
         )
     if name == "find_similar_code":
         return find_similar_code(
-            store, args["code"], repo_ids=args.get("repo_ids"),
-            limit=args.get("limit", 10), locale=locale,
+            store,
+            args["code"],
+            repo_ids=args.get("repo_ids"),
+            limit=args.get("limit", 10),
+            locale=locale,
         )
     if name == "get_context_for_task":
         return get_context_for_task(
@@ -222,8 +234,11 @@ def dispatch_tool(
         )
     if name == "assemble_context":
         return assemble_context(
-            repository, symbol_ids=args["symbol_ids"],
-            max_tokens=args.get("max_tokens", 4000), scope=scope, locale=locale,
+            repository,
+            symbol_ids=args["symbol_ids"],
+            max_tokens=args.get("max_tokens", 4000),
+            scope=scope,
+            locale=locale,
         )
     raise KeyError(f"unhandled tool: {name}")  # pragma: no cover - guarded above
 
@@ -231,8 +246,17 @@ def dispatch_tool(
 def _l3_kwargs(args: dict[str, Any]) -> dict[str, Any]:
     """Filter task-oriented Layer-3 kwargs (shared by context/change-sites)."""
     allowed = {
-        "task_text", "task_id", "max_tokens", "max_candidates", "commit", "repo_ids",
-        "explicit_symbols", "route_paths", "history_file_ids", "component_repo_ids",
-        "semantic_candidates", "auto_semantic",
+        "task_text",
+        "task_id",
+        "max_tokens",
+        "max_candidates",
+        "commit",
+        "repo_ids",
+        "explicit_symbols",
+        "route_paths",
+        "history_file_ids",
+        "component_repo_ids",
+        "semantic_candidates",
+        "auto_semantic",
     }
     return {k: v for k, v in args.items() if k in allowed}

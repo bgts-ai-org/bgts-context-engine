@@ -42,9 +42,7 @@ def execute_job(conn: Any, job: dict[str, Any]) -> dict[str, Any]:
             path=payload["repo_path"], name=payload["name"], commit=payload.get("commit")
         )
     elif job_type == "index_remote":
-        creds = GitCredentials(
-            username=settings.bitbucket_username, token=settings.bitbucket_token
-        )
+        creds = GitCredentials(username=settings.bitbucket_username, token=settings.bitbucket_token)
         summary = indexer.index_remote_repo(
             url=payload["url"],
             name=payload.get("name"),
@@ -112,9 +110,7 @@ class JobWorkerPool:
             book.commit()
 
             job_id = job["job_id"]
-            logger.info(
-                "job started", extra={"job_id": job_id, "job_type": job["job_type"]}
-            )
+            logger.info("job started", extra={"job_id": job_id, "job_type": job["job_type"]})
             try:
                 with connection(self._settings) as work:
                     result = execute_job(work, job)
@@ -129,7 +125,5 @@ class JobWorkerPool:
 
             finish_job(book, job_id, result)
             book.commit()
-            logger.info(
-                "job succeeded", extra={"job_id": job_id, "job_type": job["job_type"]}
-            )
+            logger.info("job succeeded", extra={"job_id": job_id, "job_type": job["job_type"]})
             return True

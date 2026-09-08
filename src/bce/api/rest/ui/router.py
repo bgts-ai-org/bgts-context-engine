@@ -83,7 +83,9 @@ def ui_repo_graph(
     node_limit: int = Query(
         default=5000, ge=1, le=20000, description="Max nodes per label (safety bound)."
     ),
-    edge_limit: int = Query(default=20000, ge=1, le=100000, description="Max edges (safety bound)."),
+    edge_limit: int = Query(
+        default=20000, ge=1, le=100000, description="Max edges (safety bound)."
+    ),
     repository: GraphRepository = Depends(get_repository),
 ) -> dict[str, Any]:
     """Whole-repo subgraph as ``{nodes, edges}``; edges whose endpoints were clipped are dropped."""
@@ -119,9 +121,7 @@ def ui_node_neighbors(
     repository: GraphRepository = Depends(get_repository),
 ) -> dict[str, Any]:
     """Direct neighbors + connecting edges of a node (click-to-expand in the graph view)."""
-    return queries.node_neighbors(
-        repository.client, gid, edge_types=_csv(edge_types), limit=limit
-    )
+    return queries.node_neighbors(repository.client, gid, edge_types=_csv(edge_types), limit=limit)
 
 
 @router.post("/context-trace", response_model=UITraceResponse)

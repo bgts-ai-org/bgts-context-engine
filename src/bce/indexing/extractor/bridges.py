@@ -92,9 +92,7 @@ def extract_bridges(files: list[BridgeFile], resolve: SymbolResolver) -> GraphFr
     for name in sorted(set(exposed) & set(consumed)):
         tag = exposed[name]
         refs = resolve(name)
-        native = sorted(
-            (r for r in refs if r.language in _NATIVE_LANGS), key=lambda r: r.symbol_id
-        )
+        native = sorted((r for r in refs if r.language in _NATIVE_LANGS), key=lambda r: r.symbol_id)
         js = sorted((r for r in refs if r.language in _JS_LANGS), key=lambda r: r.symbol_id)
         if not native or not js:
             continue

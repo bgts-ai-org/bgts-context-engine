@@ -65,8 +65,20 @@ def test_provenance_distribution_sums_to_one_when_present():
 
 def test_assembler_respects_budget_and_assigns_detail_by_distance():
     items = [
-        {"symbol_id": "near", "graph_distance": 1, "name": "near", "signature": "()", "body": "x" * 40},
-        {"symbol_id": "mid", "graph_distance": 2, "name": "mid", "signature": "(a, b)", "docstring": "d"},
+        {
+            "symbol_id": "near",
+            "graph_distance": 1,
+            "name": "near",
+            "signature": "()",
+            "body": "x" * 40,
+        },
+        {
+            "symbol_id": "mid",
+            "graph_distance": 2,
+            "name": "mid",
+            "signature": "(a, b)",
+            "docstring": "d",
+        },
         {"symbol_id": "far", "graph_distance": 5, "name": "far", "file_id": "f", "line": 3},
     ]
     pkg = assemble(items, max_tokens=100)

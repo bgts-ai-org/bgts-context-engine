@@ -155,9 +155,7 @@ def _client(monkeypatch: pytest.MonkeyPatch, **store_fakes: Any) -> TestClient:
 
 def test_job_submit_returns_202_with_envelope(monkeypatch: pytest.MonkeyPatch) -> None:
     client = _client(monkeypatch, enqueue_job=lambda conn, job_type, payload: _job())
-    resp = client.post(
-        "/v1/jobs/index", json={"repo_path": "/tmp/repo", "name": "acme/app"}
-    )
+    resp = client.post("/v1/jobs/index", json={"repo_path": "/tmp/repo", "name": "acme/app"})
     assert resp.status_code == 202
     body = resp.json()
     assert body["tool"] == "job_index"

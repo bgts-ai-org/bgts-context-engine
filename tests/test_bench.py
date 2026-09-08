@@ -80,7 +80,9 @@ def test_benchmark_recall_precision_and_determinism():
 
 def test_benchmark_report_serializes_case_fields():
     cases = [
-        BenchCase(name="c", task_text="setup", explicit_symbols=["setup"], relevant_symbol_ids=["setup"])
+        BenchCase(
+            name="c", task_text="setup", explicit_symbols=["setup"], relevant_symbol_ids=["setup"]
+        )
     ]
     report = run_benchmark(_FakeRepo(), cases)
     case = report.to_dict()["cases"][0]

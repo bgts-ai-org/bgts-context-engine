@@ -1,0 +1,21 @@
+# Normalise to LF in the repository regardless of the contributor's platform.
+* text=auto eol=lf
+
+# Windows-only scripts must keep CRLF to stay executable.
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+*.ps1   text eol=crlf
+
+# Binary: never touch, never diff as text.
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.pdf   binary
+*.woff  binary
+*.woff2 binary
+
+# Keep generated and vendored files out of diffs and language statistics.
+web/package-lock.json   linguist-generated=true -diff
+src/bce/api/rest/static/** linguist-vendored=true

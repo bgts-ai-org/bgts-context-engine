@@ -59,7 +59,5 @@ def get_component_repos(conn: psycopg.Connection, component: str) -> list[str]:
 def get_scoped_repo_ids(conn: psycopg.Connection, user_id: str) -> list[str]:
     """Repo ids a user may read (feeds the auth/scope filter, Phase 4)."""
     with conn.cursor() as cur:
-        cur.execute(
-            "SELECT repo_id FROM scopes WHERE user_id = %s ORDER BY repo_id", (user_id,)
-        )
+        cur.execute("SELECT repo_id FROM scopes WHERE user_id = %s ORDER BY repo_id", (user_id,))
         return [r[0] for r in cur.fetchall()]

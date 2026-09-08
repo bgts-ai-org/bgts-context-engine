@@ -7,15 +7,23 @@ from bce.domain.enums import Provenance, RefKind
 
 
 def test_define_outranks_read_carrier():
-    definer = Candidate(symbol_id="b_definer", ref_kind=str(RefKind.DEFINE), graph_distance=1, degree=5)
-    carrier = Candidate(symbol_id="a_carrier", ref_kind=str(RefKind.READ), graph_distance=1, degree=5, is_leaf=True)
+    definer = Candidate(
+        symbol_id="b_definer", ref_kind=str(RefKind.DEFINE), graph_distance=1, degree=5
+    )
+    carrier = Candidate(
+        symbol_id="a_carrier", ref_kind=str(RefKind.READ), graph_distance=1, degree=5, is_leaf=True
+    )
     ranked = score_candidates([carrier, definer])
     assert ranked[0].symbol_id == "b_definer"
 
 
 def test_anchor_gets_priority_floor():
-    anchor = Candidate(symbol_id="anchor", ref_kind=str(RefKind.READ), anchor=True, graph_distance=0)
-    strong = Candidate(symbol_id="strong", ref_kind=str(RefKind.DEFINE), graph_distance=1, degree=10)
+    anchor = Candidate(
+        symbol_id="anchor", ref_kind=str(RefKind.READ), anchor=True, graph_distance=0
+    )
+    strong = Candidate(
+        symbol_id="strong", ref_kind=str(RefKind.DEFINE), graph_distance=1, degree=10
+    )
     ranked = score_candidates([strong, anchor])
     assert ranked[0].symbol_id == "anchor"
 

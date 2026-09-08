@@ -42,7 +42,15 @@ class VectorStore:
             "ON CONFLICT (kind, ref_id) DO UPDATE SET "
             "repo_id = EXCLUDED.repo_id, content = EXCLUDED.content, model = EXCLUDED.model, "
             "embedding = EXCLUDED.embedding, indexed_at_commit = EXCLUDED.indexed_at_commit",
-            (kind, ref_id, repo_id, content, model, _to_vector_literal(embedding), indexed_at_commit),
+            (
+                kind,
+                ref_id,
+                repo_id,
+                content,
+                model,
+                _to_vector_literal(embedding),
+                indexed_at_commit,
+            ),
         )
 
     def delete_for_file(self, file_id: str, symbol_ids: list[str]) -> None:

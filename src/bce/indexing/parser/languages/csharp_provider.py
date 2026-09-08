@@ -106,7 +106,9 @@ class CSharpProvider(LanguageProvider):
             seen_unresolved: set[tuple[str, str | None]] = set()
             for call in self._iter_calls(d.body):
                 line = call.start_point[0] + 1
-                target = self._resolve_call(call, source, module_symbols, class_methods, d.class_name)
+                target = self._resolve_call(
+                    call, source, module_symbols, class_methods, d.class_name
+                )
                 if target is not None and target != d.symbol_id:
                     frag.add_edge(
                         GraphEdge(EdgeLabel.CALLS, d.symbol_id, target, properties={"line": line})
@@ -153,7 +155,12 @@ class CSharpProvider(LanguageProvider):
         while stack:
             current = stack.pop()
             for child in current.named_children:
-                if child.type in ("class_declaration", "interface_declaration", "struct_declaration", "record_declaration"):
+                if child.type in (
+                    "class_declaration",
+                    "interface_declaration",
+                    "struct_declaration",
+                    "record_declaration",
+                ):
                     yield child
                 elif child.type in (
                     "namespace_declaration",
@@ -186,7 +193,9 @@ class CSharpProvider(LanguageProvider):
                 methods[md.name] = md.symbol_id
                 defs.append(md)
             elif member.type == "property_declaration":
-                pd = self._add_symbol(member, ctx, package, d.name, source, frag, SymbolKind.PROPERTY)
+                pd = self._add_symbol(
+                    member, ctx, package, d.name, source, frag, SymbolKind.PROPERTY
+                )
                 defs.append(pd)
 
     def _add_symbol(self, node, ctx, package, namespace, source, frag, kind) -> _Def:
@@ -234,7 +243,9 @@ class CSharpProvider(LanguageProvider):
                     return text
         return "internal"
 
-    def _add_heritage(self, node, source, frag, class_symbol_id, module_symbols, unresolved) -> None:
+    def _add_heritage(
+        self, node, source, frag, class_symbol_id, module_symbols, unresolved
+    ) -> None:
         base_list = None
         for child in node.named_children:
             if child.type == "base_list":
@@ -248,9 +259,7 @@ class CSharpProvider(LanguageProvider):
                 # C# can't distinguish base class vs interface syntactically here; default INHERITS.
                 frag.add_edge(GraphEdge(EdgeLabel.INHERITS, class_symbol_id, module_symbols[ident]))
             else:
-                unresolved.append(
-                    UnresolvedRef(class_symbol_id, ident, kind="inherits", line=line)
-                )
+                unresolved.append(UnresolvedRef(class_symbol_id, ident, kind="inherits", line=line))
 
     def _iter_type_identifiers(self, node, source):
         stack = [node]
@@ -293,14 +302,18 @@ class CSharpProvider(LanguageProvider):
                         else:
                             # ``using My.App.Utils;`` brings the namespace's types into scope.
                             bindings.append(
-                                ImportBinding(local_name="*", module_path=name.removeprefix("static ").strip())
+                                ImportBinding(
+                                    local_name="*", module_path=name.removeprefix("static ").strip()
+                                )
                             )
                 elif child.type in ("namespace_declaration", "file_scoped_namespace_declaration"):
                     stack.append(child)
 
     # --- route extraction (ASP.NET) ---
 
-    def extract_routes(self, tree, ctx: ParseContext, symbol_lines: dict[int, str]) -> GraphFragment:
+    def extract_routes(
+        self, tree, ctx: ParseContext, symbol_lines: dict[int, str]
+    ) -> GraphFragment:
         frag = GraphFragment()
         source = ctx.source
         root = tree.root_node
@@ -360,14 +373,20 @@ class CSharpProvider(LanguageProvider):
             for child in current.named_children:
                 if child.type == "string_literal":
                     text = node_text(child, source)
-                    return text.strip("\"@$")
+                    return text.strip('"@$')
                 stack.append(child)
         return None
 
     # --- pass 2 (CALLS) ---
 
     def _iter_calls(self, node):
-        stop = {"method_declaration", "constructor_declaration", "class_declaration", "lambda_expression", "local_function_statement"}
+        stop = {
+            "method_declaration",
+            "constructor_declaration",
+            "class_declaration",
+            "lambda_expression",
+            "local_function_statement",
+        }
         stack = [node]
         while stack:
             current = stack.pop()
@@ -392,7 +411,12 @@ class CSharpProvider(LanguageProvider):
         if fn.type == "member_access_expression":
             expr = fn.child_by_field_name("expression")
             name = fn.child_by_field_name("name")
-            if expr is not None and name is not None and node_text(expr, source) == "this" and class_name:
+            if (
+                expr is not None
+                and name is not None
+                and node_text(expr, source) == "this"
+                and class_name
+            ):
                 return class_methods.get(class_name, {}).get(node_text(name, source))
         return None
 
@@ -462,7 +486,13 @@ class CSharpProvider(LanguageProvider):
             )
 
     def _walk_refs(self, node, source, note) -> None:
-        stop = {"method_declaration", "constructor_declaration", "class_declaration", "lambda_expression", "local_function_statement"}
+        stop = {
+            "method_declaration",
+            "constructor_declaration",
+            "class_declaration",
+            "lambda_expression",
+            "local_function_statement",
+        }
         stack = [node]
         while stack:
             current = stack.pop()

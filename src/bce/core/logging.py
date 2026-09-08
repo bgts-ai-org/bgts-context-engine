@@ -22,10 +22,29 @@ from bce.config import Settings, get_settings
 #: LogRecord attributes that are *not* user-supplied context (used to extract ``extra`` fields).
 _STANDARD_ATTRS = frozenset(
     {
-        "name", "msg", "args", "levelname", "levelno", "pathname", "filename", "module",
-        "exc_info", "exc_text", "stack_info", "lineno", "funcName", "created", "msecs",
-        "relativeCreated", "thread", "threadName", "processName", "process", "taskName",
-        "message", "asctime",
+        "name",
+        "msg",
+        "args",
+        "levelname",
+        "levelno",
+        "pathname",
+        "filename",
+        "module",
+        "exc_info",
+        "exc_text",
+        "stack_info",
+        "lineno",
+        "funcName",
+        "created",
+        "msecs",
+        "relativeCreated",
+        "thread",
+        "threadName",
+        "processName",
+        "process",
+        "taskName",
+        "message",
+        "asctime",
     }
 )
 

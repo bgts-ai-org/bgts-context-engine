@@ -24,28 +24,28 @@ def calculate_cost(tokens, rate):
     return tokens * rate
 '''
 
-AI_SERVICE_PY = b'''
+AI_SERVICE_PY = b"""
 from utils.cost import calculate_cost
 
 
 def estimate(tokens):
     return calculate_cost(tokens, 0.002)
-'''
+"""
 
-BASE_PY = b'''
+BASE_PY = b"""
 class BaseHandler:
     def handle(self):
         return None
-'''
+"""
 
-DERIVED_PY = b'''
+DERIVED_PY = b"""
 from core.base import BaseHandler
 
 
 class JsonHandler(BaseHandler):
     def handle(self):
         return {}
-'''
+"""
 
 UTIL_JS = b"""
 export function formatPrice(value) {
@@ -175,9 +175,7 @@ def test_incremental_relink_preserves_incoming_cross_file_edges():
 
     callee = symbols_by_name(recost)["calculate_cost"]
     caller = symbols_by_name(frags[1])["estimate"]
-    assert any(
-        e.src_id == caller and e.dst_id == callee for e in _edges(after, EdgeLabel.CALLS)
-    )
+    assert any(e.src_id == caller and e.dst_id == callee for e in _edges(after, EdgeLabel.CALLS))
     # The pre-existing cross-file CALLS edge set is preserved (same dedup keys).
     before_calls = {e.dedup_key for e in _edges(before, EdgeLabel.CALLS)}
     after_calls = {e.dedup_key for e in _edges(after, EdgeLabel.CALLS)}

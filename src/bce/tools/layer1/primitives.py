@@ -73,9 +73,7 @@ def find_implementers(
     implementers = repository.find_implementers(symbol_id)
     tr = get_translator()
     loc = tr.resolve(locale)
-    message = tr.translate(
-        "tool.implementers.count", loc, count=len(implementers), name=symbol_id
-    )
+    message = tr.translate("tool.implementers.count", loc, count=len(implementers), name=symbol_id)
     return {
         "tool": "find_implementers",
         "payload": {"symbol_id": symbol_id, "implementers": implementers},
@@ -101,10 +99,16 @@ def get_call_graph(
     hops = max(1, min(hops, 10))
     direction = direction if direction in ("callers", "callees", "both") else "both"
 
-    callers = _bfs_calls(repository, symbol_id, hops, repository.get_callers) \
-        if direction in ("callers", "both") else []
-    callees = _bfs_calls(repository, symbol_id, hops, repository.get_callees) \
-        if direction in ("callees", "both") else []
+    callers = (
+        _bfs_calls(repository, symbol_id, hops, repository.get_callers)
+        if direction in ("callers", "both")
+        else []
+    )
+    callees = (
+        _bfs_calls(repository, symbol_id, hops, repository.get_callees)
+        if direction in ("callees", "both")
+        else []
+    )
 
     message = tr.translate(
         "tool.call_graph.summary",
@@ -176,9 +180,7 @@ def get_dependencies(
                         frontier.append(tid)
 
     dependencies.sort(key=lambda d: d.get("target_id") or "")
-    message = tr.translate(
-        "tool.dependencies.count", loc, count=len(dependencies), file=file_id
-    )
+    message = tr.translate("tool.dependencies.count", loc, count=len(dependencies), file=file_id)
     return {
         "tool": "get_dependencies",
         "payload": {

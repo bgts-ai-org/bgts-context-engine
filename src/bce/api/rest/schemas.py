@@ -15,7 +15,9 @@ from pydantic import BaseModel, Field
 class IndexRequest(BaseModel):
     repo_path: str = Field(..., description="Path to a local repository to index.")
     name: str = Field(..., description="Logical repository name (stable across clones).")
-    commit: str | None = Field(default=None, description="Override commit sha (else read from git).")
+    commit: str | None = Field(
+        default=None, description="Override commit sha (else read from git)."
+    )
 
 
 class IndexRemoteRequest(BaseModel):
@@ -59,17 +61,32 @@ class ContextForTaskRequest(BaseModel):
     """Layer-3 get_context_for_task / suggest_change_sites request."""
 
     task_text: str = Field(..., description="Task title + description text.")
-    task_id: str | None = Field(default=None, description="Optional Jira task id (audit + history).")
+    task_id: str | None = Field(
+        default=None, description="Optional Jira task id (audit + history)."
+    )
     max_tokens: int = Field(default=4000, ge=1, le=200000, description="Token budget for assembly.")
-    max_candidates: int = Field(default=8, ge=1, le=100, description="Narrow to at most N candidates.")
+    max_candidates: int = Field(
+        default=8, ge=1, le=100, description="Narrow to at most N candidates."
+    )
     commit: str | None = Field(default=None, description="Pinned commit sha (stage 0).")
-    repo_ids: list[str] | None = Field(default=None, description="Restrict retrieval to these repos.")
-    explicit_symbols: list[str] | None = Field(default=None, description="Known symbol names (anchor #1).")
-    route_paths: list[str] | None = Field(default=None, description="Known route paths (anchor #1).")
-    history_file_ids: list[str] | None = Field(default=None, description="task_history files (anchor #3).")
-    component_repo_ids: list[str] | None = Field(default=None, description="Jira component repos (anchor #2).")
+    repo_ids: list[str] | None = Field(
+        default=None, description="Restrict retrieval to these repos."
+    )
+    explicit_symbols: list[str] | None = Field(
+        default=None, description="Known symbol names (anchor #1)."
+    )
+    route_paths: list[str] | None = Field(
+        default=None, description="Known route paths (anchor #1)."
+    )
+    history_file_ids: list[str] | None = Field(
+        default=None, description="task_history files (anchor #3)."
+    )
+    component_repo_ids: list[str] | None = Field(
+        default=None, description="Jira component repos (anchor #2)."
+    )
     semantic_candidates: list[str] | None = Field(
-        default=None, description="Pre-ranked semantic anchor symbol_ids (anchor #4, lowest priority)."
+        default=None,
+        description="Pre-ranked semantic anchor symbol_ids (anchor #4, lowest priority).",
     )
     auto_semantic: bool = Field(
         default=True,
@@ -88,7 +105,9 @@ class SelectReposRequest(BaseModel):
 
 
 class AssembleContextRequest(BaseModel):
-    symbol_ids: list[str] = Field(..., description="Symbols to deduplicate and fit into the budget.")
+    symbol_ids: list[str] = Field(
+        ..., description="Symbols to deduplicate and fit into the budget."
+    )
     max_tokens: int = Field(default=4000, ge=1, le=200000)
 
 

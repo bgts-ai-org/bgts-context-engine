@@ -8,8 +8,12 @@ from bce.indexing.parser.symbol_id import (
 
 
 def test_symbol_id_is_deterministic():
-    a = make_symbol_id(language="python", package="app.svc", namespace="", name="run", signature="(self)")
-    b = make_symbol_id(language="python", package="app.svc", namespace="", name="run", signature="(self)")
+    a = make_symbol_id(
+        language="python", package="app.svc", namespace="", name="run", signature="(self)"
+    )
+    b = make_symbol_id(
+        language="python", package="app.svc", namespace="", name="run", signature="(self)"
+    )
     assert a == b
 
 
@@ -20,8 +24,12 @@ def test_symbol_id_distinguishes_overloads_by_signature():
 
 
 def test_symbol_id_distinguishes_namespace():
-    base = make_symbol_id(language="python", package="p", namespace="Base", name="greet", signature="(self)")
-    svc = make_symbol_id(language="python", package="p", namespace="Service", name="greet", signature="(self)")
+    base = make_symbol_id(
+        language="python", package="p", namespace="Base", name="greet", signature="(self)"
+    )
+    svc = make_symbol_id(
+        language="python", package="p", namespace="Service", name="greet", signature="(self)"
+    )
     assert base != svc
 
 

@@ -66,11 +66,20 @@ def test_scope_filter_restricts_and_fails_closed():
 
 def test_mcp_catalog_covers_all_layers():
     expected = {
-        "resolve_symbol", "find_references", "find_implementers", "get_call_graph",
-        "get_dependencies", "get_type_hierarchy",
-        "semantic_search", "hybrid_search", "find_similar_code",
-        "get_context_for_task", "suggest_change_sites", "expand_blast_radius",
-        "select_repos", "assemble_context",
+        "resolve_symbol",
+        "find_references",
+        "find_implementers",
+        "get_call_graph",
+        "get_dependencies",
+        "get_type_hierarchy",
+        "semantic_search",
+        "hybrid_search",
+        "find_similar_code",
+        "get_context_for_task",
+        "suggest_change_sites",
+        "expand_blast_radius",
+        "select_repos",
+        "assemble_context",
     }
     assert expected <= set(TOOL_SPECS)
     for spec in TOOL_SPECS.values():

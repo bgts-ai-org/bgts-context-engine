@@ -78,7 +78,11 @@ def _candidates(
                 # Imported symbol used as a qualifier: Class.method, or submodule function.
                 for m in _module_paths(b.module_path):
                     out.append((m, f"{b.imported_name}.{ref.name}"))
-                for m in _module_paths(f"{b.module_path}/{b.imported_name}" if "/" in b.module_path else f"{b.module_path}.{b.imported_name}"):
+                for m in _module_paths(
+                    f"{b.module_path}/{b.imported_name}"
+                    if "/" in b.module_path
+                    else f"{b.module_path}.{b.imported_name}"
+                ):
                     out.append((m, ref.name))
             else:
                 for m in _module_paths(b.module_path):

@@ -219,29 +219,27 @@ def _fast_to_candidates(repository: GraphRepository, expansion: dict) -> list[Ca
         chunk = ids[i : i + _META_CHUNK]
         params = {"ids": chunk}
         # Any-type edge degree, matching GraphRepository.symbol_degree (out + in).
-        for sid, in client.cypher(
+        for (sid,) in client.cypher(
             "MATCH (s:Symbol)-[r]->() WHERE s.symbol_id IN $ids RETURN s.symbol_id",
             params,
             ["sid"],
         ):
             out_deg[sid] = out_deg.get(sid, 0) + 1
-        for sid, in client.cypher(
+        for (sid,) in client.cypher(
             "MATCH ()-[r]->(s:Symbol) WHERE s.symbol_id IN $ids RETURN s.symbol_id",
             params,
             ["sid"],
         ):
             in_deg[sid] = in_deg.get(sid, 0) + 1
         # CALLS presence for the is_leaf feature (leaf = has callers but no callees).
-        for sid, in client.cypher(
-            "MATCH (s:Symbol)-[r:CALLS]->(c:Symbol) WHERE s.symbol_id IN $ids "
-            "RETURN s.symbol_id",
+        for (sid,) in client.cypher(
+            "MATCH (s:Symbol)-[r:CALLS]->(c:Symbol) WHERE s.symbol_id IN $ids RETURN s.symbol_id",
             params,
             ["sid"],
         ):
             has_callees.add(sid)
-        for sid, in client.cypher(
-            "MATCH (c:Symbol)-[r:CALLS]->(s:Symbol) WHERE s.symbol_id IN $ids "
-            "RETURN s.symbol_id",
+        for (sid,) in client.cypher(
+            "MATCH (c:Symbol)-[r:CALLS]->(s:Symbol) WHERE s.symbol_id IN $ids RETURN s.symbol_id",
             params,
             ["sid"],
         ):
@@ -266,9 +264,7 @@ def _fast_to_candidates(repository: GraphRepository, expansion: dict) -> list[Ca
     return candidates
 
 
-def _symbol_metadata(
-    repository: GraphRepository, symbol_ids: Any
-) -> dict[str, dict[str, Any]]:
+def _symbol_metadata(repository: GraphRepository, symbol_ids: Any) -> dict[str, dict[str, Any]]:
     """name/kind/file/line per trace symbol, so the frontend can label and place ghost nodes.
 
     Uses one chunked bulk Cypher query when a real graph client is available (expansions can hold

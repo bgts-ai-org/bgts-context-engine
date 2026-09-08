@@ -23,7 +23,7 @@ def create_user(body):
     return body
 '''
 
-FLASK_SOURCE = b'''from flask import Flask
+FLASK_SOURCE = b"""from flask import Flask
 
 app = Flask(__name__)
 
@@ -31,13 +31,13 @@ app = Flask(__name__)
 @app.route("/legacy", methods=["POST", "PUT"])
 def legacy():
     return 1
-'''
+"""
 
-EXPRESS_SOURCE = b'''const app = express();
+EXPRESS_SOURCE = b"""const app = express();
 
 app.get("/health", (req, res) => res.send("ok"));
 app.post("/items", createItem);
-'''
+"""
 
 
 def _routes(frag):

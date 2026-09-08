@@ -135,7 +135,9 @@ class _FakeRepository:
     def __init__(self) -> None:
         self.client = _FakeClient()
 
-    def lexical_search(self, term: str, *, repo_ids: Any = None, limit: int = 20) -> list[dict[str, Any]]:
+    def lexical_search(
+        self, term: str, *, repo_ids: Any = None, limit: int = 20
+    ) -> list[dict[str, Any]]:
         return [
             {
                 "symbol_id": _SYMBOL_VERTEX["properties"]["gid"],
@@ -262,18 +264,30 @@ _CALLEE = "py::app::auth::validate_token#c3"
 
 _TRACE_SYMBOLS: dict[str, dict[str, Any]] = {
     _ANCHOR: {
-        "symbol_id": _ANCHOR, "name": "login_handler", "kind": "function",
-        "signature": "(req)", "file_id": "demo:app/auth.py", "line": 10,
+        "symbol_id": _ANCHOR,
+        "name": "login_handler",
+        "kind": "function",
+        "signature": "(req)",
+        "file_id": "demo:app/auth.py",
+        "line": 10,
         "indexed_at_commit": "c0ffee",
     },
     _CALLER: {
-        "symbol_id": _CALLER, "name": "api_login", "kind": "function",
-        "signature": "()", "file_id": "demo:app/api.py", "line": 5,
+        "symbol_id": _CALLER,
+        "name": "api_login",
+        "kind": "function",
+        "signature": "()",
+        "file_id": "demo:app/api.py",
+        "line": 5,
         "indexed_at_commit": "c0ffee",
     },
     _CALLEE: {
-        "symbol_id": _CALLEE, "name": "validate_token", "kind": "function",
-        "signature": "(tok)", "file_id": "demo:app/auth.py", "line": 30,
+        "symbol_id": _CALLEE,
+        "name": "validate_token",
+        "kind": "function",
+        "signature": "(tok)",
+        "file_id": "demo:app/auth.py",
+        "line": 30,
         "indexed_at_commit": "c0ffee",
     },
 }
@@ -287,7 +301,9 @@ class _TraceFakeRepository:
             return [_TRACE_SYMBOLS[_ANCHOR]]
         return []
 
-    def lexical_search(self, term: str, *, repo_ids: Any = None, limit: int = 20) -> list[dict[str, Any]]:
+    def lexical_search(
+        self, term: str, *, repo_ids: Any = None, limit: int = 20
+    ) -> list[dict[str, Any]]:
         if term == "login_handler":
             return [_TRACE_SYMBOLS[_ANCHOR]]
         return []
@@ -315,12 +331,23 @@ class _TraceFakeRepository:
         return 2 if symbol_id == _ANCHOR else 1
 
     # Empty surfaces the pipeline touches but this scenario does not exercise.
-    def find_routes(self, path: Any) -> list[dict[str, Any]]: return []
-    def get_referrers(self, symbol_id: str) -> list[dict[str, Any]]: return []
-    def get_supertypes(self, symbol_id: str) -> list[dict[str, Any]]: return []
-    def get_subtypes(self, symbol_id: str) -> list[dict[str, Any]]: return []
-    def find_implementers(self, symbol_id: str) -> list[dict[str, Any]]: return []
-    def get_design_notes(self, symbol_id: str) -> list[dict[str, Any]]: return []
+    def find_routes(self, path: Any) -> list[dict[str, Any]]:
+        return []
+
+    def get_referrers(self, symbol_id: str) -> list[dict[str, Any]]:
+        return []
+
+    def get_supertypes(self, symbol_id: str) -> list[dict[str, Any]]:
+        return []
+
+    def get_subtypes(self, symbol_id: str) -> list[dict[str, Any]]:
+        return []
+
+    def find_implementers(self, symbol_id: str) -> list[dict[str, Any]]:
+        return []
+
+    def get_design_notes(self, symbol_id: str) -> list[dict[str, Any]]:
+        return []
 
 
 class _TraceFakeVectorStore:
@@ -346,7 +373,12 @@ def test_ui_context_trace_stage_order_and_contents() -> None:
     body = resp.json()
 
     assert [s["stage"] for s in body["stages"]] == [
-        "semantic", "anchors", "expand", "score", "narrow", "assemble",
+        "semantic",
+        "anchors",
+        "expand",
+        "score",
+        "narrow",
+        "assemble",
     ]
     by_name = {s["stage"]: s for s in body["stages"]}
 

@@ -38,7 +38,7 @@ def _strip_comment_prefix(line: str, markers: tuple[str, ...]) -> str | None:
     stripped = line.strip()
     for marker in markers:
         if stripped.startswith(marker):
-            return stripped[len(marker):].strip()
+            return stripped[len(marker) :].strip()
     return None
 
 

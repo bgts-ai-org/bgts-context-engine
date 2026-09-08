@@ -112,7 +112,9 @@ class PythonProvider(LanguageProvider):
             seen_unresolved: set[tuple[str, str | None]] = set()
             for call in self._iter_calls(d.body):
                 line = call.start_point[0] + 1
-                target = self._resolve_call(call, source, module_symbols, class_methods, d.class_name)
+                target = self._resolve_call(
+                    call, source, module_symbols, class_methods, d.class_name
+                )
                 if target is not None and target != d.symbol_id:
                     frag.add_edge(
                         GraphEdge(EdgeLabel.CALLS, d.symbol_id, target, properties={"line": line})
@@ -201,9 +203,7 @@ class PythonProvider(LanguageProvider):
                 continue
             name = node_text(left, source)
             kind = SymbolKind.CONSTANT if name.isupper() else SymbolKind.VARIABLE
-            d = self._add_symbol(
-                child, ctx, package, "", source, frag, kind, name_override=name
-            )
+            d = self._add_symbol(child, ctx, package, "", source, frag, kind, name_override=name)
             module_symbols.setdefault(d.name, d.symbol_id)
             defs.append(d)
 
@@ -372,7 +372,9 @@ class PythonProvider(LanguageProvider):
 
     # --- route extraction (feature 1: FastAPI/Flask decorators) ---
 
-    def extract_routes(self, tree, ctx: ParseContext, symbol_lines: dict[int, str]) -> GraphFragment:
+    def extract_routes(
+        self, tree, ctx: ParseContext, symbol_lines: dict[int, str]
+    ) -> GraphFragment:
         frag = GraphFragment()
         source = ctx.source
         root = tree.root_node
@@ -494,7 +496,12 @@ class PythonProvider(LanguageProvider):
         if fn.type == "attribute":
             obj = fn.child_by_field_name("object")
             attr = fn.child_by_field_name("attribute")
-            if obj is not None and attr is not None and node_text(obj, source) == "self" and class_name:
+            if (
+                obj is not None
+                and attr is not None
+                and node_text(obj, source) == "self"
+                and class_name
+            ):
                 return class_methods.get(class_name, {}).get(node_text(attr, source))
         return None
 

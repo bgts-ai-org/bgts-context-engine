@@ -16,14 +16,10 @@ def symbols_by_name(fragment: GraphFragment) -> dict[str, str]:
 
 
 def has_edge(fragment: GraphFragment, label: EdgeLabel, src: str, dst: str) -> bool:
-    return any(
-        e.label is label and e.src_id == src and e.dst_id == dst for e in fragment.edges
-    )
+    return any(e.label is label and e.src_id == src and e.dst_id == dst for e in fragment.edges)
 
 
 def module_namespaces(fragment: GraphFragment) -> set[str]:
     return {
-        node.properties["namespace"]
-        for node in fragment.nodes
-        if node.label is NodeLabel.MODULE
+        node.properties["namespace"] for node in fragment.nodes if node.label is NodeLabel.MODULE
     }

@@ -61,9 +61,7 @@ def parse_bitbucket_url(url: str) -> BitbucketRepoRef:
 
     parts = [p for p in path.strip("/").split("/") if p]
     if len(parts) < 2:
-        raise ValueError(
-            f"Bitbucket URL must contain '<workspace>/<repo>': {url!r}"
-        )
+        raise ValueError(f"Bitbucket URL must contain '<workspace>/<repo>': {url!r}")
 
     workspace = parts[0]
     repo_slug = parts[1]

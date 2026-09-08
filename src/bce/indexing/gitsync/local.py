@@ -29,7 +29,9 @@ _SKIP_DIRS = {
 }
 
 
-def iter_source_files(root: str | Path, supported_exts: tuple[str, ...]) -> Iterator[tuple[str, Path]]:
+def iter_source_files(
+    root: str | Path, supported_exts: tuple[str, ...]
+) -> Iterator[tuple[str, Path]]:
     """Yield ``(relative_posix_path, absolute_path)`` for files with a supported extension.
 
     Iteration order is sorted for determinism. ``supported_exts`` come from the language registry.
@@ -66,7 +68,7 @@ class FileChange:
     """A single file's change between two commits (deterministic, git-diff derived)."""
 
     status: str  # "added" | "modified" | "deleted"
-    path: str    # repo-relative POSIX path
+    path: str  # repo-relative POSIX path
 
 
 def changed_files(

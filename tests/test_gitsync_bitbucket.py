@@ -46,16 +46,12 @@ def test_build_auth_url_app_password() -> None:
 
 
 def test_build_auth_url_access_token_uses_x_token_auth() -> None:
-    url = build_auth_url(
-        "https://bitbucket.org/acme/widgets.git", GitCredentials(token="ATBB-xyz")
-    )
+    url = build_auth_url("https://bitbucket.org/acme/widgets.git", GitCredentials(token="ATBB-xyz"))
     assert url == "https://x-token-auth:ATBB-xyz@bitbucket.org/acme/widgets.git"
 
 
 def test_build_auth_url_quotes_special_characters() -> None:
-    url = build_auth_url(
-        "https://bitbucket.org/acme/widgets.git", GitCredentials(token="a/b@c:d")
-    )
+    url = build_auth_url("https://bitbucket.org/acme/widgets.git", GitCredentials(token="a/b@c:d"))
     # The secret must be percent-encoded so it cannot break the URL structure.
     assert "a/b@c:d" not in url
     assert "a%2Fb%40c%3Ad" in url

@@ -10,14 +10,14 @@ from bce.indexing.parser.scip import (
     build_scip_resolver,
 )
 
-PY_SOURCE = b'''
+PY_SOURCE = b"""
 def helper(x):
     return x + 1
 
 
 def setup():
     return helper(1)
-'''
+"""
 
 
 def test_null_resolver_confirms_nothing():

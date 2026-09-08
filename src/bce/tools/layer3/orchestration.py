@@ -30,6 +30,7 @@ _WORD_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 def _elapsed_ms(start: float) -> float:
     return round((time.perf_counter() - start) * 1000, 2)
 
+
 #: How many nearest symbols the automatic semantic anchor pulls in (D1; opt-out via auto_semantic).
 _AUTO_SEMANTIC_LIMIT = 10
 
@@ -46,7 +47,9 @@ def _auto_semantic_candidates(
     return [h["ref_id"] for h in hits]
 
 
-def _task_signals(task_text: str, symbol_ids: list[str], repository: GraphRepository) -> dict[str, float]:
+def _task_signals(
+    task_text: str, symbol_ids: list[str], repository: GraphRepository
+) -> dict[str, float]:
     """Deterministic task-signal weight per symbol: 1.0 if the symbol name appears in the task text.
 
     This is the section 6.4 ``task_signal_match`` feature (error codes, keywords, "expired"...).
@@ -269,7 +272,8 @@ def expand_blast_radius(
         {
             fid
             for fid in (
-                (repository.get_symbol(sid) or {}).get("file_id") for sid in sorted(set(target_symbols))
+                (repository.get_symbol(sid) or {}).get("file_id")
+                for sid in sorted(set(target_symbols))
             )
             if fid
         }

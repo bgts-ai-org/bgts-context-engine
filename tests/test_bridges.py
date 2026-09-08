@@ -21,7 +21,7 @@ def _resolver(table):
 
 def test_rn_legacy_bridge_links_js_to_native():
     files = [
-        BridgeFile("ios/MyModule.m", 'RCT_EXPORT_METHOD(doThing:(NSString *)a) { }'),
+        BridgeFile("ios/MyModule.m", "RCT_EXPORT_METHOD(doThing:(NSString *)a) { }"),
         BridgeFile("src/app.js", 'NativeModules.MyModule.doThing("x");'),
     ]
     table = {
@@ -55,7 +55,7 @@ def test_rn_event_channel_bridge():
 
 def test_bridge_requires_both_sides_resolvable():
     files = [
-        BridgeFile("ios/MyModule.m", 'RCT_EXPORT_METHOD(onlyNative:(NSString *)a) { }'),
+        BridgeFile("ios/MyModule.m", "RCT_EXPORT_METHOD(onlyNative:(NSString *)a) { }"),
         BridgeFile("src/app.js", 'NativeModules.MyModule.onlyNative("x");'),
     ]
     # Only native side resolves -> no edge (we never fabricate the JS endpoint).
@@ -66,8 +66,10 @@ def test_bridge_requires_both_sides_resolvable():
 
 def test_bridge_extraction_is_deterministic():
     files = [
-        BridgeFile("ios/MyModule.m", 'RCT_EXPORT_METHOD(a:(int)x) { }\nRCT_EXPORT_METHOD(b:(int)x) { }'),
-        BridgeFile("src/app.js", 'NativeModules.M.a(); NativeModules.M.b();'),
+        BridgeFile(
+            "ios/MyModule.m", "RCT_EXPORT_METHOD(a:(int)x) { }\nRCT_EXPORT_METHOD(b:(int)x) { }"
+        ),
+        BridgeFile("src/app.js", "NativeModules.M.a(); NativeModules.M.b();"),
     ]
     table = {
         "a": [SymbolRef("id:objc:a", "objc"), SymbolRef("id:js:a", "javascript")],

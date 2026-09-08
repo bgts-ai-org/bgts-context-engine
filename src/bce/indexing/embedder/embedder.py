@@ -43,7 +43,9 @@ class Embedder:
         self.store = store
         self.encoder = encoder or build_default_encoder()
 
-    def embed_fragment(self, fragment: GraphFragment, *, repo_id: str, indexed_at_commit: str) -> int:
+    def embed_fragment(
+        self, fragment: GraphFragment, *, repo_id: str, indexed_at_commit: str
+    ) -> int:
         """Embed every Symbol (and File) in a fragment. Returns the number of rows written."""
         pending: list[_Pending] = []
         for node in fragment.nodes:

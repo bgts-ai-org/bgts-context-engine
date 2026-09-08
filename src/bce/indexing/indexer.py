@@ -122,9 +122,7 @@ class Indexer:
         cache_root = Path(cache_dir or settings.repo_cache_dir)
         dest = cache_root / ref.host / ref.workspace / ref.repo_slug
 
-        sync_repo(
-            https_url=ref.https_url, dest=dest, creds=creds, branch=branch, ssl_verify=verify
-        )
+        sync_repo(https_url=ref.https_url, dest=dest, creds=creds, branch=branch, ssl_verify=verify)
         commit = current_commit(dest)
         return self._index_root(
             root=dest.resolve(),
@@ -171,9 +169,7 @@ class Indexer:
             fragments.append(fragment)
             self.upserter.upsert_file_fragment(fragment)
             if self.embedder is not None:
-                self.embedder.embed_fragment(
-                    fragment, repo_id=repo_id, indexed_at_commit=commit
-                )
+                self.embedder.embed_fragment(fragment, repo_id=repo_id, indexed_at_commit=commit)
             files += 1
 
         logger.info(
@@ -336,9 +332,7 @@ class Indexer:
                 modified += 1
 
         if changed_paths:
-            fragments = self._collect_fragments_for_relink(
-                root, repo_id, target, changed_fragments
-            )
+            fragments = self._collect_fragments_for_relink(root, repo_id, target, changed_fragments)
             self._link_and_upsert(root, fragments)
 
         self._update_indexed_commit(repo_id, target)
@@ -443,9 +437,7 @@ class Indexer:
         if conn is None:
             return None
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT last_indexed_commit FROM repos WHERE repo_id = %s", (repo_id,)
-            )
+            cur.execute("SELECT last_indexed_commit FROM repos WHERE repo_id = %s", (repo_id,))
             row = cur.fetchone()
         return row[0] if row and row[0] else None
 

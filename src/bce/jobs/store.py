@@ -21,9 +21,7 @@ import psycopg
 #: Job types the worker knows how to execute (mirrors the CHECK constraint in 0007_jobs.sql).
 JOB_TYPES = ("index", "index_remote", "reindex")
 
-_COLUMNS = (
-    "job_id, job_type, payload, status, result, error, created_at, started_at, finished_at"
-)
+_COLUMNS = "job_id, job_type, payload, status, result, error, created_at, started_at, finished_at"
 
 
 def _row_to_dict(row: tuple[Any, ...]) -> dict[str, Any]:
@@ -40,9 +38,7 @@ def _row_to_dict(row: tuple[Any, ...]) -> dict[str, Any]:
     }
 
 
-def enqueue_job(
-    conn: psycopg.Connection, job_type: str, payload: dict[str, Any]
-) -> dict[str, Any]:
+def enqueue_job(conn: psycopg.Connection, job_type: str, payload: dict[str, Any]) -> dict[str, Any]:
     """Insert a ``pending`` job and return it. Caller commits."""
     if job_type not in JOB_TYPES:
         raise ValueError(f"Unknown job_type '{job_type}'; expected one of {JOB_TYPES}.")
@@ -129,8 +125,7 @@ def claim_next_job(conn: psycopg.Connection) -> dict[str, Any] | None:
 def finish_job(conn: psycopg.Connection, job_id: str, result: dict[str, Any]) -> None:
     """Mark a running job as succeeded with its result payload. Caller commits."""
     conn.execute(
-        "UPDATE jobs SET status = 'succeeded', result = %s, finished_at = now() "
-        "WHERE job_id = %s",
+        "UPDATE jobs SET status = 'succeeded', result = %s, finished_at = now() WHERE job_id = %s",
         (json.dumps(result), job_id),
     )
 

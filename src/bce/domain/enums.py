@@ -22,13 +22,13 @@ class NodeLabel(StrEnum):
 
 
 class EdgeLabel(StrEnum):
-    DEFINED_IN = "DEFINED_IN"        # Symbol -> File
-    BELONGS_TO = "BELONGS_TO"        # File -> Repo
-    IMPORTS = "IMPORTS"              # File/Module -> File/Module
-    CALLS = "CALLS"                  # Symbol -> Symbol (may be cross-repo)
-    INHERITS = "INHERITS"            # Symbol -> Symbol
-    IMPLEMENTS = "IMPLEMENTS"        # Symbol -> Symbol
-    REFERENCES = "REFERENCES"        # Symbol -> Symbol (carries ref_kind)
+    DEFINED_IN = "DEFINED_IN"  # Symbol -> File
+    BELONGS_TO = "BELONGS_TO"  # File -> Repo
+    IMPORTS = "IMPORTS"  # File/Module -> File/Module
+    CALLS = "CALLS"  # Symbol -> Symbol (may be cross-repo)
+    INHERITS = "INHERITS"  # Symbol -> Symbol
+    IMPLEMENTS = "IMPLEMENTS"  # Symbol -> Symbol
+    REFERENCES = "REFERENCES"  # Symbol -> Symbol (carries ref_kind)
     # Feature 1: Route -> Symbol (handler). Feature 5: DesignNote -> Symbol.
     ROUTES_TO = "ROUTES_TO"
     EXPLAINS = "EXPLAINS"

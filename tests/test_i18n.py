@@ -15,12 +15,16 @@ def test_resolve_priority_request_over_header():
 
 
 def test_resolve_falls_back_to_accept_language():
-    loc = resolve_locale(requested=None, accept_language="tr-TR,tr;q=0.9,en;q=0.5", supported=("en", "tr"))
+    loc = resolve_locale(
+        requested=None, accept_language="tr-TR,tr;q=0.9,en;q=0.5", supported=("en", "tr")
+    )
     assert loc == "tr"
 
 
 def test_resolve_falls_back_to_default():
-    loc = resolve_locale(requested="de", accept_language="fr-FR", supported=("en", "tr"), default="en")
+    loc = resolve_locale(
+        requested="de", accept_language="fr-FR", supported=("en", "tr"), default="en"
+    )
     assert loc == "en"
 
 

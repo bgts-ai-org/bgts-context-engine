@@ -5,7 +5,7 @@ from __future__ import annotations
 from bce.domain.enums import EdgeLabel, RefKind
 from bce.indexing.extractor import Extractor
 
-PY_SOURCE = b'''
+PY_SOURCE = b"""
 CONFIG = {}
 DATA = []
 
@@ -19,9 +19,9 @@ def setup():
     n = helper(DATA)
     total = CONFIG
     return n, total
-'''
+"""
 
-JS_SOURCE = b'''
+JS_SOURCE = b"""
 let config = {};
 const data = [];
 
@@ -33,7 +33,7 @@ function setup() {
   let total = config;
   return [n, total];
 }
-'''
+"""
 
 
 def _ref_map(frag):

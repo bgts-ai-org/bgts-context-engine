@@ -29,7 +29,7 @@ def _calls(frag):
     return [e for e in frag.edges if e.label is EdgeLabel.CALLS]
 
 
-JAVA_SOURCE = b'''
+JAVA_SOURCE = b"""
 package com.example.api;
 
 class UserController {
@@ -42,9 +42,9 @@ class UserController {
         return "ok";
     }
 }
-'''
+"""
 
-GO_SOURCE = b'''
+GO_SOURCE = b"""
 package main
 
 func helper(x int) int { return x + 1 }
@@ -56,9 +56,9 @@ func setup(r *Engine) {
 }
 
 func handler() {}
-'''
+"""
 
-CSHARP_SOURCE = b'''
+CSHARP_SOURCE = b"""
 namespace Api {
     public class UserController {
         [HttpGet("/users")]
@@ -71,7 +71,7 @@ namespace Api {
         }
     }
 }
-'''
+"""
 
 
 def test_java_provider_symbols_routes_calls():

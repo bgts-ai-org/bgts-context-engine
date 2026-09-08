@@ -466,9 +466,7 @@ def job_index_route(
     return _enqueue_response(repository, "index", payload, locale)
 
 
-@router.post(
-    "/v1/jobs/index-remote", response_model=ToolResponse, status_code=202, tags=["jobs"]
-)
+@router.post("/v1/jobs/index-remote", response_model=ToolResponse, status_code=202, tags=["jobs"])
 def job_index_remote_route(
     body: IndexRemoteRequest,
     repository: GraphRepository = Depends(get_repository),

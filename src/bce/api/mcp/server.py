@@ -37,7 +37,9 @@ def build_server(name: str = "bgts-context-engine") -> Any:
         ]
 
     @server.call_tool()
-    async def _call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:  # pragma: no cover
+    async def _call_tool(
+        name: str, arguments: dict[str, Any]
+    ) -> list[TextContent]:  # pragma: no cover
         with connection() as conn:
             try:
                 result = dispatch_tool(conn, name, arguments)

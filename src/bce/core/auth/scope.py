@@ -33,9 +33,7 @@ class ScopeFilter:
     def __init__(self, principal: Principal) -> None:
         self.principal = principal
         self._allowed = (
-            None
-            if principal.allowed_repo_ids is None
-            else set(principal.allowed_repo_ids)
+            None if principal.allowed_repo_ids is None else set(principal.allowed_repo_ids)
         )
 
     def allows(self, repo_id: str | None) -> bool:

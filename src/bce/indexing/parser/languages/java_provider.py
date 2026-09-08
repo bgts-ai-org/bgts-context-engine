@@ -105,7 +105,9 @@ class JavaProvider(LanguageProvider):
             seen_unresolved: set[tuple[str, str | None]] = set()
             for call in self._iter_calls(d.body):
                 line = call.start_point[0] + 1
-                target = self._resolve_call(call, source, module_symbols, class_methods, d.class_name)
+                target = self._resolve_call(
+                    call, source, module_symbols, class_methods, d.class_name
+                )
                 if target is not None and target != d.symbol_id:
                     frag.add_edge(
                         GraphEdge(EdgeLabel.CALLS, d.symbol_id, target, properties={"line": line})
@@ -224,7 +226,9 @@ class JavaProvider(LanguageProvider):
                     return "public"
         return "package"
 
-    def _add_heritage(self, node, source, frag, class_symbol_id, module_symbols, unresolved) -> None:
+    def _add_heritage(
+        self, node, source, frag, class_symbol_id, module_symbols, unresolved
+    ) -> None:
         line = node.start_point[0] + 1
         for field in ("superclass", "interfaces"):
             sub = node.child_by_field_name(field)
@@ -236,9 +240,7 @@ class JavaProvider(LanguageProvider):
                 if ident in module_symbols:
                     frag.add_edge(GraphEdge(label, class_symbol_id, module_symbols[ident]))
                 else:
-                    unresolved.append(
-                        UnresolvedRef(class_symbol_id, ident, kind=kind, line=line)
-                    )
+                    unresolved.append(UnresolvedRef(class_symbol_id, ident, kind=kind, line=line))
 
     def _iter_type_identifiers(self, node, source):
         stack = [node]
@@ -261,9 +263,7 @@ class JavaProvider(LanguageProvider):
                 continue
             module_id = make_module_id(ctx.repo_id, name)
             frag.add_node(
-                GraphNode(
-                    NodeLabel.MODULE, module_id, {"namespace": name, "repo_id": ctx.repo_id}
-                )
+                GraphNode(NodeLabel.MODULE, module_id, {"namespace": name, "repo_id": ctx.repo_id})
             )
             frag.add_edge(GraphEdge(EdgeLabel.IMPORTS, ctx.file_id, module_id))
             if name.endswith(".*"):
@@ -274,11 +274,15 @@ class JavaProvider(LanguageProvider):
                     # ``import static a.b.C.max`` binds ``max`` to class C in package a.b.
                     pkg, _, cls = module_path.rpartition(".")
                     bindings.append(
-                        ImportBinding(local_name=member, module_path=pkg, imported_name=f"{cls}.{member}")
+                        ImportBinding(
+                            local_name=member, module_path=pkg, imported_name=f"{cls}.{member}"
+                        )
                     )
                 else:
                     bindings.append(
-                        ImportBinding(local_name=member, module_path=module_path, imported_name=member)
+                        ImportBinding(
+                            local_name=member, module_path=module_path, imported_name=member
+                        )
                     )
 
     def _unresolved_call_parts(self, call, source) -> tuple[str, str | None] | None:
@@ -311,7 +315,9 @@ class JavaProvider(LanguageProvider):
 
     # --- route extraction (Spring MVC) ---
 
-    def extract_routes(self, tree, ctx: ParseContext, symbol_lines: dict[int, str]) -> GraphFragment:
+    def extract_routes(
+        self, tree, ctx: ParseContext, symbol_lines: dict[int, str]
+    ) -> GraphFragment:
         frag = GraphFragment()
         source = ctx.source
         root = tree.root_node
@@ -370,7 +376,7 @@ class JavaProvider(LanguageProvider):
             current = stack.pop()
             for child in current.named_children:
                 if child.type == "string_literal":
-                    return node_text(child, source).strip("\"")
+                    return node_text(child, source).strip('"')
                 stack.append(child)
         return None
 
@@ -385,7 +391,12 @@ class JavaProvider(LanguageProvider):
     # --- pass 2 (CALLS) ---
 
     def _iter_calls(self, node):
-        stop = {"method_declaration", "constructor_declaration", "class_declaration", "lambda_expression"}
+        stop = {
+            "method_declaration",
+            "constructor_declaration",
+            "class_declaration",
+            "lambda_expression",
+        }
         stack = [node]
         while stack:
             current = stack.pop()
@@ -441,7 +452,12 @@ class JavaProvider(LanguageProvider):
             )
 
     def _walk_refs(self, node, source, note) -> None:
-        stop = {"method_declaration", "constructor_declaration", "class_declaration", "lambda_expression"}
+        stop = {
+            "method_declaration",
+            "constructor_declaration",
+            "class_declaration",
+            "lambda_expression",
+        }
         stack = [node]
         while stack:
             current = stack.pop()

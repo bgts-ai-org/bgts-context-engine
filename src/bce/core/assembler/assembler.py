@@ -21,7 +21,7 @@ _MID_MAX_DISTANCE = 2
 
 
 class DetailLevel(StrEnum):
-    FULL = "full"          # full body
+    FULL = "full"  # full body
     SIGNATURE = "signature"  # signature + docstring
     REFERENCE = "reference"  # reference only (id + location)
 

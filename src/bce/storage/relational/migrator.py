@@ -109,7 +109,9 @@ def applied_ids(conn: psycopg.Connection) -> set[str]:
         return {row[0] for row in cur.fetchall()}
 
 
-def run_migrations(conn: psycopg.Connection | None = None, migrations_dir: Path | None = None) -> list[str]:
+def run_migrations(
+    conn: psycopg.Connection | None = None, migrations_dir: Path | None = None
+) -> list[str]:
     """Apply pending migrations. Returns the ids applied in this run."""
     migrations_dir = migrations_dir or MIGRATIONS_DIR
 

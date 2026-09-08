@@ -36,7 +36,9 @@ class UINode(BaseModel):
     """Graph-view node: ``id`` is the universal ``gid``; heavy fields (body/docstring) excluded."""
 
     id: str
-    label: str = Field(description="Node label: Repo | File | Symbol | Module | Route | DesignNote.")
+    label: str = Field(
+        description="Node label: Repo | File | Symbol | Module | Route | DesignNote."
+    )
     display: str = Field(description="Human-friendly caption for rendering.")
     properties: dict[str, Any] = Field(default_factory=dict)
 
@@ -102,7 +104,9 @@ class UITraceRequest(BaseModel):
     task_text: str = Field(..., min_length=1, description="Task title + description text.")
     max_candidates: int = Field(default=8, ge=1, le=100, description="Top-N narrowing size.")
     max_tokens: int = Field(default=4000, ge=1, le=200000, description="Assembly token budget.")
-    repo_ids: list[str] | None = Field(default=None, description="Restrict retrieval to these repos.")
+    repo_ids: list[str] | None = Field(
+        default=None, description="Restrict retrieval to these repos."
+    )
     auto_semantic: bool = Field(
         default=True, description="Run the automatic semantic anchor stage (D1)."
     )

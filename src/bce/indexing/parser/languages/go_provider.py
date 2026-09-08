@@ -176,7 +176,9 @@ class GoProvider(LanguageProvider):
             kind=str(kind),
         )
 
-    def _add_node(self, frag, ctx, symbol_id, name, kind, signature, node, package, body=None) -> None:
+    def _add_node(
+        self, frag, ctx, symbol_id, name, kind, signature, node, package, body=None
+    ) -> None:
         frag.add_node(
             GraphNode(
                 NodeLabel.SYMBOL,
@@ -204,7 +206,7 @@ class GoProvider(LanguageProvider):
                 continue
             for spec in self._iter_import_specs(child):
                 path_node = spec.child_by_field_name("path") or spec
-                name = node_text(path_node, source).strip("\"")
+                name = node_text(path_node, source).strip('"')
                 if not name:
                     continue
                 module_id = make_module_id(ctx.repo_id, name)
@@ -253,7 +255,9 @@ class GoProvider(LanguageProvider):
 
     # --- route extraction (Gin) ---
 
-    def extract_routes(self, tree, ctx: ParseContext, symbol_lines: dict[int, str]) -> GraphFragment:
+    def extract_routes(
+        self, tree, ctx: ParseContext, symbol_lines: dict[int, str]
+    ) -> GraphFragment:
         frag = GraphFragment()
         source = ctx.source
         root = tree.root_node
@@ -282,7 +286,7 @@ class GoProvider(LanguageProvider):
         path = None
         for arg in args.named_children:
             if arg.type in ("interpreted_string_literal", "raw_string_literal"):
-                path = node_text(arg, source).strip("\"`")
+                path = node_text(arg, source).strip('"`')
                 break
         if path is None:
             return
@@ -368,7 +372,11 @@ class GoProvider(LanguageProvider):
             if left is not None:
                 for ident in self._idents(left, source):
                     note(ident, RefKind.DEFINE)
-            self._note_reads(child.child_by_field_name("right") or child.child_by_field_name("value"), source, note)
+            self._note_reads(
+                child.child_by_field_name("right") or child.child_by_field_name("value"),
+                source,
+                note,
+            )
         elif ctype == "assignment_statement":
             left = child.child_by_field_name("left")
             if left is not None:

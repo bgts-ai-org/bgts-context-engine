@@ -184,14 +184,12 @@ def node_neighbors(
     """Direct neighbors of a node with their connecting edges (click-to-expand)."""
     params = {"gid": gid, "limit": limit}
     out_rows = client.cypher(
-        "MATCH (n {gid: $gid})-[r]->(m) RETURN n.gid, m.gid, r, m "
-        "ORDER BY m.gid LIMIT $limit",
+        "MATCH (n {gid: $gid})-[r]->(m) RETURN n.gid, m.gid, r, m ORDER BY m.gid LIMIT $limit",
         params,
         ["src", "dst", "r", "m"],
     )
     in_rows = client.cypher(
-        "MATCH (m)-[r]->(n {gid: $gid}) RETURN m.gid, n.gid, r, m "
-        "ORDER BY m.gid LIMIT $limit",
+        "MATCH (m)-[r]->(n {gid: $gid}) RETURN m.gid, n.gid, r, m ORDER BY m.gid LIMIT $limit",
         params,
         ["src", "dst", "r", "m"],
     )
@@ -233,9 +231,7 @@ def repo_stats(client: GraphClient, repo_id: str) -> dict[str, Any]:
 
     node_counts: dict[str, int] = {}
     for label in NodeLabel:
-        node_counts[str(label)] = _count(
-            f"MATCH (n:{label}) WHERE {_member('n')} RETURN count(n)"
-        )
+        node_counts[str(label)] = _count(f"MATCH (n:{label}) WHERE {_member('n')} RETURN count(n)")
 
     edge_counts: dict[str, int] = {}
     for edge_label in EdgeLabel:
@@ -292,8 +288,7 @@ def search_nodes(
         ret = "RETURN f.gid, f.path, f.language ORDER BY f.path LIMIT $limit"
         if repo_id:
             query = (
-                "MATCH (f:File) WHERE f.repo_id = $repo AND toLower(f.path) CONTAINS $term "
-                + ret
+                "MATCH (f:File) WHERE f.repo_id = $repo AND toLower(f.path) CONTAINS $term " + ret
             )
             params: dict[str, Any] = {"repo": repo_id, "term": term_l, "limit": limit}
         else:
