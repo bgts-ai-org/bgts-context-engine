@@ -93,6 +93,21 @@ exact command you ran, the indexed language, and what you expected versus what h
 
 Security issues go to the process in [SECURITY.md](SECURITY.md), not to public issues.
 
+## Releasing
+
+For maintainers. Releases are cut from `main` and driven entirely by the tag.
+
+1. Merge `development` into `main`.
+2. Bump `__version__` in `src/bce/__init__.py`. That is the only place a version is
+   written; `pyproject.toml` reads it from there.
+3. Move the `CHANGELOG.md` entries from `Unreleased` under the new version.
+4. Tag and push: `git tag v0.2.0 && git push origin v0.2.0`.
+
+The release workflow then verifies that the tag matches `__version__`, compiles the web
+interface into the package, builds the wheel and sdist, asserts the UI bundle is actually
+inside the wheel, publishes to PyPI through Trusted Publishing, and opens the GitHub
+release. No PyPI token is stored in this repository.
+
 ## Licence
 
 By contributing you agree that your contribution is licensed under the MIT License, the

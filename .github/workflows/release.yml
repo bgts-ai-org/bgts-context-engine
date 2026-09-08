@@ -1,0 +1,96 @@
+﻿name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build distributions
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # The tag drives the release; bce.__version__ drives the package metadata. Fail
+      # loudly here rather than publish a wheel whose version contradicts its tag.
+      - name: Check the tag matches the package version
+        id: version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(python -c "import sys; sys.path.insert(0, 'src'); import bce; print(bce.__version__)")"
+          echo "tag=$tag package=$pkg"
+          test "$tag" = "$pkg"
+          echo "version=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Build the UI into the package
+        run: python scripts/build_ui.py
+
+      - run: pip install build twine
+      - run: python -m build
+      - run: twine check dist/*
+
+      - name: Assert the UI is bundled in the wheel
+        run: |
+          python - <<'PY'
+          import sys, zipfile, glob
+          wheel = glob.glob("dist/*.whl")[0]
+          if "bce/api/rest/static/index.html" not in zipfile.ZipFile(wheel).namelist():
+              sys.exit(f"{wheel} does not contain the compiled UI")
+          PY
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
+
+  pypi:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/bgts-context-engine
+    permissions:
+      id-token: write   # Trusted Publishing; no API token is stored in this repository
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    name: Publish the GitHub release
+    needs: [build, pypi]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          body: |
+            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/CHANGELOG.md).
+
+            ```bash
+            pip install bgts-context-engine==${{ needs.build.outputs.version }}
+            ```
