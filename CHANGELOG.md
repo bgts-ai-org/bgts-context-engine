@@ -27,6 +27,7 @@ First public release.
   `resolve-symbol`, `find-references`, `languages`, `serve` and `serve-mcp`.
 - Benchmark harness reporting latency, recall, precision and determinism.
 - Docker Compose deployment with PostgreSQL, Apache AGE and pgvector preconfigured.
+- `server.json` manifest describing the stdio server for the official MCP registry.
 
 [Unreleased]: https://github.com/bilgeadamtechnology/BGTS-Context-Engine/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/bilgeadamtechnology/BGTS-Context-Engine/releases/tag/v0.1.0
