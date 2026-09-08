@@ -1,8 +1,6 @@
 <div align="center">
 
-<img src="web/public/favicon.svg" alt="" width="72" height="72">
-
-# BGTS Context Engine
+<img src="https://raw.githubusercontent.com/bilgeadamtechnology/BGTS-Context-Engine/main/docs/assets/social-preview.png" alt="BGTS Context Engine" width="820">
 
 **Yapay zekâ kodlama ajanları için deterministik kod-graf bağlamı.**
 
@@ -14,8 +12,9 @@ veren sekiz sembolü sıralanmış, bütçelenmiş ve yeniden üretilebilir şek
 [![CI](https://github.com/bilgeadamtechnology/BGTS-Context-Engine/actions/workflows/ci.yml/badge.svg)](https://github.com/bilgeadamtechnology/BGTS-Context-Engine/actions/workflows/ci.yml)
 [![Lisans: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-uyumlu-000000.svg)](docs/mcp.md)
+[![Yıldızlar](https://img.shields.io/github/stars/bilgeadamtechnology/BGTS-Context-Engine?style=flat&logo=github)](https://github.com/bilgeadamtechnology/BGTS-Context-Engine/stargazers)
 
-[Hızlı başlangıç](#hızlı-başlangıç) · [Nasıl çalışır](#nasıl-çalışır) · [Dokümantasyon](#dokümantasyon) · [English](README.md)
+[Hızlı başlangıç](#hızlı-başlangıç) · [Ajanınızdan kullanma](#ajanınızdan-kullanma) · [Nasıl çalışır](#nasıl-çalışır) · [Dokümantasyon](#dokümantasyon) · [English](README.md)
 
 </div>
 
@@ -72,15 +71,51 @@ bce serve        # :8000/docs adresinde REST, :8000/ui/ adresinde web arayüzü
 bce serve-mcp    # ajanlar için stdio üzerinden MCP
 ```
 
-Herhangi bir MCP istemcisini yönlendirin:
+## Ajanınızdan kullanma
+
+MCP yüzeyi `mcp` ekinin arkasındadır: `pip install "bgts-context-engine[mcp]"`. stdio
+konuştuğu için her MCP istemcisi aynı şekilde yapılandırılır — `bce serve-mcp` ve ortamda
+veritabanı bağlantısı.
+
+**Cursor** — proje içinde `.cursor/mcp.json`, ya da tüm projeler için `~/.cursor/mcp.json`:
 
 ```json
 {
   "mcpServers": {
-    "bgts-context-engine": { "command": "bce", "args": ["serve-mcp"] }
+    "bgts-context-engine": {
+      "command": "bce",
+      "args": ["serve-mcp"],
+      "env": { "BCE_DB_HOST": "localhost", "BCE_DB_NAME": "bce" }
+    }
   }
 }
 ```
+
+**Claude Code** — tek komut:
+
+```bash
+claude mcp add bgts-context-engine --env BCE_DB_HOST=localhost -- bce serve-mcp
+```
+
+**VS Code** — `.vscode/mcp.json`:
+
+```json
+{
+  "servers": {
+    "bgts-context-engine": { "type": "stdio", "command": "bce", "args": ["serve-mcp"] }
+  }
+}
+```
+
+**Claude Desktop** — `claude_desktop_config.json` içinde Cursor ile aynı blok.
+
+Global kurulum istemiyorsanız yukarıdaki her yerde `command` olarak
+`uvx --from "bgts-context-engine[mcp]" bce serve-mcp` kullanılabilir.
+
+Sonra ajanınıza, açık olan dosyayı değil deponun tamamını gerektiren bir şey sorun:
+*"session TTL'i değiştirirsem ne bozulur?"* Ajan `get_context_for_task`'ı çağırır;
+[docs/mcp.md](docs/mcp.md) içindeki on dört araç ise oradan devam etmesini sağlar — kesin
+çağıranlar, tip hiyerarşisi, route handler'ları — dosya adlarını tahmin etmeden.
 
 ## Ne döner
 
@@ -191,6 +226,49 @@ Formülün tamamı, her ağırlık ve güven eşikleri
 Bir language server kesindir ama açık olanla sınırlıdır. Embedding araması geniştir ama
 hesap veremez. Bu proje ikisinin arasında durur: ilki gibi depo çapında ve diller arası,
 ikincisi gibi kesin ve yeniden üretilebilir.
+
+## Ölçme
+
+Getirme kalitesi iddiaları, hangi görev kümesinde ölçüldüğü bilinmeden değersizdir; bu
+yüzden bir skor tablosu değil, ölçüm aracının kendisi gelir. Kendi görevlerinizi ve onları
+yanıtladığına inandığınız sembolleri verirsiniz:
+
+```bash
+bce bench --cases my-tasks.json --out report.json
+```
+
+Her vaka bir görev metni ve onun doğru kabul edilen `symbol_id`'lerinden oluşur. Rapor vaka
+başına recall, precision, precision@1 ve MRR ile medyan ve p95 gecikmeyi verir; ayrıca
+skorlardan daha önemli iki geç/kal kontrolü içerir: her vaka tekrar tekrar koşulur ve
+bayt-birebir aynı sırayı döndürmek zorundadır, kapsamlı bir principal ile koşulan vakalar
+ise o principal'ın okuyamayacağı bir depoyu yüzeye çıkarmamalıdır.
+
+Zor kısım vaka dosyasını hazırlamaktır — doğru cevabın ne olduğuna elle karar vermek
+demektir. Skorlama ağırlıklarındaki bir değişikliğin gerçekten iyileştirme olup olmadığını
+öğrenmenin tek dürüst yolu da budur. Biçim ve örnek bir dosya
+[docs/deployment.md](docs/deployment.md#benchmarking) içindedir.
+
+## Yol haritası
+
+Zorluğa göre değil, ne sıklıkta gündeme geldiğine göre sıralı:
+
+- **Her katmanda kapsam denetimi.** Kullanıcı bazlı depo filtresini Layer 3 uygular,
+  Layer 1 ve 2 uygulamaz. Bu kapanana kadar API bir proxy arkasında durmalıdır —
+  [SECURITY.md](SECURITY.md).
+- **MCP için streamable HTTP taşıması.** Bugün MCP yüzeyi yalnızca stdio olduğu için sunucu
+  ajanın yanında koşar. Uzak taşıma, tek bir indeksin tüm ekibe hizmet etmesini sağlar.
+- **Daha fazla dil.** En çok istenenler Rust, Kotlin ve PHP. Sağlayıcı arayüzü, sürtünmesi
+  en az katkı yolu — [docs/languages.md](docs/languages.md#adding-a-language).
+- **Daha geniş SCIP alımı.** Derleyici seviyesindeki kenarlar sözdiziminden türetilenleri
+  yener ve öyle skorlanır; daha fazla araç zinciri, grafın daha büyük kısmının `scip`
+  kaynağını taşıması demektir.
+- **Yayımlanmış bir ölçüm kümesi.** Açık depolar üzerinde açık bir görev kümesi, böylece
+  sonuçlar yalnızca kendi koşularınız arasında değil projeler arasında da karşılaştırılabilir
+  olur.
+
+İstekler ve itirazlar
+[issue'lara](https://github.com/bilgeadamtechnology/BGTS-Context-Engine/issues) — insanların
+gerçekten istediği şey bu listeyi yeniden sıralar.
 
 ## Dokümantasyon
 

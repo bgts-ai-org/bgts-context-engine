@@ -219,3 +219,44 @@ scoped principal cannot see forbidden repositories.
 
 Run it before and after any change to scoring, expansion or anchor discovery. It is the
 only thing that will tell you whether a retrieval change was actually an improvement.
+
+### The case file
+
+`--cases` takes a JSON array. Only `name`, `task_text` and `relevant_symbol_ids` are
+needed; everything else narrows the run or turns on a check.
+
+```json
+[
+  {
+    "name": "session-ttl-change",
+    "task_text": "the login timeout fires too early on the meeting webhook",
+    "relevant_symbol_ids": [
+      "python::auth::session::refresh_session#88c2",
+      "python::auth::config::SESSION_TTL#4b0d",
+      "python::api::webhooks::handle_meeting_webhook#a3f1"
+    ],
+    "explicit_symbols": ["refresh_session"],
+    "route_paths": ["/webhooks/meeting"],
+    "repo_ids": ["my-service"],
+    "commit": "9f21ac4",
+    "max_candidates": 8,
+    "allowed_repo_ids": ["my-service"],
+    "forbidden_repo_ids": ["billing-internal"]
+  }
+]
+```
+
+| Field | Effect |
+| --- | --- |
+| `relevant_symbol_ids` | ground truth; recall, precision, precision@1 and MRR are all measured against it |
+| `explicit_symbols`, `route_paths`, `history_file_ids`, `component_repo_ids` | seed the anchor stage the way a real caller would, instead of relying on task text alone |
+| `repo_ids` | restrict the search, as a caller working in one service would |
+| `commit` | pin the case so ground truth stays valid as the index moves on |
+| `allowed_repo_ids`, `forbidden_repo_ids` | enable the `rls_ok` check: the case is re-run as a scoped principal and must not surface a forbidden repository |
+
+Get the `symbol_id` values with `bce resolve-symbol --name refresh_session`, or by clicking
+the symbol in the web interface — both print the id in full.
+
+The ground truth has to be written by hand, which is the expensive part and also the point:
+a case file is a recorded judgement about what the right answer is, so a scoring change that
+looks clever can be checked against it rather than argued about.

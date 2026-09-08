@@ -1,8 +1,7 @@
 <div align="center">
 
-<img src="web/public/favicon.svg" alt="" width="72" height="72">
-
-# BGTS Context Engine
+<!-- Absolute URL: this README is also the PyPI project description, where relative paths break. -->
+<img src="https://raw.githubusercontent.com/bilgeadamtechnology/BGTS-Context-Engine/main/docs/assets/social-preview.png" alt="BGTS Context Engine" width="820">
 
 **Deterministic code-graph context for AI coding agents.**
 
@@ -14,8 +13,9 @@ that actually answer it — ranked, budgeted, and reproducible.
 [![CI](https://github.com/bilgeadamtechnology/BGTS-Context-Engine/actions/workflows/ci.yml/badge.svg)](https://github.com/bilgeadamtechnology/BGTS-Context-Engine/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-compatible-000000.svg)](docs/mcp.md)
+[![Stars](https://img.shields.io/github/stars/bilgeadamtechnology/BGTS-Context-Engine?style=flat&logo=github)](https://github.com/bilgeadamtechnology/BGTS-Context-Engine/stargazers)
 
-[Quick start](#quick-start) · [How it works](#how-it-works) · [Documentation](#documentation) · [Türkçe](README.tr.md)
+[Quick start](#quick-start) · [Use it from your agent](#use-it-from-your-agent) · [How it works](#how-it-works) · [Documentation](#documentation) · [Türkçe](README.tr.md)
 
 </div>
 
@@ -69,15 +69,51 @@ bce serve        # REST at :8000/docs, web UI at :8000/ui/
 bce serve-mcp    # MCP over stdio, for agents
 ```
 
-Point any MCP client at it:
+## Use it from your agent
+
+The MCP surface is behind the `mcp` extra: `pip install "bgts-context-engine[mcp]"`. It
+speaks stdio, so every MCP client configures it the same way — `bce serve-mcp`, plus the
+database connection in the environment.
+
+**Cursor** — `.cursor/mcp.json` in the project, or `~/.cursor/mcp.json` for every project:
 
 ```json
 {
   "mcpServers": {
-    "bgts-context-engine": { "command": "bce", "args": ["serve-mcp"] }
+    "bgts-context-engine": {
+      "command": "bce",
+      "args": ["serve-mcp"],
+      "env": { "BCE_DB_HOST": "localhost", "BCE_DB_NAME": "bce" }
+    }
   }
 }
 ```
+
+**Claude Code** — one command:
+
+```bash
+claude mcp add bgts-context-engine --env BCE_DB_HOST=localhost -- bce serve-mcp
+```
+
+**VS Code** — `.vscode/mcp.json`:
+
+```json
+{
+  "servers": {
+    "bgts-context-engine": { "type": "stdio", "command": "bce", "args": ["serve-mcp"] }
+  }
+}
+```
+
+**Claude Desktop** — same block as Cursor, in `claude_desktop_config.json`.
+
+Without a global install, `uvx --from "bgts-context-engine[mcp]" bce serve-mcp` works as the
+`command` anywhere above.
+
+Then ask your agent something that needs the repository rather than the file you have open:
+*"what breaks if I change the session TTL?"* The agent calls `get_context_for_task`, and the
+fourteen tools in [docs/mcp.md](docs/mcp.md) let it drill from there — exact callers, type
+hierarchy, route handlers — without guessing at file names.
 
 ## What comes back
 
@@ -185,6 +221,48 @@ The full formula, every weight, and the confidence thresholds are in
 A language server is exact but scoped to what you have open. Embedding search is broad but
 unaccountable. This sits between them: repository-wide and cross-language like the former,
 exact and reproducible like the latter.
+
+## Measuring it
+
+Retrieval quality claims are worthless without the task set they were measured on, so the
+harness ships instead of a leaderboard. You give it your own tasks and the symbols you
+believe answer them:
+
+```bash
+bce bench --cases my-tasks.json --out report.json
+```
+
+Each case is a task text plus its ground-truth `symbol_id`s. The report gives recall,
+precision, precision@1 and MRR per case, median and p95 latency, and two pass/fail checks
+that matter more than the scores: every case is run repeatedly and must return a
+byte-identical ordering, and any case with a scoped principal must not surface a repository
+that principal cannot read.
+
+Building the case file is the real work — it means deciding, by hand, what the right answer
+is. It is also the only honest way to know whether a change to the scoring weights helped.
+The format and a worked example are in
+[docs/deployment.md](docs/deployment.md#benchmarking).
+
+## Roadmap
+
+Ordered by how often it comes up, not by difficulty:
+
+- **Scope enforcement on every layer.** Layer 3 applies the per-user repository filter;
+  Layers 1 and 2 do not. Until that closes, the API belongs behind a proxy — see
+  [SECURITY.md](SECURITY.md).
+- **Streamable HTTP transport for MCP.** Today the MCP surface is stdio only, so the server
+  runs next to the agent. Remote transport makes one index serve a team.
+- **More languages.** Rust, Kotlin and PHP are the most requested. The provider interface is
+  the contribution path with the least friction — see
+  [docs/languages.md](docs/languages.md#adding-a-language).
+- **Wider SCIP ingestion.** Compiler-grade edges beat syntax-derived ones and are scored as
+  such; more toolchains means more of the graph carries `scip` provenance.
+- **A published benchmark corpus.** An open task set over public repositories, so results
+  are comparable between projects rather than only between your own runs.
+
+Requests and disagreements belong in
+[issues](https://github.com/bilgeadamtechnology/BGTS-Context-Engine/issues) — what people
+actually ask for reorders this list.
 
 ## Documentation
 

@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" width="1280" height="640" role="img" aria-label="BGTS Context Engine - deterministic code-graph context for AI coding agents">
+  <title>BGTS Context Engine</title>
+
+  <defs>
+    <!-- Graph distance is the whole idea, so the palette carries it: the anchor is amber,
+         first-ring neighbours are solid cyan, the outer ring dims. -->
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.22"/>
+      <stop offset="100%" stop-color="#38bdf8" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M40 0H0V40" fill="none" stroke="#1e293b" stroke-width="1"/>
+    </pattern>
+  </defs>
+
+  <rect width="1280" height="640" fill="#0f172a"/>
+  <rect width="1280" height="640" fill="url(#grid)" opacity="0.55"/>
+  <circle cx="960" cy="320" r="300" fill="url(#glow)"/>
+
+  <g stroke="#38bdf8" stroke-linecap="round" fill="none">
+    <g stroke-width="3" opacity="0.9">
+      <line x1="960" y1="320" x2="855" y2="200"/>
+      <line x1="960" y1="320" x2="1085" y2="215"/>
+      <line x1="960" y1="320" x2="850" y2="440"/>
+      <line x1="960" y1="320" x2="1080" y2="450"/>
+    </g>
+    <g stroke-width="2" opacity="0.42">
+      <line x1="855" y1="200" x2="760" y2="120"/>
+      <line x1="1085" y1="215" x2="1180" y2="140"/>
+      <line x1="850" y1="440" x2="755" y2="520"/>
+      <line x1="1080" y1="450" x2="1175" y2="525"/>
+      <line x1="855" y1="200" x2="1085" y2="215"/>
+    </g>
+  </g>
+
+  <g fill="#38bdf8">
+    <circle cx="855" cy="200" r="17"/>
+    <circle cx="1085" cy="215" r="17"/>
+    <circle cx="850" cy="440" r="17"/>
+    <circle cx="1080" cy="450" r="17"/>
+  </g>
+  <g fill="#38bdf8" opacity="0.4">
+    <circle cx="760" cy="120" r="11"/>
+    <circle cx="1180" cy="140" r="11"/>
+    <circle cx="755" cy="520" r="11"/>
+    <circle cx="1175" cy="525" r="11"/>
+  </g>
+  <circle cx="960" cy="320" r="30" fill="#fbbf24"/>
+
+  <g font-family="Segoe UI, Helvetica Neue, Arial, sans-serif">
+    <text x="96" y="252" fill="#f8fafc" font-size="66" font-weight="700">BGTS Context Engine</text>
+
+    <text x="96" y="322" fill="#94a3b8" font-size="31">Deterministic code-graph context for</text>
+    <text x="96" y="366" fill="#94a3b8" font-size="31">AI coding agents.</text>
+
+    <text x="96" y="452" fill="#38bdf8" font-size="24" font-weight="600" letter-spacing="1.5">MCP &#183; REST &#183; PostgreSQL + Apache AGE + pgvector</text>
+    <text x="96" y="498" fill="#64748b" font-size="23">No model in the retrieval path. Same task, same answer.</text>
+  </g>
+</svg>
