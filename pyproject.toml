@@ -87,11 +87,11 @@ langs = [
 bce = "bce.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/bilgeadamtechnology/BGTS-Context-Engine"
-Documentation = "https://github.com/bilgeadamtechnology/BGTS-Context-Engine/tree/main/docs"
-Repository = "https://github.com/bilgeadamtechnology/BGTS-Context-Engine"
-Issues = "https://github.com/bilgeadamtechnology/BGTS-Context-Engine/issues"
-Changelog = "https://github.com/bilgeadamtechnology/BGTS-Context-Engine/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/bgts-ai/bgts-context-engine"
+Documentation = "https://github.com/bgts-ai/bgts-context-engine/tree/main/docs"
+Repository = "https://github.com/bgts-ai/bgts-context-engine"
+Issues = "https://github.com/bgts-ai/bgts-context-engine/issues"
+Changelog = "https://github.com/bgts-ai/bgts-context-engine/blob/main/CHANGELOG.md"
 
 [tool.setuptools.dynamic]
 version = { attr = "bce.__version__" }

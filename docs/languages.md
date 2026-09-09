@@ -167,5 +167,5 @@ output.
 Extensions resolve by longest suffix match, so `.tsx` can take a different provider from
 `.ts` without ambiguity.
 
-Open a [language support issue](https://github.com/bilgeadamtechnology/BGTS-Context-Engine/issues/new?template=language_support.yml)
+Open a [language support issue](https://github.com/bgts-ai/bgts-context-engine/issues/new?template=language_support.yml)
 first if you want to agree on which declarations should become nodes before writing code.

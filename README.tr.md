@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="https://raw.githubusercontent.com/bilgeadamtechnology/BGTS-Context-Engine/main/docs/assets/social-preview.png" alt="BGTS Context Engine" width="820">
+<img src="docs/assets/social-preview.png" alt="BGTS Context Engine" width="820">
 
 **Yapay zekâ kodlama ajanları için deterministik kod-graf bağlamı.**
 
@@ -9,10 +9,10 @@ veren sekiz sembolü sıralanmış, bütçelenmiş ve yeniden üretilebilir şek
 
 [![PyPI](https://img.shields.io/pypi/v/bgts-context-engine.svg)](https://pypi.org/project/bgts-context-engine/)
 [![Python](https://img.shields.io/pypi/pyversions/bgts-context-engine.svg)](https://pypi.org/project/bgts-context-engine/)
-[![CI](https://github.com/bilgeadamtechnology/BGTS-Context-Engine/actions/workflows/ci.yml/badge.svg)](https://github.com/bilgeadamtechnology/BGTS-Context-Engine/actions/workflows/ci.yml)
+[![CI](https://github.com/bgts-ai/bgts-context-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/bgts-ai/bgts-context-engine/actions/workflows/ci.yml)
 [![Lisans: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-uyumlu-000000.svg)](docs/mcp.md)
-[![Yıldızlar](https://img.shields.io/github/stars/bilgeadamtechnology/BGTS-Context-Engine?style=flat&logo=github)](https://github.com/bilgeadamtechnology/BGTS-Context-Engine/stargazers)
+[![Yıldızlar](https://img.shields.io/github/stars/bgts-ai/bgts-context-engine?style=flat&logo=github)](https://github.com/bgts-ai/bgts-context-engine/stargazers)
 
 [Hızlı başlangıç](#hızlı-başlangıç) · [Ajanınızdan kullanma](#ajanınızdan-kullanma) · [Nasıl çalışır](#nasıl-çalışır) · [Dokümantasyon](#dokümantasyon) · [English](README.md)
 
@@ -267,7 +267,7 @@ Zorluğa göre değil, ne sıklıkta gündeme geldiğine göre sıralı:
   olur.
 
 İstekler ve itirazlar
-[issue'lara](https://github.com/bilgeadamtechnology/BGTS-Context-Engine/issues) — insanların
+[issue'lara](https://github.com/bgts-ai/bgts-context-engine/issues) — insanların
 gerçekten istediği şey bu listeyi yeniden sıralar.
 
 ## Dokümantasyon

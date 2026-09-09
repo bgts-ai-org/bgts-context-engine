@@ -1,9 +1,8 @@
-<!-- mcp-name: io.github.bilgeadamtechnology/bgts-context-engine -->
+<!-- mcp-name: io.github.bgts-ai/bgts-context-engine -->
 
 <div align="center">
 
-<!-- Absolute URL: this README is also the PyPI project description, where relative paths break. -->
-<img src="https://raw.githubusercontent.com/bilgeadamtechnology/BGTS-Context-Engine/main/docs/assets/social-preview.png" alt="BGTS Context Engine" width="820">
+<img src="docs/assets/social-preview.png" alt="BGTS Context Engine" width="820">
 
 **Deterministic code-graph context for AI coding agents.**
 
@@ -12,10 +11,10 @@ that actually answer it — ranked, budgeted, and reproducible.
 
 [![PyPI](https://img.shields.io/pypi/v/bgts-context-engine.svg)](https://pypi.org/project/bgts-context-engine/)
 [![Python](https://img.shields.io/pypi/pyversions/bgts-context-engine.svg)](https://pypi.org/project/bgts-context-engine/)
-[![CI](https://github.com/bilgeadamtechnology/BGTS-Context-Engine/actions/workflows/ci.yml/badge.svg)](https://github.com/bilgeadamtechnology/BGTS-Context-Engine/actions/workflows/ci.yml)
+[![CI](https://github.com/bgts-ai/bgts-context-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/bgts-ai/bgts-context-engine/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-compatible-000000.svg)](docs/mcp.md)
-[![Stars](https://img.shields.io/github/stars/bilgeadamtechnology/BGTS-Context-Engine?style=flat&logo=github)](https://github.com/bilgeadamtechnology/BGTS-Context-Engine/stargazers)
+[![Stars](https://img.shields.io/github/stars/bgts-ai/bgts-context-engine?style=flat&logo=github)](https://github.com/bgts-ai/bgts-context-engine/stargazers)
 
 [Quick start](#quick-start) · [Use it from your agent](#use-it-from-your-agent) · [How it works](#how-it-works) · [Documentation](#documentation) · [Türkçe](README.tr.md)
 
@@ -263,7 +262,7 @@ Ordered by how often it comes up, not by difficulty:
   are comparable between projects rather than only between your own runs.
 
 Requests and disagreements belong in
-[issues](https://github.com/bilgeadamtechnology/BGTS-Context-Engine/issues) — what people
+[issues](https://github.com/bgts-ai/bgts-context-engine/issues) — what people
 actually ask for reorders this list.
 
 ## Documentation

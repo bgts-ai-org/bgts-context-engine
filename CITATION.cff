@@ -14,7 +14,7 @@ authors:
   - given-names: Enes
     family-names: İyidil
     affiliation: BilgeAdam Technology
-repository-code: "https://github.com/bilgeadamtechnology/BGTS-Context-Engine"
+repository-code: "https://github.com/bgts-ai/bgts-context-engine"
 license: MIT
 version: 0.1.0
 date-released: "2026-09-08"
