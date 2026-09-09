@@ -1,4 +1,4 @@
-﻿-- Row-Level Security for repo-scoped tables (spec section 9, Phase 4).
+-- Row-Level Security for repo-scoped tables (spec section 9, Phase 4).
 --
 -- Policy model: a session sets ``SET LOCAL bce.user_id = '<id>'``. When the session is a superuser
 -- or ``bce.user_id`` is unset/empty (system/pre-auth calls), all rows are visible; otherwise only

@@ -122,7 +122,9 @@ def run_migrations(
             mig_id = path.stem
             if mig_id in done:
                 continue
-            sql = path.read_text(encoding="utf-8")
+            # utf-8-sig, not utf-8: an editor-added BOM would otherwise reach the server as
+            # part of the first statement and Postgres rejects it as a syntax error.
+            sql = path.read_text(encoding="utf-8-sig")
             with c.cursor() as cur:
                 for statement in split_sql_statements(sql):
                     cur.execute(statement)
