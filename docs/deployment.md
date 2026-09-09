@@ -25,6 +25,14 @@ persistent `bce_pgdata` volume, and both extensions created by the init script.
 **The credentials are for local development.** Change all three before running anywhere
 else, and do not expose 5432.
 
+The build clones Apache AGE from GitHub, which fails with `server certificate verification
+failed` behind a TLS-inspecting proxy whose CA is absent from the build container. Either
+install that CA into the image, or skip verification for the clone alone:
+
+```bash
+GIT_SSL_VERIFY=false docker compose -f deploy/docker-compose.yml up -d --build
+```
+
 For a managed PostgreSQL, install both extensions and point the engine at it:
 
 ```sql
