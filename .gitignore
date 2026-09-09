@@ -57,6 +57,10 @@ src/bce/api/rest/static/
 *.pem
 *.key
 
+# Trust anchors dropped in locally for the database image build; never committed.
+deploy/certs/*
+!deploy/certs/.gitkeep
+
 # Office documents are internal working material and never part of a release.
 *.pptx
 *.docx
