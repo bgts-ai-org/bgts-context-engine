@@ -8,6 +8,7 @@ checkout has no bundle, so these tests fabricate one in a temporary directory an
 from __future__ import annotations
 
 import importlib
+import mimetypes
 import subprocess
 from collections.abc import Iterator
 from pathlib import Path
@@ -78,6 +79,23 @@ def test_ui_serves_index_and_assets(bundled_ui: Path) -> None:
     asset = client.get("/ui/assets/main.js")
     assert asset.status_code == 200
     assert asset.text == _ASSET_JS
+
+
+def test_ui_assets_keep_a_javascript_content_type(
+    bundled_ui: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A host mapping .js to text/plain must not reach the browser.
+
+    Windows resolves content types through the registry, where installed software often claims
+    ``.js``. Vite emits ``<script type="module">``, and module scripts are subject to strict MIME
+    checking, so serving the bundle as text/plain renders the UI as a blank page.
+    """
+    monkeypatch.setitem(mimetypes.types_map, ".js", "text/plain")
+
+    resp = TestClient(app_module.create_app()).get("/ui/assets/main.js")
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].split(";")[0] == "text/javascript"
 
 
 def test_ui_bare_path_redirects_to_trailing_slash(bundled_ui: Path) -> None:

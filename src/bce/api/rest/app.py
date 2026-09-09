@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
+import mimetypes
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -95,6 +96,21 @@ def ui_is_bundled() -> bool:
     return (UI_DIST_DIR / "index.html").is_file()
 
 
+#: StaticFiles resolves content types through :mod:`mimetypes`, which on Windows consults the
+#: registry -- where installed software commonly maps ``.js`` to ``text/plain``. Browsers apply
+#: strict MIME checking to ``<script type="module">``, which is what Vite emits, so that mapping
+#: makes the UI a blank page. Pin the types the bundle relies on instead of trusting the host.
+_UI_CONTENT_TYPES = {
+    ".js": "text/javascript",
+    ".mjs": "text/javascript",
+    ".css": "text/css",
+    ".svg": "image/svg+xml",
+    ".json": "application/json",
+    ".woff": "font/woff",
+    ".woff2": "font/woff2",
+}
+
+
 def _mount_ui(app: FastAPI) -> None:
     """Serve the compiled frontend under ``/ui``.
 
@@ -104,6 +120,9 @@ def _mount_ui(app: FastAPI) -> None:
     if not ui_is_bundled():
         logger.debug("ui bundle not present; skipping /ui mount", extra={"path": str(UI_DIST_DIR)})
         return
+
+    for suffix, content_type in _UI_CONTENT_TYPES.items():
+        mimetypes.add_type(content_type, suffix)
 
     @app.get("/ui", include_in_schema=False)
     async def ui_root() -> RedirectResponse:
