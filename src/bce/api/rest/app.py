@@ -28,13 +28,14 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Request, Response
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from bce import __version__
 from bce.api.rest.routes import router
 from bce.config import get_settings
 from bce.core.logging import get_logger, setup_logging
+from bce.indexing.embedder.encoder import EncoderConfigError
 
 logger = get_logger("api.rest")
 
@@ -143,6 +144,18 @@ def create_app(*, serve_ui: bool = True) -> FastAPI:
         summary="Deterministic, multi-language code-graph context engine (Layer 1-2-3 REST surface).",
         lifespan=_lifespan,
     )
+
+    @app.exception_handler(EncoderConfigError)
+    async def embedding_provider_unavailable(
+        request: Request, exc: EncoderConfigError
+    ) -> JSONResponse:
+        """503 rather than 500: the server is running, its embedding provider is not configured.
+
+        Every anchor-finding path builds the encoder per request, so this answers the whole API
+        with the operator-facing message instead of one traceback per call.
+        """
+        logger.error("embedding provider unavailable", extra={"detail": str(exc)})
+        return JSONResponse(status_code=503, content={"message": str(exc)})
 
     @app.middleware("http")
     async def log_requests(request: Request, call_next) -> Response:

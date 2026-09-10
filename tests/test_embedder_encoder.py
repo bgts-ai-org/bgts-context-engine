@@ -7,6 +7,7 @@ import math
 import pytest
 
 from bce.indexing.embedder.encoder import (
+    EncoderConfigError,
     HashingEncoder,
     VoyageEncoder,
     build_default_encoder,
@@ -65,7 +66,8 @@ def test_default_encoder_pins_model_id(hashing_settings):
     assert enc2.model_id == "my-pinned-model"
 
 
-def test_default_encoder_falls_back_to_hashing_without_key(monkeypatch):
+def test_default_encoder_rejects_voyage_without_key(monkeypatch):
+    """Selecting Voyage with no key must fail, not quietly index with hashing vectors."""
     from bce import config
 
     monkeypatch.setattr(
@@ -73,8 +75,45 @@ def test_default_encoder_falls_back_to_hashing_without_key(monkeypatch):
         "get_settings",
         lambda: config.Settings(embedding_provider="voyage", voyage_api_key=""),
     )
-    enc = build_default_encoder()
-    assert isinstance(enc, HashingEncoder)
+    with pytest.raises(EncoderConfigError, match="BCE_VOYAGE_API_KEY"):
+        build_default_encoder()
+
+
+def test_default_encoder_rejects_unknown_provider(monkeypatch):
+    from bce import config
+
+    monkeypatch.setattr(
+        config,
+        "get_settings",
+        lambda: config.Settings(embedding_provider="voyage-code-3"),
+    )
+    with pytest.raises(EncoderConfigError, match="Unknown BCE_EMBEDDING_PROVIDER"):
+        build_default_encoder()
+
+
+def test_default_encoder_reports_the_missing_voyage_package(monkeypatch):
+    """The base install has no 'voyageai'; the error must name the extra that provides it."""
+    import builtins
+
+    from bce import config
+
+    monkeypatch.setattr(
+        config,
+        "get_settings",
+        lambda: config.Settings(embedding_provider="voyage", voyage_api_key="k"),
+    )
+
+    real_import = builtins.__import__
+
+    def _no_voyageai(name, *args, **kwargs):
+        if name == "voyageai":
+            raise ModuleNotFoundError("No module named 'voyageai'", name="voyageai")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _no_voyageai)
+
+    with pytest.raises(EncoderConfigError, match=r"bgts-context-engine\[embed\]"):
+        build_default_encoder()
 
 
 def test_default_encoder_selects_voyage_when_ready(monkeypatch):

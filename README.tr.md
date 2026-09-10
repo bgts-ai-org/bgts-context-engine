@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/assets/social-preview.png" alt="BGTS Context Engine" width="820">
+<img src="https://raw.githubusercontent.com/bgts-ai-org/bgts-context-engine/main/docs/assets/social-preview.png" alt="BGTS Context Engine" width="820">
 
 **Yapay zekâ kodlama ajanları için deterministik kod-graf bağlamı.**
 
@@ -9,10 +9,10 @@ veren sekiz sembolü sıralanmış, bütçelenmiş ve yeniden üretilebilir şek
 
 [![PyPI](https://img.shields.io/pypi/v/bgts-context-engine.svg)](https://pypi.org/project/bgts-context-engine/)
 [![Python](https://img.shields.io/pypi/pyversions/bgts-context-engine.svg)](https://pypi.org/project/bgts-context-engine/)
-[![CI](https://github.com/bgts-ai/bgts-context-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/bgts-ai/bgts-context-engine/actions/workflows/ci.yml)
+[![CI](https://github.com/bgts-ai-org/bgts-context-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/bgts-ai-org/bgts-context-engine/actions/workflows/ci.yml)
 [![Lisans: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-uyumlu-000000.svg)](docs/mcp.md)
-[![Yıldızlar](https://img.shields.io/github/stars/bgts-ai/bgts-context-engine?style=flat&logo=github)](https://github.com/bgts-ai/bgts-context-engine/stargazers)
+[![Yıldızlar](https://img.shields.io/github/stars/bgts-ai-org/bgts-context-engine?style=flat&logo=github)](https://github.com/bgts-ai-org/bgts-context-engine/stargazers)
 
 [Hızlı başlangıç](#hızlı-başlangıç) · [Ajanınızdan kullanma](#ajanınızdan-kullanma) · [Nasıl çalışır](#nasıl-çalışır) · [Dokümantasyon](#dokümantasyon) · [English](README.md)
 
@@ -45,6 +45,17 @@ adlandırmadığında giriş noktalarını bulmak için. Sıralamayı asla etkil
 model yok, saat yok, rastgelelik yok. Bir ajan hatalı bir değişiklik yaptığında, ona tam
 olarak ne söylendiğini yeniden oynatabilir, yanlış sembolü yüzeye çıkaran aşamayı bulabilir
 ve o aşamayı düzeltebilirsiniz.
+
+Motor, insanların çalıştırabilmesi için yayımlanır. Aynı şeyi kendi çevrelerinde isteyen
+kurumlar — indeksleme, kurulum, depolarınıza göre ayarlanmış skorlama veya etrafındaki
+ajan yığını konusunda yardım — [BGTS](https://www.bgts.com) ile
+danışmanlık olarak iletişime geçebilir. **opensource-ai@bgts.com** adresine yazın.
+
+<div align="center">
+<video src="https://github.com/user-attachments/assets/b602edaa-1189-480e-ac4d-294c173d0067" width="820" controls playsinline>
+BGTS Context Engine web arayüzünün turu.
+</video>
+</div>
 
 ## Hızlı başlangıç
 
@@ -267,7 +278,7 @@ Zorluğa göre değil, ne sıklıkta gündeme geldiğine göre sıralı:
   olur.
 
 İstekler ve itirazlar
-[issue'lara](https://github.com/bgts-ai/bgts-context-engine/issues) — insanların
+[issue'lara](https://github.com/bgts-ai-org/bgts-context-engine/issues) — insanların
 gerçekten istediği şey bu listeyi yeniden sıralar.
 
 ## Dokümantasyon
@@ -312,7 +323,7 @@ issue olarak değil, özel kanaldan bildirin.
 
 ## Lisans
 
-[MIT](LICENSE) © BilgeAdam Technology.
+[MIT](LICENSE) © BGTS.
 
 [Oğuz Öztürk](https://github.com/oztrkoguz) ve
 [Enes İyidil](https://github.com/enesiyidil) tarafından geliştirildi.

@@ -4,7 +4,7 @@ import type { TranslationKey } from "./en";
 export const tr: Record<TranslationKey, string> = {
   "app.title": "BCE Graf Gezgini",
   "app.subtitle": "Kod grafı görselleştirici",
-  "app.company": "BilgeAdam Technology & Software",
+  "app.company": "BGTS",
   "app.language": "Dil",
 
   "nav.tabsLabel": "Kenar çubuğu sekmeleri",

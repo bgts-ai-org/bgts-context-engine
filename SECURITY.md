@@ -14,8 +14,8 @@ Please do not open a public issue for a security problem.
 
 Report it privately through either channel:
 
-- [GitHub private vulnerability reporting](https://github.com/bgts-ai/bgts-context-engine/security/advisories/new) (preferred)
-- Email **security@bilgeadam.com**
+- [GitHub private vulnerability reporting](https://github.com/bgts-ai-org/bgts-context-engine/security/advisories/new) (preferred)
+- Email **security-ai@bgts.com**
 
 Please include the affected version, what an attacker can achieve, and the steps to
 reproduce it. A minimal proof of concept helps a great deal.

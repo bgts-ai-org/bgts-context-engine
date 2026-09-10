@@ -8,7 +8,7 @@ running locally and what a mergeable change looks like.
 You need Python 3.11 or newer, Node.js 20 or newer, and Docker for the database.
 
 ```bash
-git clone https://github.com/bgts-ai/bgts-context-engine.git
+git clone https://github.com/bgts-ai-org/bgts-context-engine.git
 cd bgts-context-engine
 
 python -m venv .venv
@@ -77,7 +77,7 @@ Write the body as prose explaining why the change is needed, not a restatement o
 diff. Keep each commit self-contained and green on its own.
 
 Branch off `development` and target it with your pull request. `main` only ever receives
-merges from `development` and is what release tags are cut from.
+merges from `development`, and `releases` receives them when a version is published.
 
 ## Adding a language
 
@@ -95,18 +95,24 @@ Security issues go to the process in [SECURITY.md](SECURITY.md), not to public i
 
 ## Releasing
 
-For maintainers. Releases are cut from `main` and driven entirely by the tag.
+For maintainers. A release is a merged pull request into the `releases` branch.
 
-1. Merge `development` into `main`.
-2. Bump `__version__` in `src/bce/__init__.py`. That is the only place a version is
-   written; `pyproject.toml` reads it from there.
-3. Move the `CHANGELOG.md` entries from `Unreleased` under the new version.
-4. Tag and push: `git tag v0.2.0 && git push origin v0.2.0`.
+1. Bump `__version__` in `src/bce/__init__.py`. That is the only place a version is
+   written; `pyproject.toml` reads it from there, and the release tag is derived from it.
+   Neither the pull request title nor the branch name affects the published version.
+2. Move the `CHANGELOG.md` entries from `Unreleased` under the new version.
+3. Open a pull request from `development` to `releases`. CI runs the full suite on it.
+4. Once it has the required approvals, merge it.
 
-The release workflow then verifies that the tag matches `__version__`, compiles the web
-interface into the package, builds the wheel and sdist, asserts the UI bundle is actually
-inside the wheel, publishes to PyPI through Trusted Publishing, and opens the GitHub
-release. No PyPI token is stored in this repository.
+`publish-pypi.yml` then reads `__version__` from the merge commit, refuses to continue if
+`v<version>` is already tagged, compiles the web interface into the package, builds the
+wheel and sdist, asserts the UI bundle is actually inside the wheel, uploads to PyPI with
+the `PYPI_API_TOKEN` secret, and finally tags the merge commit and opens the GitHub
+release. The tag is written last, so it always means "this version is on PyPI".
+
+`release.yml` remains as a manual fallback: pushing a `v*` tag yourself builds and
+publishes the same way, through PyPI Trusted Publishing instead of the token. Use it only
+when the pull request route is unavailable, and never for a version already released.
 
 ## Licence
 

@@ -1,8 +1,8 @@
-<!-- mcp-name: io.github.bgts-ai/bgts-context-engine -->
+<!-- mcp-name: io.github.bgts-ai-org/bgts-context-engine -->
 
 <div align="center">
 
-<img src="docs/assets/social-preview.png" alt="BGTS Context Engine" width="820">
+<img src="https://raw.githubusercontent.com/bgts-ai-org/bgts-context-engine/main/docs/assets/social-preview.png" alt="BGTS Context Engine" width="820">
 
 **Deterministic code-graph context for AI coding agents.**
 
@@ -11,10 +11,10 @@ that actually answer it — ranked, budgeted, and reproducible.
 
 [![PyPI](https://img.shields.io/pypi/v/bgts-context-engine.svg)](https://pypi.org/project/bgts-context-engine/)
 [![Python](https://img.shields.io/pypi/pyversions/bgts-context-engine.svg)](https://pypi.org/project/bgts-context-engine/)
-[![CI](https://github.com/bgts-ai/bgts-context-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/bgts-ai/bgts-context-engine/actions/workflows/ci.yml)
+[![CI](https://github.com/bgts-ai-org/bgts-context-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/bgts-ai-org/bgts-context-engine/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-compatible-000000.svg)](docs/mcp.md)
-[![Stars](https://img.shields.io/github/stars/bgts-ai/bgts-context-engine?style=flat&logo=github)](https://github.com/bgts-ai/bgts-context-engine/stargazers)
+[![Stars](https://img.shields.io/github/stars/bgts-ai-org/bgts-context-engine?style=flat&logo=github)](https://github.com/bgts-ai-org/bgts-context-engine/stargazers)
 
 [Quick start](#quick-start) · [Use it from your agent](#use-it-from-your-agent) · [How it works](#how-it-works) · [Documentation](#documentation) · [Türkçe](README.tr.md)
 
@@ -44,6 +44,18 @@ text names nothing recognisable. They never affect ranking.
 the retrieval path, no clock, no randomness. When an agent makes a bad change you can
 replay exactly what it was told, find the stage that surfaced the wrong symbol, and fix
 that stage.
+
+The engine is published so people can run it. Organisations that want the same thing
+inside their own perimeter — help with indexing, deployment, scoring tuned to their
+repositories, or the agent stack around it — can engage
+[BGTS](https://www.bgts.com) for consulting. Write to
+**opensource-ai@bgts.com**.
+
+<div align="center">
+<video src="https://github.com/user-attachments/assets/ac8ddd8f-2148-4d16-8c3a-3ce69d32b9d8" width="820" controls playsinline>
+UI walkthrough of the BGTS Context Engine web interface.
+</video>
+</div>
 
 ## Quick start
 
@@ -262,7 +274,7 @@ Ordered by how often it comes up, not by difficulty:
   are comparable between projects rather than only between your own runs.
 
 Requests and disagreements belong in
-[issues](https://github.com/bgts-ai/bgts-context-engine/issues) — what people
+[issues](https://github.com/bgts-ai-org/bgts-context-engine/issues) — what people
 actually ask for reorders this list.
 
 ## Documentation
@@ -302,7 +314,7 @@ rather than in an issue.
 
 ## License
 
-[MIT](LICENSE) © BilgeAdam Technology.
+[MIT](LICENSE) © BGTS.
 
 Built by [Oğuz Öztürk](https://github.com/oztrkoguz) and
 [Enes İyidil](https://github.com/enesiyidil).

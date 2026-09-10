@@ -1,0 +1,2 @@
+# Drop a TLS-inspecting proxy's root CA here as a PEM file with a .crt extension to have the
+# database image trust it while cloning Apache AGE. Certificates themselves are not committed.
