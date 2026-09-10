@@ -52,7 +52,7 @@ ajan yığını konusunda yardım — [BGTS](https://www.bgts.com) ile
 danışmanlık olarak iletişime geçebilir. **opensource-ai@bgts.com** adresine yazın.
 
 <div align="center">
-<video src="docs/assets/ui-walkthrough.mp4" width="820" controls playsinline>
+<video src="https://github.com/user-attachments/assets/b602edaa-1189-480e-ac4d-294c173d0067" width="820" controls playsinline>
 BGTS Context Engine web arayüzünün turu.
 </video>
 </div>
