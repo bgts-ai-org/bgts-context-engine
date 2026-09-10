@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/assets/social-preview.png" alt="BGTS Context Engine" width="820">
+<img src="https://raw.githubusercontent.com/bgts-ai-org/bgts-context-engine/main/docs/assets/social-preview.png" alt="BGTS Context Engine" width="820">
 
 **Yapay zekâ kodlama ajanları için deterministik kod-graf bağlamı.**
 
@@ -10,16 +10,16 @@ veren sekiz sembolü sıralanmış, bütçelenmiş ve yeniden üretilebilir şek
 [![PyPI](https://img.shields.io/pypi/v/bgts-context-engine.svg)](https://pypi.org/project/bgts-context-engine/)
 [![Python](https://img.shields.io/pypi/pyversions/bgts-context-engine.svg)](https://pypi.org/project/bgts-context-engine/)
 [![CI](https://github.com/bgts-ai-org/bgts-context-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/bgts-ai-org/bgts-context-engine/actions/workflows/ci.yml)
-[![Lisans: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![MCP](https://img.shields.io/badge/MCP-uyumlu-000000.svg)](docs/mcp.md)
+[![Lisans: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/bgts-ai-org/bgts-context-engine/blob/main/LICENSE)
+[![MCP](https://img.shields.io/badge/MCP-uyumlu-000000.svg)](https://github.com/bgts-ai-org/bgts-context-engine/blob/main/docs/mcp.md)
 [![Yıldızlar](https://img.shields.io/github/stars/bgts-ai-org/bgts-context-engine?style=flat&logo=github)](https://github.com/bgts-ai-org/bgts-context-engine/stargazers)
 
-[Hızlı başlangıç](#hızlı-başlangıç) · [Ajanınızdan kullanma](#ajanınızdan-kullanma) · [Nasıl çalışır](#nasıl-çalışır) · [Dokümantasyon](#dokümantasyon) · [English](README.md)
+[Hızlı başlangıç](#hızlı-başlangıç) · [Ajanınızdan kullanma](#ajanınızdan-kullanma) · [Nasıl çalışır](#nasıl-çalışır) · [Dokümantasyon](#dokümantasyon) · [English](https://github.com/bgts-ai-org/bgts-context-engine/blob/main/README.md)
 
 </div>
 
 > Dokümantasyonun tamamı İngilizcedir. Bu dosya projeye Türkçe bir giriş sunar; teknik
-> referanslar için [`docs/`](docs/) klasörüne bakın.
+> referanslar için [`docs/`](https://github.com/bgts-ai-org/bgts-context-engine/tree/main/docs) klasörüne bakın.
 
 ---
 
@@ -52,9 +52,9 @@ ajan yığını konusunda yardım — [BGTS](https://www.bgts.com) ile
 danışmanlık olarak iletişime geçebilir. **opensource-ai@bgts.com** adresine yazın.
 
 <div align="center">
-<video src="https://github.com/user-attachments/assets/b602edaa-1189-480e-ac4d-294c173d0067" width="820" controls playsinline>
-BGTS Context Engine web arayüzünün turu.
-</video>
+<video src="https://github.com/user-attachments/assets/b602edaa-1189-480e-ac4d-294c173d0067" width="820" controls playsinline></video>
+
+<a href="https://github.com/user-attachments/assets/b602edaa-1189-480e-ac4d-294c173d0067">Web arayüzünün tanıtım videosu</a>
 </div>
 
 ## Hızlı başlangıç
@@ -125,7 +125,7 @@ Global kurulum istemiyorsanız yukarıdaki her yerde `command` olarak
 
 Sonra ajanınıza, açık olan dosyayı değil deponun tamamını gerektiren bir şey sorun:
 *"session TTL'i değiştirirsem ne bozulur?"* Ajan `get_context_for_task`'ı çağırır;
-[docs/mcp.md](docs/mcp.md) içindeki on dört araç ise oradan devam etmesini sağlar — kesin
+[docs/mcp.md](https://github.com/bgts-ai-org/bgts-context-engine/blob/main/docs/mcp.md) içindeki on dört araç ise oradan devam etmesini sağlar — kesin
 çağıranlar, tip hiyerarşisi, route handler'ları — dosya adlarını tahmin etmeden.
 
 ## Ne döner
@@ -193,7 +193,7 @@ sonuçtur. Merkezîlik derece 20'de doyar, çünkü bir logger her şeye dokunur
 açıklamaz.
 
 Formülün tamamı, her ağırlık ve güven eşikleri
-[docs/retrieval.md](docs/retrieval.md) içindedir.
+[docs/retrieval.md](https://github.com/bgts-ai-org/bgts-context-engine/blob/main/docs/retrieval.md) içindedir.
 
 ## Öne çıkanlar
 
@@ -204,7 +204,7 @@ Formülün tamamı, her ağırlık ve güven eşikleri
   skorlama ağırlıkları. `bce bench` her vakayı tekrar tekrar koşup çıktıyı karşılaştırarak
   bunu doğrular.
 - **Altı dil.** Python, JavaScript ve TypeScript yerleşik; Java, C# ve Go `langs` ekiyle.
-  [Yeni bir dil eklemek](docs/languages.md#adding-a-language) iki dosyaya dokunur.
+  [Yeni bir dil eklemek](https://github.com/bgts-ai-org/bgts-context-engine/blob/main/docs/languages.md#adding-a-language) iki dosyaya dokunur.
 - **Diller arası çağrı kenarları.** React Native ve Expo köprüleri, TypeScript'teki
   `NativeModules.Foo.bar()` çağrısını Objective-C, Swift veya Kotlin'deki `bar` ile
   birleştirir — tek bir parser'ın göremeyeceği bir boşluk.
@@ -257,7 +257,7 @@ ise o principal'ın okuyamayacağı bir depoyu yüzeye çıkarmamalıdır.
 Zor kısım vaka dosyasını hazırlamaktır — doğru cevabın ne olduğuna elle karar vermek
 demektir. Skorlama ağırlıklarındaki bir değişikliğin gerçekten iyileştirme olup olmadığını
 öğrenmenin tek dürüst yolu da budur. Biçim ve örnek bir dosya
-[docs/deployment.md](docs/deployment.md#benchmarking) içindedir.
+[docs/deployment.md](https://github.com/bgts-ai-org/bgts-context-engine/blob/main/docs/deployment.md#benchmarking) içindedir.
 
 ## Yol haritası
 
@@ -265,11 +265,11 @@ Zorluğa göre değil, ne sıklıkta gündeme geldiğine göre sıralı:
 
 - **Her katmanda kapsam denetimi.** Kullanıcı bazlı depo filtresini Layer 3 uygular,
   Layer 1 ve 2 uygulamaz. Bu kapanana kadar API bir proxy arkasında durmalıdır —
-  [SECURITY.md](SECURITY.md).
+  [SECURITY.md](https://github.com/bgts-ai-org/bgts-context-engine/blob/main/SECURITY.md).
 - **MCP için streamable HTTP taşıması.** Bugün MCP yüzeyi yalnızca stdio olduğu için sunucu
   ajanın yanında koşar. Uzak taşıma, tek bir indeksin tüm ekibe hizmet etmesini sağlar.
 - **Daha fazla dil.** En çok istenenler Rust, Kotlin ve PHP. Sağlayıcı arayüzü, sürtünmesi
-  en az katkı yolu — [docs/languages.md](docs/languages.md#adding-a-language).
+  en az katkı yolu — [docs/languages.md](https://github.com/bgts-ai-org/bgts-context-engine/blob/main/docs/languages.md#adding-a-language).
 - **Daha geniş SCIP alımı.** Derleyici seviyesindeki kenarlar sözdiziminden türetilenleri
   yener ve öyle skorlanır; daha fazla araç zinciri, grafın daha büyük kısmının `scip`
   kaynağını taşıması demektir.
@@ -287,20 +287,20 @@ Tümü İngilizcedir.
 
 | | |
 | --- | --- |
-| [Architecture](docs/architecture.md) | deterministik hat, üç katman, indeksleme |
-| [Retrieval](docs/retrieval.md) | çapalar, genişletme, her skorlama ağırlığı, güven |
-| [Data model](docs/data-model.md) | düğüm etiketleri, kenar tipleri, tablolar, sembol kimliği |
-| [MCP and API](docs/mcp.md) | 14 aracın tamamı, her uç nokta, CLI |
-| [Languages](docs/languages.md) | her parser'ın çıkardıkları ve yeni dil ekleme |
-| [Deployment](docs/deployment.md) | yapılandırma referansı, işler, yedekleme, ölçüm |
-| [Web interface](web/README.md) | arayüz geliştirme |
+| [Architecture](https://github.com/bgts-ai-org/bgts-context-engine/blob/main/docs/architecture.md) | deterministik hat, üç katman, indeksleme |
+| [Retrieval](https://github.com/bgts-ai-org/bgts-context-engine/blob/main/docs/retrieval.md) | çapalar, genişletme, her skorlama ağırlığı, güven |
+| [Data model](https://github.com/bgts-ai-org/bgts-context-engine/blob/main/docs/data-model.md) | düğüm etiketleri, kenar tipleri, tablolar, sembol kimliği |
+| [MCP and API](https://github.com/bgts-ai-org/bgts-context-engine/blob/main/docs/mcp.md) | 14 aracın tamamı, her uç nokta, CLI |
+| [Languages](https://github.com/bgts-ai-org/bgts-context-engine/blob/main/docs/languages.md) | her parser'ın çıkardıkları ve yeni dil ekleme |
+| [Deployment](https://github.com/bgts-ai-org/bgts-context-engine/blob/main/docs/deployment.md) | yapılandırma referansı, işler, yedekleme, ölçüm |
+| [Web interface](https://github.com/bgts-ai-org/bgts-context-engine/blob/main/web/README.md) | arayüz geliştirme |
 
 ## Katkı
 
 Katkılar memnuniyetle karşılanır — özellikle yeni diller, ki hattın en hazır olduğu katkı
 türü budur.
 
-Önce [CONTRIBUTING.md](CONTRIBUTING.md) dosyasını okuyun. Baştan bilinmesi gereken tek
+Önce [CONTRIBUTING.md](https://github.com/bgts-ai-org/bgts-context-engine/blob/main/CONTRIBUTING.md) dosyasını okuyun. Baştan bilinmesi gereken tek
 kural: **determinizm ürünün kendisidir.** Aynı görevin farklı sonuç döndürmesine yol açan
 bir değişiklik, açık bir opt-in bayrağı olmadan birleştirilmez; skorlamaya veya sıralamaya
 dokunan her şey çıktıyı sabitleyen bir test gerektirir.
@@ -318,12 +318,12 @@ cd web && npm ci && npm test
 
 Motorun kendine ait bir kimlik doğrulaması yoktur ve önünde bunu yapan bir katman
 beklemektedir. Kullanıcı bazlı depo kapsamını yalnızca Layer-3 uç noktaları uygular. Bir
-portu dışa açmadan önce [SECURITY.md](SECURITY.md) dosyasını okuyun ve güvenlik açıklarını
+portu dışa açmadan önce [SECURITY.md](https://github.com/bgts-ai-org/bgts-context-engine/blob/main/SECURITY.md) dosyasını okuyun ve güvenlik açıklarını
 issue olarak değil, özel kanaldan bildirin.
 
 ## Lisans
 
-[MIT](LICENSE) © BGTS.
+[MIT](https://github.com/bgts-ai-org/bgts-context-engine/blob/main/LICENSE) © BGTS.
 
 [Oğuz Öztürk](https://github.com/oztrkoguz) ve
 [Enes İyidil](https://github.com/enesiyidil) tarafından geliştirildi.

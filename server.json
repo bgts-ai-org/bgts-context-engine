@@ -3,7 +3,7 @@
   "name": "io.github.bgts-ai-org/bgts-context-engine",
   "title": "BGTS Context Engine",
   "description": "Deterministic code-graph context for AI coding agents over PostgreSQL, Apache AGE and pgvector",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "websiteUrl": "https://github.com/bgts-ai-org/bgts-context-engine",
   "repository": {
     "url": "https://github.com/bgts-ai-org/bgts-context-engine",
@@ -14,7 +14,7 @@
       "registryType": "pypi",
       "registryBaseUrl": "https://pypi.org",
       "identifier": "bgts-context-engine",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "transport": {
         "type": "stdio"
       },
