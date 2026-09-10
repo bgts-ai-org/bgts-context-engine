@@ -100,7 +100,7 @@ jobs:
       # Tagging last: the tag means "this is on PyPI", so it is only written once the
       # upload succeeded. Created with GITHUB_TOKEN, so it does not re-trigger release.yml.
       - name: Tag the commit and publish the GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.version.outputs.tag }}
           target_commitish: ${{ github.event.pull_request.merge_commit_sha }}
