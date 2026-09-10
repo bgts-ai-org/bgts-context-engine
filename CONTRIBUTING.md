@@ -8,7 +8,7 @@ running locally and what a mergeable change looks like.
 You need Python 3.11 or newer, Node.js 20 or newer, and Docker for the database.
 
 ```bash
-git clone https://github.com/bgts-ai/bgts-context-engine.git
+git clone https://github.com/bgts-ai-org/bgts-context-engine.git
 cd bgts-context-engine
 
 python -m venv .venv

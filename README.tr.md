@@ -9,10 +9,10 @@ veren sekiz sembolü sıralanmış, bütçelenmiş ve yeniden üretilebilir şek
 
 [![PyPI](https://img.shields.io/pypi/v/bgts-context-engine.svg)](https://pypi.org/project/bgts-context-engine/)
 [![Python](https://img.shields.io/pypi/pyversions/bgts-context-engine.svg)](https://pypi.org/project/bgts-context-engine/)
-[![CI](https://github.com/bgts-ai/bgts-context-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/bgts-ai/bgts-context-engine/actions/workflows/ci.yml)
+[![CI](https://github.com/bgts-ai-org/bgts-context-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/bgts-ai-org/bgts-context-engine/actions/workflows/ci.yml)
 [![Lisans: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-uyumlu-000000.svg)](docs/mcp.md)
-[![Yıldızlar](https://img.shields.io/github/stars/bgts-ai/bgts-context-engine?style=flat&logo=github)](https://github.com/bgts-ai/bgts-context-engine/stargazers)
+[![Yıldızlar](https://img.shields.io/github/stars/bgts-ai-org/bgts-context-engine?style=flat&logo=github)](https://github.com/bgts-ai-org/bgts-context-engine/stargazers)
 
 [Hızlı başlangıç](#hızlı-başlangıç) · [Ajanınızdan kullanma](#ajanınızdan-kullanma) · [Nasıl çalışır](#nasıl-çalışır) · [Dokümantasyon](#dokümantasyon) · [English](README.md)
 
@@ -267,7 +267,7 @@ Zorluğa göre değil, ne sıklıkta gündeme geldiğine göre sıralı:
   olur.
 
 İstekler ve itirazlar
-[issue'lara](https://github.com/bgts-ai/bgts-context-engine/issues) — insanların
+[issue'lara](https://github.com/bgts-ai-org/bgts-context-engine/issues) — insanların
 gerçekten istediği şey bu listeyi yeniden sıralar.
 
 ## Dokümantasyon

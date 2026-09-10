@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Question or idea
-    url: https://github.com/bgts-ai/bgts-context-engine/discussions
+    url: https://github.com/bgts-ai-org/bgts-context-engine/discussions
     about: Ask how something works or float an idea before opening an issue.
   - name: Security vulnerability
-    url: https://github.com/bgts-ai/bgts-context-engine/security/advisories/new
+    url: https://github.com/bgts-ai-org/bgts-context-engine/security/advisories/new
     about: Report privately. Please do not open a public issue.

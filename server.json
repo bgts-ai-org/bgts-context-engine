@@ -1,12 +1,12 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.bgts-ai/bgts-context-engine",
+  "name": "io.github.bgts-ai-org/bgts-context-engine",
   "title": "BGTS Context Engine",
   "description": "Deterministic code-graph context for AI coding agents over PostgreSQL, Apache AGE and pgvector",
   "version": "0.1.0",
-  "websiteUrl": "https://github.com/bgts-ai/bgts-context-engine",
+  "websiteUrl": "https://github.com/bgts-ai-org/bgts-context-engine",
   "repository": {
-    "url": "https://github.com/bgts-ai/bgts-context-engine",
+    "url": "https://github.com/bgts-ai-org/bgts-context-engine",
     "source": "github"
   },
   "packages": [
