@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/assets/social-preview.png" alt="BGTS Context Engine" width="820">
+<img src="https://raw.githubusercontent.com/bgts-ai-org/bgts-context-engine/main/docs/assets/social-preview.png" alt="BGTS Context Engine" width="820">
 
 **Yapay zekâ kodlama ajanları için deterministik kod-graf bağlamı.**
 
@@ -52,7 +52,7 @@ ajan yığını konusunda yardım — [BGTS](https://www.bgts.com) ile
 danışmanlık olarak iletişime geçebilir. **opensource-ai@bgts.com** adresine yazın.
 
 <div align="center">
-<video src="docs/assets/ui-walkthrough.mp4" width="820" controls playsinline>
+<video src="https://github.com/user-attachments/assets/b602edaa-1189-480e-ac4d-294c173d0067" width="820" controls playsinline>
 BGTS Context Engine web arayüzünün turu.
 </video>
 </div>

@@ -7,8 +7,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-10
+
 ### Changed
 
+- Both READMEs now reference images, videos and sibling documents by absolute URL. PyPI
+  renders the long description outside the repository, so relative paths resolved to
+  nothing there: the banner was a broken image and every documentation link a dead one.
 - Selecting `BCE_EMBEDDING_PROVIDER=voyage` without its API key no longer falls back to the
   hashing encoder. Both that case and a missing `voyageai` package now raise
   `EncoderConfigError`, which the CLI reports as a single line and the REST API as `503`.
@@ -39,5 +44,6 @@ First public release.
 - Docker Compose deployment with PostgreSQL, Apache AGE and pgvector preconfigured.
 - `server.json` manifest describing the stdio server for the official MCP registry.
 
-[Unreleased]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/bgts-ai-org/bgts-context-engine/releases/tag/v0.1.0

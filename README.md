@@ -2,7 +2,7 @@
 
 <div align="center">
 
-<img src="docs/assets/social-preview.png" alt="BGTS Context Engine" width="820">
+<img src="https://raw.githubusercontent.com/bgts-ai-org/bgts-context-engine/main/docs/assets/social-preview.png" alt="BGTS Context Engine" width="820">
 
 **Deterministic code-graph context for AI coding agents.**
 
