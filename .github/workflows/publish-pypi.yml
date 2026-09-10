@@ -1,0 +1,115 @@
+name: Publish to PyPI
+
+# A merged pull request into `releases` is the release trigger. The version is not taken
+# from the pull request title or the branch name: bce.__version__ is the single source of
+# truth, and the tag is derived from it.
+on:
+  pull_request:
+    branches: [releases]
+    types: [closed]
+
+permissions:
+  contents: read
+
+# Two releases must never build and upload at the same time.
+concurrency:
+  group: publish-pypi
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build and publish
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # create the tag and the GitHub release
+    environment:
+      name: pypi
+      url: https://pypi.org/p/bgts-context-engine
+    steps:
+      # The merge commit, not the head branch: this is exactly what landed on `releases`.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Read the version from the package
+        id: version
+        run: |
+          version="$(python -c "import sys; sys.path.insert(0, 'src'); import bce; print(bce.__version__)")"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(a|b|rc)?[0-9]*$ ]]; then
+            echo "::error::bce.__version__ is '$version', which is not a release version (expected 0.2.0, 0.3.0rc1, ...)"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          echo "Releasing v$version"
+
+      # Without this, a pull request that forgets the version bump silently reaches
+      # twine and fails there, after a full build, with PyPI's "file already exists".
+      - name: Refuse to republish an existing version
+        run: |
+          if git rev-parse -q --verify "refs/tags/${{ steps.version.outputs.tag }}" >/dev/null; then
+            echo "::error::${{ steps.version.outputs.tag }} already exists. Bump bce.__version__ before merging into releases."
+            exit 1
+          fi
+
+      # Fail here rather than after a full build, at the upload step.
+      - name: Check the PyPI token is configured
+        env:
+          TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::error::The PYPI_API_TOKEN secret is not set for this repository."
+            exit 1
+          fi
+
+      - name: Build the UI into the package
+        run: python scripts/build_ui.py
+
+      - run: pip install build twine
+      - run: python -m build
+      - run: twine check dist/*
+
+      # Guard the promise that the wheel serves the UI: a release that silently
+      # ships without the bundle would leave /ui returning 404.
+      - name: Assert the UI is bundled in the wheel
+        run: |
+          python - <<'PY'
+          import sys, zipfile, glob
+          wheel = glob.glob("dist/*.whl")[0]
+          if "bce/api/rest/static/index.html" not in zipfile.ZipFile(wheel).namelist():
+              sys.exit(f"{wheel} does not contain the compiled UI")
+          print(f"{wheel} contains the UI bundle")
+          PY
+
+      - name: Publish to PyPI
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+        run: twine upload dist/*
+
+      # Tagging last: the tag means "this is on PyPI", so it is only written once the
+      # upload succeeded. Created with GITHUB_TOKEN, so it does not re-trigger release.yml.
+      - name: Tag the commit and publish the GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          target_commitish: ${{ github.event.pull_request.merge_commit_sha }}
+          name: ${{ steps.version.outputs.tag }}
+          files: dist/*
+          generate_release_notes: true
+          body: |
+            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/${{ steps.version.outputs.tag }}/CHANGELOG.md).
+
+            ```bash
+            pip install bgts-context-engine==${{ steps.version.outputs.version }}
+            ```
