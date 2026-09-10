@@ -6,6 +6,17 @@ consistent. The model identifier and dimension are pinned for reproducibility (P
 """
 
 from bce.indexing.embedder.embedder import Embedder
-from bce.indexing.embedder.encoder import Encoder, HashingEncoder, build_default_encoder
+from bce.indexing.embedder.encoder import (
+    Encoder,
+    EncoderConfigError,
+    HashingEncoder,
+    build_default_encoder,
+)
 
-__all__ = ["Embedder", "Encoder", "HashingEncoder", "build_default_encoder"]
+__all__ = [
+    "Embedder",
+    "Encoder",
+    "EncoderConfigError",
+    "HashingEncoder",
+    "build_default_encoder",
+]

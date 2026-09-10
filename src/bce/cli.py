@@ -394,7 +394,16 @@ def main() -> None:
             stream.reconfigure(encoding="utf-8")
         except (AttributeError, ValueError):
             pass
-    app()
+    from bce.indexing.embedder.encoder import EncoderConfigError
+
+    try:
+        app()
+    except EncoderConfigError as exc:
+        # A misconfigured embedding provider is the operator's to fix and the message says how, so
+        # catch it before Typer's excepthook buries it in a traceback. typer.Exit is a RuntimeError
+        # that only Click's own invocation understands; outside app() it must be SystemExit.
+        typer.secho(f"Configuration error: {exc}", err=True, fg=typer.colors.RED)
+        raise SystemExit(1) from None
 
 
 if __name__ == "__main__":

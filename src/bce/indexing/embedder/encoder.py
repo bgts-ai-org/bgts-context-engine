@@ -30,6 +30,15 @@ import re
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_]+")
 
 
+class EncoderConfigError(RuntimeError):
+    """The selected embedding provider cannot be built as configured.
+
+    Raised rather than substituting a working encoder. ``VectorStore.search`` compares the query
+    vector against stored rows without filtering on ``model``, so an encoder swapped in behind the
+    caller's back returns plausible-looking nonsense instead of an error.
+    """
+
+
 class Encoder(abc.ABC):
     """Maps text to a pinned, fixed-dimension embedding vector."""
 
@@ -98,9 +107,10 @@ class VoyageEncoder(Encoder):
         try:
             import voyageai
         except ModuleNotFoundError as exc:  # pragma: no cover - optional dep
-            raise RuntimeError(
-                "The 'voyageai' package is required for VoyageEncoder. "
-                "Install it with: pip install 'bgts-context-engine[embed]'"
+            raise EncoderConfigError(
+                "BCE_EMBEDDING_PROVIDER=voyage needs the 'voyageai' package, which the base "
+                "install leaves out. Install it with: pip install 'bgts-context-engine[embed]' "
+                "- or set BCE_EMBEDDING_PROVIDER=hashing to embed offline."
             ) from exc
         self._client = voyageai.Client(api_key=api_key)
         self.model = model
@@ -130,21 +140,39 @@ class VoyageEncoder(Encoder):
 
 
 def build_default_encoder(dim: int | None = None, model_id: str | None = None) -> Encoder:
-    """Encoder from settings: Voyage when configured, else the deterministic hashing fallback.
+    """Encoder from settings: Voyage when it is selected, else the deterministic hashing encoder.
 
     Reads :class:`bce.config.Settings` for the provider/model/dim/key. Explicit ``dim``/``model_id``
-    args override settings (used by tests); otherwise the hashing fallback adopts the settings dim so
+    args override settings (used by tests); otherwise the hashing encoder adopts the settings dim so
     its vectors match the pinned pgvector column width.
+
+    A provider that is selected but unusable raises :class:`EncoderConfigError` at every call site
+    rather than only on the indexing side, so a half-configured Voyage setup cannot index with one
+    encoder and search with another.
     """
     from bce.config import get_settings
 
     settings = get_settings()
-    if settings.voyage_ready:
+    provider = settings.embedding_provider.strip().lower()
+
+    if provider == "voyage":
+        if not settings.voyage_api_key:
+            raise EncoderConfigError(
+                "BCE_EMBEDDING_PROVIDER=voyage needs BCE_VOYAGE_API_KEY, which is empty. "
+                "Set the key - or set BCE_EMBEDDING_PROVIDER=hashing to embed offline."
+            )
         return VoyageEncoder(
             settings.voyage_api_key,
             model=settings.embedding_model,
             dim=settings.embedding_dim,
         )
+
+    if provider != "hashing":
+        raise EncoderConfigError(
+            f"Unknown BCE_EMBEDDING_PROVIDER {settings.embedding_provider!r}. "
+            "Supported values are 'hashing' and 'voyage'."
+        )
+
     fallback_dim = dim if dim is not None else settings.embedding_dim
     if model_id and model_id != "unset":
         return HashingEncoder(dim=fallback_dim, model_id=model_id)

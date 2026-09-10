@@ -86,11 +86,6 @@ class Settings(BaseSettings):
             f"@{self.db_host}:{self.db_port}/{self.db_name}"
         )
 
-    @property
-    def voyage_ready(self) -> bool:
-        """True if Voyage is selected and an API key is present."""
-        return self.embedding_provider.lower() == "voyage" and bool(self.voyage_api_key)
-
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

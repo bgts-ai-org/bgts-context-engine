@@ -7,6 +7,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Selecting `BCE_EMBEDDING_PROVIDER=voyage` without its API key no longer falls back to the
+  hashing encoder. Both that case and a missing `voyageai` package now raise
+  `EncoderConfigError`, which the CLI reports as a single line and the REST API as `503`.
+  A substituted encoder is not detectable by nearest-neighbour search, so it returned bad
+  anchors instead of an error. An unrecognised provider name is rejected the same way.
+- Removed `Settings.voyage_ready`, whose "ready" no longer matched how the encoder is
+  chosen.
+
 ## [0.1.0] - 2026-09-08
 
 First public release.

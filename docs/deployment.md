@@ -171,6 +171,14 @@ real model, but it means the engine works out of the box and benchmarks are repe
 Switching providers invalidates existing embeddings; re-index after changing either the
 provider or the dimension.
 
+`voyage` needs two things the base install does not give you: the key above and the
+`voyageai` package, which ships in the `embed` extra (`pip install
+"bgts-context-engine[embed]"`). Selecting it without either one is a configuration error —
+the CLI exits with a single message and the API answers `503`. It is deliberately not a
+fall back to `hashing`, because nearest-neighbour search does not filter on the stored
+`model`: an encoder substituted at query time would be compared against Voyage vectors and
+return confident nonsense rather than an error.
+
 ### API
 
 | Variable | Default | |
