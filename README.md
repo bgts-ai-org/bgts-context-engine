@@ -12,11 +12,11 @@ that actually answer it — ranked, budgeted, and reproducible.
 [![PyPI](https://img.shields.io/pypi/v/bgts-context-engine.svg)](https://pypi.org/project/bgts-context-engine/)
 [![Python](https://img.shields.io/pypi/pyversions/bgts-context-engine.svg)](https://pypi.org/project/bgts-context-engine/)
 [![CI](https://github.com/bgts-ai-org/bgts-context-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/bgts-ai-org/bgts-context-engine/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/bgts-ai-org/bgts-context-engine/blob/main/LICENSE)
-[![MCP](https://img.shields.io/badge/MCP-compatible-000000.svg)](https://github.com/bgts-ai-org/bgts-context-engine/blob/main/docs/mcp.md)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![MCP](https://img.shields.io/badge/MCP-compatible-000000.svg)](docs/mcp.md)
 [![Stars](https://img.shields.io/github/stars/bgts-ai-org/bgts-context-engine?style=flat&logo=github)](https://github.com/bgts-ai-org/bgts-context-engine/stargazers)
 
-[Quick start](#quick-start) · [Use it from your agent](#use-it-from-your-agent) · [How it works](#how-it-works) · [Documentation](#documentation) · [Türkçe](https://github.com/bgts-ai-org/bgts-context-engine/blob/main/README.tr.md)
+[Quick start](#quick-start) · [Use it from your agent](#use-it-from-your-agent) · [How it works](#how-it-works) · [Documentation](#documentation) · [Türkçe](README.tr.md)
 
 </div>
 
@@ -52,9 +52,9 @@ repositories, or the agent stack around it — can engage
 **opensource-ai@bgts.com**.
 
 <div align="center">
-<video src="https://github.com/user-attachments/assets/ac8ddd8f-2148-4d16-8c3a-3ce69d32b9d8" width="820" controls playsinline></video>
-
-<a href="https://github.com/user-attachments/assets/ac8ddd8f-2148-4d16-8c3a-3ce69d32b9d8">UI walkthrough of the web interface</a>
+<video src="https://github.com/user-attachments/assets/ac8ddd8f-2148-4d16-8c3a-3ce69d32b9d8" width="820" controls playsinline>
+UI walkthrough of the BGTS Context Engine web interface.
+</video>
 </div>
 
 ## Quick start
@@ -125,7 +125,7 @@ Without a global install, `uvx --from "bgts-context-engine[mcp]" bce serve-mcp` 
 
 Then ask your agent something that needs the repository rather than the file you have open:
 *"what breaks if I change the session TTL?"* The agent calls `get_context_for_task`, and the
-fourteen tools in [docs/mcp.md](https://github.com/bgts-ai-org/bgts-context-engine/blob/main/docs/mcp.md) let it drill from there — exact callers, type
+fourteen tools in [docs/mcp.md](docs/mcp.md) let it drill from there — exact callers, type
 hierarchy, route handlers — without guessing at file names.
 
 ## What comes back
@@ -193,7 +193,7 @@ downstream. Centrality saturates at degree 20, because a logger touches everythi
 explains nothing.
 
 The full formula, every weight, and the confidence thresholds are in
-[docs/retrieval.md](https://github.com/bgts-ai-org/bgts-context-engine/blob/main/docs/retrieval.md).
+[docs/retrieval.md](docs/retrieval.md).
 
 ## Features
 
@@ -202,7 +202,7 @@ The full formula, every weight, and the confidence thresholds are in
 - **Deterministic by construction.** Sorted traversal, stable tiebreaks, versioned scoring
   weights. `bce bench` verifies it by running each case repeatedly and comparing output.
 - **Six languages.** Python, JavaScript and TypeScript built in; Java, C# and Go behind the
-  `langs` extra. [Adding one](https://github.com/bgts-ai-org/bgts-context-engine/blob/main/docs/languages.md#adding-a-language) touches two files.
+  `langs` extra. [Adding one](docs/languages.md#adding-a-language) touches two files.
 - **Cross-language call edges.** React Native and Expo bridges connect
   `NativeModules.Foo.bar()` in TypeScript to `bar` in Objective-C, Swift or Kotlin — a hole
   no single parser can see.
@@ -254,7 +254,7 @@ that principal cannot read.
 Building the case file is the real work — it means deciding, by hand, what the right answer
 is. It is also the only honest way to know whether a change to the scoring weights helped.
 The format and a worked example are in
-[docs/deployment.md](https://github.com/bgts-ai-org/bgts-context-engine/blob/main/docs/deployment.md#benchmarking).
+[docs/deployment.md](docs/deployment.md#benchmarking).
 
 ## Roadmap
 
@@ -262,12 +262,12 @@ Ordered by how often it comes up, not by difficulty:
 
 - **Scope enforcement on every layer.** Layer 3 applies the per-user repository filter;
   Layers 1 and 2 do not. Until that closes, the API belongs behind a proxy — see
-  [SECURITY.md](https://github.com/bgts-ai-org/bgts-context-engine/blob/main/SECURITY.md).
+  [SECURITY.md](SECURITY.md).
 - **Streamable HTTP transport for MCP.** Today the MCP surface is stdio only, so the server
   runs next to the agent. Remote transport makes one index serve a team.
 - **More languages.** Rust, Kotlin and PHP are the most requested. The provider interface is
   the contribution path with the least friction — see
-  [docs/languages.md](https://github.com/bgts-ai-org/bgts-context-engine/blob/main/docs/languages.md#adding-a-language).
+  [docs/languages.md](docs/languages.md#adding-a-language).
 - **Wider SCIP ingestion.** Compiler-grade edges beat syntax-derived ones and are scored as
   such; more toolchains means more of the graph carries `scip` provenance.
 - **A published benchmark corpus.** An open task set over public repositories, so results
@@ -281,20 +281,20 @@ actually ask for reorders this list.
 
 | | |
 | --- | --- |
-| [Architecture](https://github.com/bgts-ai-org/bgts-context-engine/blob/main/docs/architecture.md) | the deterministic line, the three layers, indexing |
-| [Retrieval](https://github.com/bgts-ai-org/bgts-context-engine/blob/main/docs/retrieval.md) | anchors, expansion, every scoring weight, confidence |
-| [Data model](https://github.com/bgts-ai-org/bgts-context-engine/blob/main/docs/data-model.md) | node labels, edge types, tables, symbol identity |
-| [MCP and API](https://github.com/bgts-ai-org/bgts-context-engine/blob/main/docs/mcp.md) | all 14 tools, every endpoint, the CLI |
-| [Languages](https://github.com/bgts-ai-org/bgts-context-engine/blob/main/docs/languages.md) | what each parser extracts, and how to add one |
-| [Deployment](https://github.com/bgts-ai-org/bgts-context-engine/blob/main/docs/deployment.md) | configuration reference, jobs, backup, benchmarking |
-| [Web interface](https://github.com/bgts-ai-org/bgts-context-engine/blob/main/web/README.md) | developing the frontend |
+| [Architecture](docs/architecture.md) | the deterministic line, the three layers, indexing |
+| [Retrieval](docs/retrieval.md) | anchors, expansion, every scoring weight, confidence |
+| [Data model](docs/data-model.md) | node labels, edge types, tables, symbol identity |
+| [MCP and API](docs/mcp.md) | all 14 tools, every endpoint, the CLI |
+| [Languages](docs/languages.md) | what each parser extracts, and how to add one |
+| [Deployment](docs/deployment.md) | configuration reference, jobs, backup, benchmarking |
+| [Web interface](web/README.md) | developing the frontend |
 
 ## Contributing
 
 Contributions are welcome — especially new languages, which is the contribution the
 pipeline is most ready for.
 
-Read [CONTRIBUTING.md](https://github.com/bgts-ai-org/bgts-context-engine/blob/main/CONTRIBUTING.md) first. The one rule worth knowing up front:
+Read [CONTRIBUTING.md](CONTRIBUTING.md) first. The one rule worth knowing up front:
 **determinism is the product.** A change that makes the same task return different results
 will not be merged without an explicit opt-in flag, and anything touching scoring or
 ordering needs a test that pins the output.
@@ -309,12 +309,12 @@ cd web && npm ci && npm test
 
 The engine has no authentication of its own and expects to sit behind something that does.
 Only the Layer-3 endpoints apply the per-user repository scope. Read
-[SECURITY.md](https://github.com/bgts-ai-org/bgts-context-engine/blob/main/SECURITY.md) before exposing a port, and report vulnerabilities privately
+[SECURITY.md](SECURITY.md) before exposing a port, and report vulnerabilities privately
 rather than in an issue.
 
 ## License
 
-[MIT](https://github.com/bgts-ai-org/bgts-context-engine/blob/main/LICENSE) © BGTS.
+[MIT](LICENSE) © BGTS.
 
 Built by [Oğuz Öztürk](https://github.com/oztrkoguz) and
 [Enes İyidil](https://github.com/enesiyidil).
