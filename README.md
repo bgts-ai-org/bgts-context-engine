@@ -52,7 +52,7 @@ repositories, or the agent stack around it — can engage
 **opensource-ai@bgts.com**.
 
 <div align="center">
-<video src="docs/assets/ui-walkthrough.mp4" width="820" controls playsinline>
+<video src="https://github.com/user-attachments/assets/ac8ddd8f-2148-4d16-8c3a-3ce69d32b9d8" width="820" controls playsinline>
 UI walkthrough of the BGTS Context Engine web interface.
 </video>
 </div>
