@@ -8,7 +8,7 @@
 export const en = {
   "app.title": "BCE Graph Explorer",
   "app.subtitle": "Code graph visualiser",
-  "app.company": "BilgeAdam Technology & Software",
+  "app.company": "BGTS",
   "app.language": "Language",
 
   "nav.tabsLabel": "Sidebar tabs",

@@ -45,6 +45,18 @@ the retrieval path, no clock, no randomness. When an agent makes a bad change yo
 replay exactly what it was told, find the stage that surfaced the wrong symbol, and fix
 that stage.
 
+The engine is published so people can run it. Organisations that want the same thing
+inside their own perimeter — help with indexing, deployment, scoring tuned to their
+repositories, or the agent stack around it — can engage
+[BGTS](https://www.bgts.com) for consulting. Write to
+**opensource-ai@bgts.com**.
+
+<div align="center">
+<video src="docs/assets/ui-walkthrough.mp4" width="820" controls playsinline>
+UI walkthrough of the BGTS Context Engine web interface.
+</video>
+</div>
+
 ## Quick start
 
 ```bash
@@ -302,7 +314,7 @@ rather than in an issue.
 
 ## License
 
-[MIT](LICENSE) © BilgeAdam Technology.
+[MIT](LICENSE) © BGTS.
 
 Built by [Oğuz Öztürk](https://github.com/oztrkoguz) and
 [Enes İyidil](https://github.com/enesiyidil).

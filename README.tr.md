@@ -46,6 +46,17 @@ model yok, saat yok, rastgelelik yok. Bir ajan hatalı bir değişiklik yaptığ
 olarak ne söylendiğini yeniden oynatabilir, yanlış sembolü yüzeye çıkaran aşamayı bulabilir
 ve o aşamayı düzeltebilirsiniz.
 
+Motor, insanların çalıştırabilmesi için yayımlanır. Aynı şeyi kendi çevrelerinde isteyen
+kurumlar — indeksleme, kurulum, depolarınıza göre ayarlanmış skorlama veya etrafındaki
+ajan yığını konusunda yardım — [BGTS](https://www.bgts.com) ile
+danışmanlık olarak iletişime geçebilir. **opensource-ai@bgts.com** adresine yazın.
+
+<div align="center">
+<video src="docs/assets/ui-walkthrough.mp4" width="820" controls playsinline>
+BGTS Context Engine web arayüzünün turu.
+</video>
+</div>
+
 ## Hızlı başlangıç
 
 ```bash
@@ -312,7 +323,7 @@ issue olarak değil, özel kanaldan bildirin.
 
 ## Lisans
 
-[MIT](LICENSE) © BilgeAdam Technology.
+[MIT](LICENSE) © BGTS.
 
 [Oğuz Öztürk](https://github.com/oztrkoguz) ve
 [Enes İyidil](https://github.com/enesiyidil) tarafından geliştirildi.
