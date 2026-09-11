@@ -7,6 +7,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-09-11
+
 ### Added
 
 - Indexing over MCP: `index_repo` and `reindex_repo`, plus the read-only `get_index_job` and
@@ -84,6 +86,7 @@ First public release.
 - Docker Compose deployment with PostgreSQL, Apache AGE and pgvector preconfigured.
 - `server.json` manifest describing the stdio server for the official MCP registry.
 
-[Unreleased]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/bgts-ai-org/bgts-context-engine/releases/tag/v0.1.0
