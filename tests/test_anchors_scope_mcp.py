@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from bce.api.mcp.tools import TOOL_SPECS, dispatch_tool
+from bce.api.mcp.tools import (
+    TOOL_SPECS,
+    WRITE_TOOLS,
+    available_tool_specs,
+    dispatch_tool,
+)
 from bce.core.auth.scope import Principal, ScopeFilter
 from bce.core.orchestrator.anchors import find_anchors
 
@@ -64,27 +69,34 @@ def test_scope_filter_restricts_and_fails_closed():
     assert sf.allows(None) is False
 
 
-def test_mcp_catalog_covers_all_layers():
+def test_mcp_catalog_covers_retrieval_and_indexing():
     expected = {
+        "get_context_for_task",
+        "hybrid_search",
         "resolve_symbol",
         "find_references",
-        "find_implementers",
         "get_call_graph",
-        "get_dependencies",
-        "get_type_hierarchy",
-        "semantic_search",
-        "hybrid_search",
-        "find_similar_code",
-        "get_context_for_task",
-        "suggest_change_sites",
         "expand_blast_radius",
-        "select_repos",
-        "assemble_context",
+        "index_repo",
+        "reindex_repo",
+        "get_index_job",
+        "list_index_jobs",
     }
-    assert expected <= set(TOOL_SPECS)
+    assert set(TOOL_SPECS) == expected
     for spec in TOOL_SPECS.values():
         assert spec["schema"]["type"] == "object"
         assert "properties" in spec["schema"]
+        for field in spec["schema"]["required"]:
+            assert field in spec["schema"]["properties"]
+
+
+def test_mcp_write_tools_hidden_unless_allowed():
+    read_only = available_tool_specs(allow_write=False)
+    assert not (WRITE_TOOLS & set(read_only))
+    assert "get_context_for_task" in read_only
+    # Job inspection is read-only, so it stays available either way.
+    assert "get_index_job" in read_only
+    assert WRITE_TOOLS <= set(available_tool_specs(allow_write=True))
 
 
 def test_mcp_dispatch_unknown_tool_raises():
@@ -92,3 +104,31 @@ def test_mcp_dispatch_unknown_tool_raises():
 
     with pytest.raises(KeyError):
         dispatch_tool(conn=None, name="does_not_exist", arguments={})
+
+
+def test_mcp_dispatch_write_tool_denied_without_allow_write():
+    import pytest
+
+    with pytest.raises(PermissionError):
+        dispatch_tool(
+            conn=None,
+            name="index_repo",
+            arguments={"repo_path": ".", "name": "demo"},
+        )
+
+
+def test_mcp_exposes_no_remote_indexing():
+    """Cloning is a deployment task with its own credentials; the MCP surface is local-only."""
+    for name, spec in TOOL_SPECS.items():
+        assert "remote" not in name
+        assert "url" not in spec["schema"]["properties"], name
+
+
+def test_mcp_job_payload_carries_only_local_fields():
+    from bce.api.mcp.tools import _job_payload
+
+    payload = _job_payload(
+        "index_repo", {"repo_path": "/src/app", "name": "app", "token": "secret"}
+    )
+
+    assert payload == {"repo_path": "/src/app", "name": "app", "commit": None}

@@ -3,14 +3,22 @@
 Settings are read from environment variables (prefix ``BCE_``) or an optional ``.env`` file.
 Nothing here affects the deterministic payload; it only configures infrastructure (database
 connection, default locale, graph name, embedding model identifier).
+
+The ``.env`` path is resolved relative to the process working directory, which is not the project
+directory when an editor spawns ``bce serve-mcp``. ``BCE_ENV_FILE`` (or ``bce --env-file``) points at
+an explicit file so those processes read the same configuration as the shell.
 """
 
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+#: Environment variable holding an explicit ``.env`` path; set by ``bce --env-file``.
+ENV_FILE_VAR = "BCE_ENV_FILE"
 
 
 class Settings(BaseSettings):
@@ -79,6 +87,12 @@ class Settings(BaseSettings):
     # Seconds a worker sleeps between polls when the queue is empty.
     job_poll_interval: float = 2.0
 
+    # --- MCP (stdio agent surface) ---
+    # Indexing tools mutate the graph, so they are opt-in: with this off the MCP server advertises
+    # only read-only tools and runs no job workers. Turning it on also starts a worker pool inside
+    # the MCP process, so queued indexing runs without a separate ``bce serve``.
+    mcp_allow_write: bool = False
+
     @property
     def dsn(self) -> str:
         return (
@@ -89,4 +103,10 @@ class Settings(BaseSettings):
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    return Settings()
+    return Settings(_env_file=os.environ.get(ENV_FILE_VAR) or ".env")
+
+
+def set_env_file(path: str) -> None:
+    """Point configuration at an explicit ``.env`` file and drop the cached settings."""
+    os.environ[ENV_FILE_VAR] = path
+    get_settings.cache_clear()

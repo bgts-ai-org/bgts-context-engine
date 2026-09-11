@@ -98,8 +98,8 @@ Editör için terminalde `bce serve-mcp` açık bırakmayın: stdout protokoldü
 süreç sessiz kalır; IDE kendi kopyasını başlatır.
 
 MCP yapılandırmasını ekledikten veya değiştirdikten sonra **Cursor veya VS Code'u
-yeniden başlatın** (veya Komut Paleti → “Developer: Reload Window”). Sunucu 14 araçla
-etkin görünmelidir. Ayrıntı: [docs/mcp.md](docs/mcp.md).
+yeniden başlatın** (veya Komut Paleti → “Developer: Reload Window”). Sunucu sekiz araçla
+(indeksleme açıkken on araçla) etkin görünmelidir. Ayrıntı: [docs/mcp.md](docs/mcp.md).
 
 **Cursor** — her proje için kullanıcı yapılandırması `~/.cursor/mcp.json`, ya da yerelde
 kalan bir proje `.cursor/mcp.json` (dizin gitignore'dadır):
@@ -149,8 +149,9 @@ kurun, ya da kalıcı kurulum olmadan `uvx` kullanın:
 
 Sonra ajanınıza, açık olan dosyayı değil deponun tamamını gerektiren bir şey sorun:
 *"session TTL'i değiştirirsem ne bozulur?"* Ajan `get_context_for_task`'ı çağırır;
-[docs/mcp.md](docs/mcp.md) içindeki on dört araç ise oradan devam etmesini sağlar — kesin
-çağıranlar, tip hiyerarşisi, route handler'ları — dosya adlarını tahmin etmeden.
+[docs/mcp.md](docs/mcp.md) içindeki diğer araçlar ise oradan devam etmesini sağlar — kesin
+çağıranlar, bir değişikliğin etki alanı, bir adın arkasındaki sembol — dosya adlarını tahmin
+etmeden.
 
 ## Ne döner
 
@@ -238,8 +239,8 @@ Formülün tamamı, her ağırlık ve güven eşikleri
   Sembol kimlikleri dosya taşımalarından ve yeniden biçimlendirmeden sağ çıkar.
 - **Tek veritabanı.** Apache AGE ve pgvector aynı PostgreSQL içinde; tek sorgu bir graf
   gezinmesini, bir vektör aramasını ve bir SQL filtresini birleştirir.
-- **Tek gerçeklemeden MCP ve REST.** stdio üzerinden on dört araç, HTTP üzerinden aynı
-  fonksiyonlar. Aralarında kayma olacak bir şey yok.
+- **Tek gerçeklemeden MCP ve REST.** stdio üzerinden odaklı bir araç kümesi, HTTP üzerinden
+  aynı fonksiyonlar. Aralarında kayma olacak bir şey yok.
 - **Kendini açıklayan bir arayüz.** `/ui` wheel içinde gelir ve gerçek bir getirme çağrısını
   aşama aşama oynatır: çapaların yanması, genişlemenin yayılması, adayların skorlanıp
   kesilmesi.
@@ -314,7 +315,7 @@ Tümü İngilizcedir.
 | [Architecture](docs/architecture.md) | deterministik hat, üç katman, indeksleme |
 | [Retrieval](docs/retrieval.md) | çapalar, genişletme, her skorlama ağırlığı, güven |
 | [Data model](docs/data-model.md) | düğüm etiketleri, kenar tipleri, tablolar, sembol kimliği |
-| [MCP and API](docs/mcp.md) | 14 aracın tamamı, her uç nokta, CLI |
+| [MCP and API](docs/mcp.md) | her araç ve uç nokta, MCP yapılandırması, CLI |
 | [Languages](docs/languages.md) | her parser'ın çıkardıkları ve yeni dil ekleme |
 | [Deployment](docs/deployment.md) | yapılandırma referansı, işler, yedekleme, ölçüm |
 | [Web interface](web/README.md) | arayüz geliştirme |

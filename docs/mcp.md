@@ -4,6 +4,12 @@ Every capability is one set of Python functions exposed through two transports. 
 tool `get_context_for_task` and `POST /v1/get-context-for-task` call the same function with
 the same arguments and return the same payload, so nothing can drift between them.
 
+The MCP catalog is deliberately narrower than the REST surface. An agent chooses worse when
+handed a dozen overlapping retrieval tools, so only the non-redundant ones are exposed:
+`hybrid_search` covers what `semantic_search` and `find_similar_code` do, and
+`get_context_for_task` covers `suggest_change_sites`, `select_repos` and `assemble_context`.
+Everything left out is still available over REST.
+
 ## Connecting an agent
 
 Install the `mcp` extra onto an interpreter the editor can spawn. The extra is pinned to
@@ -27,7 +33,8 @@ and prints nothing: stdout is the protocol. Do not leave a copy running in a ter
 the IDE.
 
 After you add or change MCP config, **restart Cursor or VS Code** (or Command Palette →
-“Developer: Reload Window”). The server should appear enabled with fourteen tools.
+“Developer: Reload Window”). The server should appear enabled with eight tools, or ten once
+indexing is enabled (see [Configuration](#configuration)).
 
 **Cursor** — `~/.cursor/mcp.json` for every project, or a local `.cursor/mcp.json` (the
 `.cursor/` directory is gitignored):
@@ -37,8 +44,7 @@ After you add or change MCP config, **restart Cursor or VS Code** (or Command Pa
   "mcpServers": {
     "bgts-context-engine": {
       "command": "bce",
-      "args": ["serve-mcp"],
-      "env": { "BCE_DB_HOST": "localhost", "BCE_DB_NAME": "bce", "BCE_DB_PASSWORD": "..." }
+      "args": ["serve-mcp", "--env-file", "C:/path/to/project/.env"]
     }
   }
 }
@@ -52,12 +58,41 @@ After you add or change MCP config, **restart Cursor or VS Code** (or Command Pa
     "bgts-context-engine": {
       "type": "stdio",
       "command": "bce",
-      "args": ["serve-mcp"],
-      "env": { "BCE_DB_HOST": "localhost", "BCE_DB_NAME": "bce", "BCE_DB_PASSWORD": "..." }
+      "args": ["serve-mcp", "--env-file", "/path/to/project/.env"]
     }
   }
 }
 ```
+
+## Configuration
+
+The editor starts the server from its own working directory, not the project directory, so a
+bare `.env` is never found. Point at it explicitly with `--env-file` (above), or the
+`BCE_ENV_FILE` environment variable, or list the individual variables in the `env` block:
+
+```json
+"env": { "BCE_DB_HOST": "localhost", "BCE_DB_NAME": "bce", "BCE_DB_PASSWORD": "..." }
+```
+
+Prefer `--env-file`: `mcp.json` is a config file people share and paste into issues, and the
+engine needs real secrets (`BCE_VOYAGE_API_KEY`, `BCE_BITBUCKET_TOKEN`, the database
+password). Every `bce` command takes it before the command name (`bce --env-file PATH index
+…`), and `serve-mcp` also takes it after, since that is the form an MCP config reads
+naturally. So the shell and the editor read one file.
+
+The variables that matter for MCP:
+
+| Variable | |
+| --- | --- |
+| `BCE_DB_*` | database connection; without it the server starts but every tool fails |
+| `BCE_EMBEDDING_PROVIDER` | `hashing` (offline default) or `voyage` |
+| `BCE_VOYAGE_API_KEY` | required when the provider is `voyage` |
+| `BCE_MCP_ALLOW_WRITE` | `false` by default; `true` adds the two indexing tools |
+
+The encoder is built once at startup rather than on the first search. It pulls in numpy, and
+loading that lazily inside a tool call can stall for minutes on Windows; paying it during
+startup costs a few seconds there instead. A provider that is misconfigured is reported on
+stderr and leaves the graph tools working — only the search tools fail, and they say why.
 
 If the status stays disconnected, the editor cannot resolve `bce`. Confirm `where bce` /
 `command -v bce` outside the venv, then restart the IDE. Without a global install:
@@ -73,47 +108,58 @@ boundary.
 
 ## Tools
 
-Fourteen tools, in three layers. Every one accepts an optional `locale` and returns the
-same envelope.
+Eight read-only tools, plus two indexing tools when `BCE_MCP_ALLOW_WRITE=true`. Every one
+accepts an optional `locale` and returns the same envelope.
 
-### Layer 1 — exact answers
+### Retrieval
 
 | Tool | Required | Optional | Returns |
 | --- | --- | --- | --- |
+| `get_context_for_task` | `task_text` | see below | `anchors`, `context`, `coverage` |
+| `hybrid_search` | `query` | `repo_ids`, `limit` (10, max 100) | `candidates`, `model`, `weights_version` |
 | `resolve_symbol` | `name` | `repo_id` | `matches`, `indexed_at_commit` |
 | `find_references` | `symbol_id` | | `references` with file, line, edge type, `ref_kind`, provenance |
-| `find_implementers` | `symbol_id` | | `implementers` |
 | `get_call_graph` | `symbol_id` | `hops` (1, max 10), `direction` (`both`) | `callers`, `callees` |
-| `get_dependencies` | `file_id` | `transitive` (false) | `dependencies` |
-| `get_type_hierarchy` | `symbol_id` | | `supertypes`, `subtypes` |
+| `expand_blast_radius` | `target_symbols` | | the impact surface of changing them |
 
-These either find the answer or say they did not. `resolve_symbol` is usually the first
-call: it turns a name from a bug report into the `symbol_id` the other tools take.
+`hybrid_search` blends lexical and vector hits at a fixed 0.55 / 0.45 with an exact-name
+boost, so a symbol whose name matches the query is never beaten by something that merely
+reads similarly — the failure mode pure vector search is prone to.
 
-### Layer 2 — similarity
+`resolve_symbol` turns a name from a bug report into the `symbol_id` the graph tools take.
+Those tools either find the answer or say they did not.
 
-| Tool | Required | Optional | Returns |
-| --- | --- | --- | --- |
-| `semantic_search` | `query` | `repo_ids`, `limit` (10, max 100) | `candidates`, `model` |
-| `hybrid_search` | `query` | `repo_ids`, `limit` | `candidates`, `model`, `weights_version` |
-| `find_similar_code` | `code` | `repo_ids`, `limit` | `candidates`, `model` |
+### Indexing
 
-Prefer `hybrid_search` over `semantic_search`. It blends lexical and vector hits at a fixed
-0.55 / 0.45 with an exact-name boost, so a symbol whose name matches the query is never
-beaten by something that merely reads similarly — the failure mode pure vector search is
-prone to.
+Only advertised when `BCE_MCP_ALLOW_WRITE=true`; calling one otherwise returns an error
+naming the variable. A full index outlives any agent's tool-call timeout, so these enqueue a
+job and return it immediately.
 
-### Layer 3 — task context
-
-| Tool | Required | Returns |
+| Tool | Required | Optional |
 | --- | --- | --- |
-| `get_context_for_task` | `task_text` | `anchors`, `context`, `coverage` |
-| `suggest_change_sites` | `task_text` | ranked candidate change sites |
-| `expand_blast_radius` | `target_symbols` | the impact surface of changing them |
-| `select_repos` | `task_text` | which repositories the task probably concerns |
-| `assemble_context` | `symbol_ids` | those symbols fitted into a token budget |
+| `index_repo` | `repo_path`, `name` | `commit` |
+| `reindex_repo` | `repo_path`, `name` | `since_commit`, `to_commit` (`HEAD`) |
+| `get_index_job` | `job_id` | |
+| `list_index_jobs` | | `status`, `repo`, `limit` (50) |
 
-`get_context_for_task` is the one an agent should reach for first. Full options:
+`get_index_job` and `list_index_jobs` are read-only and always available, so an agent can
+watch jobs that REST enqueued.
+
+With writes enabled the MCP process runs its own job workers, so queued indexing progresses
+without a separate `bce serve`. The queue claims rows with `FOR UPDATE SKIP LOCKED`, so
+running both an API server and an MCP server against one database is safe. Those workers
+claim `index` and `reindex` jobs only: a clone that REST enqueued waits for `bce serve`
+rather than running inside an editor-spawned process. Poll
+`get_index_job` until `status` leaves `pending`/`running`; `result` then holds the same
+summary the REST endpoints return, or `error` explains the failure.
+
+These cover local working trees only. Cloning a remote repository needs its own credentials
+and is a deployment task rather than something an editor-spawned agent should reach for, so
+it stays on `POST /v1/index-remote`, `POST /v1/jobs/index-remote` and `bce index-remote`.
+
+### `get_context_for_task` options
+
+This is the tool an agent should reach for first. Full options:
 
 | Field | Default | |
 | --- | --- | --- |
@@ -235,8 +281,9 @@ whatever sits in front of the engine must authenticate the user and overwrite th
 | `bce context --task T [--max-tokens 4000] [--max-candidates 8]` | Layer 3 from the shell |
 | `bce bench --cases F [--out F] [--determinism-runs 3]` | benchmark report as JSON |
 | `bce languages` | list supported languages; needs no database |
-| `bce serve [--host] [--port] [--reload] [--no-ui]` | REST API and web UI |
-| `bce serve-mcp` | MCP over stdio; needs `[mcp]`, PATH-visible `bce`, IDE restart |
+| `bce serve [--host] [--port] [--reload] [--no-ui] [--env-file PATH]` | REST API and web UI |
+| `bce serve-mcp [--env-file PATH]` | MCP over stdio; needs `[mcp]`, PATH-visible `bce`, IDE restart |
+| `bce --env-file PATH <command>` | load configuration from an explicit `.env` (any command) |
 | `bce --version` | version, for bug reports |
 
 Every command prints the human-readable message followed by the JSON payload, so output

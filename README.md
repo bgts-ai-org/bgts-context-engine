@@ -98,7 +98,7 @@ leave `bce serve-mcp` running in a terminal for the editor: stdout is the protoc
 process stays silent, and the IDE starts its own copy.
 
 After you add or change the MCP config, **restart Cursor or VS Code** (or Command Palette
-→ “Developer: Reload Window”). The server should then show as enabled with 14 tools.
+→ “Developer: Reload Window”). The server should then show as enabled with eight tools (ten with indexing enabled).
 Setup detail: [docs/mcp.md](docs/mcp.md).
 
 **Cursor** — user config `~/.cursor/mcp.json` (applies to every project), or a project
@@ -149,8 +149,8 @@ above, or skip a permanent install with `uvx`:
 
 Then ask your agent something that needs the repository rather than the file you have open:
 *"what breaks if I change the session TTL?"* The agent calls `get_context_for_task`, and the
-fourteen tools in [docs/mcp.md](docs/mcp.md) let it drill from there — exact callers, type
-hierarchy, route handlers — without guessing at file names.
+other tools in [docs/mcp.md](docs/mcp.md) let it drill from there — exact callers, the blast
+radius of a change, the symbol behind a name — without guessing at file names.
 
 ## What comes back
 
@@ -236,7 +236,7 @@ The full formula, every weight, and the confidence thresholds are in
   moves and reformatting, so history and embeddings stay valid.
 - **One database.** Apache AGE and pgvector in the same PostgreSQL, so one query joins a
   graph traversal, a vector search and a SQL filter — and one `pg_dump` backs up the index.
-- **MCP and REST from one implementation.** Fourteen tools over stdio, the same functions
+- **MCP and REST from one implementation.** A focused tool set over stdio, the same functions
   over HTTP. Nothing to drift.
 - **A UI that explains itself.** `/ui` ships in the wheel and replays a real retrieval call
   stage by stage: anchors lighting up, expansion spreading, candidates scored and cut.
@@ -308,7 +308,7 @@ actually ask for reorders this list.
 | [Architecture](docs/architecture.md) | the deterministic line, the three layers, indexing |
 | [Retrieval](docs/retrieval.md) | anchors, expansion, every scoring weight, confidence |
 | [Data model](docs/data-model.md) | node labels, edge types, tables, symbol identity |
-| [MCP and API](docs/mcp.md) | all 14 tools, every endpoint, the CLI |
+| [MCP and API](docs/mcp.md) | every tool and endpoint, MCP configuration, the CLI |
 | [Languages](docs/languages.md) | what each parser extracts, and how to add one |
 | [Deployment](docs/deployment.md) | configuration reference, jobs, backup, benchmarking |
 | [Web interface](web/README.md) | developing the frontend |

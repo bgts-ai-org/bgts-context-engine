@@ -4,6 +4,9 @@
 extra dependency). Every record becomes one JSON object per line with ``timestamp``, ``level``,
 ``logger``, ``message`` and any contextual fields passed via ``logger.info(..., extra={...})``.
 
+The console stream is overridable because the MCP server speaks its protocol over stdout: it passes
+``stream=sys.stderr`` so a log line cannot corrupt a response.
+
 The file sink is opt-in via ``BCE_LOG_FILE_ENABLED=true`` (rotating, size-capped) so local CLI use
 stays console-only by default.
 """
@@ -16,6 +19,7 @@ import logging.handlers
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TextIO
 
 from bce.config import Settings, get_settings
 
@@ -67,8 +71,12 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(entry, ensure_ascii=False, default=str)
 
 
-def setup_logging(settings: Settings | None = None) -> None:
-    """Configure the ``bce`` logger tree (console always; rotating file when enabled)."""
+def setup_logging(settings: Settings | None = None, *, stream: TextIO | None = None) -> None:
+    """Configure the ``bce`` logger tree (console always; rotating file when enabled).
+
+    ``stream`` overrides the console destination (default stdout); pass ``sys.stderr`` from a process
+    whose stdout carries a protocol.
+    """
     settings = settings or get_settings()
     root = logging.getLogger("bce")
     if getattr(root, "_bce_configured", False):
@@ -77,7 +85,7 @@ def setup_logging(settings: Settings | None = None) -> None:
     root.setLevel(settings.log_level.upper())
     root.propagate = False
 
-    console = logging.StreamHandler(sys.stdout)
+    console = logging.StreamHandler(stream or sys.stdout)
     console.setFormatter(JsonFormatter())
     root.addHandler(console)
 

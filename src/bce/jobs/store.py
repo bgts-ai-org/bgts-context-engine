@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Sequence
 from typing import Any
 
 import psycopg
@@ -97,26 +98,38 @@ def list_jobs(
     return [_row_to_dict(row) for row in rows]
 
 
-def claim_next_job(conn: psycopg.Connection) -> dict[str, Any] | None:
+def claim_next_job(
+    conn: psycopg.Connection, *, job_types: Sequence[str] | None = None
+) -> dict[str, Any] | None:
     """Atomically claim the oldest ``pending`` job (pending -> running). Caller commits.
 
     ``FOR UPDATE SKIP LOCKED`` guarantees two workers can never claim the same row even when
     polling concurrently.
+
+    ``job_types`` narrows what this worker is willing to run. The MCP server indexes local working
+    trees only, so it must leave a clone job that REST enqueued to the API server rather than doing
+    remote work in an editor-spawned process.
     """
+    predicate = "status = 'pending'"
+    params: tuple[Any, ...] = ()
+    if job_types is not None:
+        predicate += " AND job_type = ANY(%s)"
+        params = (list(job_types),)
+
     with conn.cursor() as cur:
         cur.execute(
-            """
+            f"""
             UPDATE jobs
                SET status = 'running', started_at = now()
              WHERE job_id = (
                    SELECT job_id FROM jobs
-                    WHERE status = 'pending'
+                    WHERE {predicate}
                     ORDER BY created_at, job_id
                     FOR UPDATE SKIP LOCKED
                     LIMIT 1
              )
-            RETURNING """
-            + _COLUMNS,
+            RETURNING {_COLUMNS}""",
+            params,
         )
         row = cur.fetchone()
     return _row_to_dict(row) if row else None
