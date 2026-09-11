@@ -37,6 +37,20 @@ def _print_version(value: bool) -> None:
         raise typer.Exit()
 
 
+_ENV_FILE_HELP = "Path to a .env file to load (default: ./.env; also settable via BCE_ENV_FILE)"
+
+
+def _load_env_file(env_file: Path | None) -> None:
+    """Point configuration at ``env_file``, rejecting a path that does not exist."""
+    if env_file is None:
+        return
+    from bce.config import set_env_file
+
+    if not env_file.is_file():
+        raise typer.BadParameter(f"env file not found: {env_file}", param_hint="--env-file")
+    set_env_file(str(env_file.resolve()))
+
+
 @app.callback()
 def _root(
     version: bool = typer.Option(
@@ -47,8 +61,10 @@ def _root(
         callback=_print_version,
         is_eager=True,
     ),
+    env_file: Path | None = typer.Option(None, "--env-file", help=_ENV_FILE_HELP),
 ) -> None:
     """BGTS Context Engine: deterministic code-graph context for AI coding agents."""
+    _load_env_file(env_file)
 
 
 @app.command()
@@ -358,13 +374,20 @@ def serve(
     port: int = typer.Option(8000, "--port", help="Bind port"),
     reload: bool = typer.Option(False, "--reload", help="Auto-reload on code changes (dev)"),
     ui: bool = typer.Option(True, "--ui/--no-ui", help="Serve the bundled web UI at /ui"),
+    env_file: Path | None = typer.Option(None, "--env-file", help=_ENV_FILE_HELP),
 ) -> None:
-    """Run the REST API server (Layer 1-2-3 endpoints) via uvicorn."""
+    """Run the REST API server (Layer 1-2-3 endpoints) via uvicorn.
+
+    ``--env-file`` is accepted here as well as before the command name: like ``serve-mcp``, this
+    command is launched by a supervisor or service definition that reads more naturally with the
+    option after it.
+    """
     import uvicorn
 
     from bce.api.rest.app import ui_is_bundled
     from bce.core.logging import setup_logging
 
+    _load_env_file(env_file)
     setup_logging()
 
     typer.echo(f"API docs:  http://{host}:{port}/docs")
@@ -378,9 +401,17 @@ def serve(
 
 
 @app.command(name="serve-mcp")
-def serve_mcp() -> None:
-    """Run the MCP server over stdio (agent-native surface). Requires the 'mcp' package."""
+def serve_mcp(
+    env_file: Path | None = typer.Option(None, "--env-file", help=_ENV_FILE_HELP),
+) -> None:
+    """Run the MCP server over stdio (agent-native surface). Requires the 'mcp' package.
+
+    ``--env-file`` is accepted here as well as before the command name, because an editor's MCP
+    config spawns this command directly and reads more naturally with the option after it.
+    """
     import asyncio
+
+    _load_env_file(env_file)
 
     from bce.api.mcp.server import run_stdio
 
