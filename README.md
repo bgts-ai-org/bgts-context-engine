@@ -79,21 +79,50 @@ Then serve it:
 
 ```bash
 bce serve        # REST at :8000/docs, web UI at :8000/ui/
-bce serve-mcp    # MCP over stdio, for agents
+bce serve-mcp    # MCP over stdio, for agents (install the [mcp] extra; see below)
 ```
 
 ## Use it from your agent
 
-The MCP surface is behind the `mcp` extra: `pip install "bgts-context-engine[mcp]"`. It
-speaks stdio, so every MCP client configures it the same way — `bce serve-mcp`, plus the
-database connection in the environment.
+The MCP surface is behind the `mcp` extra (Python MCP SDK 1.x: `mcp>=1.0,<2`). Install it
+so `bce` is on the **user PATH**, not only inside a project `.venv`. Cursor and VS Code
+spawn `bce serve-mcp` themselves and do not activate the venv:
 
-**Cursor** — `.cursor/mcp.json` in the project, or `~/.cursor/mcp.json` for every project:
+```bash
+pip install "bgts-context-engine[mcp]"
+bce --version   # must work in a new terminal, with no venv activated
+```
+
+Every MCP client uses the same stdio command plus the database in the environment. Do not
+leave `bce serve-mcp` running in a terminal for the editor: stdout is the protocol, so the
+process stays silent, and the IDE starts its own copy.
+
+After you add or change the MCP config, **restart Cursor or VS Code** (or Command Palette
+→ “Developer: Reload Window”). The server should then show as enabled with eight tools (ten with indexing enabled).
+Setup detail: [docs/mcp.md](docs/mcp.md).
+
+**Cursor** — user config `~/.cursor/mcp.json` (applies to every project), or a project
+`.cursor/mcp.json` that stays local (the directory is gitignored):
 
 ```json
 {
   "mcpServers": {
     "bgts-context-engine": {
+      "command": "bce",
+      "args": ["serve-mcp"],
+      "env": { "BCE_DB_HOST": "localhost", "BCE_DB_NAME": "bce" }
+    }
+  }
+}
+```
+
+**VS Code** — user MCP settings, or a project `.vscode/mcp.json` (also gitignored):
+
+```json
+{
+  "servers": {
+    "bgts-context-engine": {
+      "type": "stdio",
       "command": "bce",
       "args": ["serve-mcp"],
       "env": { "BCE_DB_HOST": "localhost", "BCE_DB_NAME": "bce" }
@@ -108,25 +137,20 @@ database connection in the environment.
 claude mcp add bgts-context-engine --env BCE_DB_HOST=localhost -- bce serve-mcp
 ```
 
-**VS Code** — `.vscode/mcp.json`:
-
-```json
-{
-  "servers": {
-    "bgts-context-engine": { "type": "stdio", "command": "bce", "args": ["serve-mcp"] }
-  }
-}
-```
-
 **Claude Desktop** — same block as Cursor, in `claude_desktop_config.json`.
 
-Without a global install, `uvx --from "bgts-context-engine[mcp]" bce serve-mcp` works as the
-`command` anywhere above.
+If `command: "bce"` stays disconnected, the editor cannot see `bce` on PATH. Install as
+above, or skip a permanent install with `uvx`:
+
+```json
+"command": "uvx",
+"args": ["--from", "bgts-context-engine[mcp]", "bce", "serve-mcp"]
+```
 
 Then ask your agent something that needs the repository rather than the file you have open:
 *"what breaks if I change the session TTL?"* The agent calls `get_context_for_task`, and the
-fourteen tools in [docs/mcp.md](docs/mcp.md) let it drill from there — exact callers, type
-hierarchy, route handlers — without guessing at file names.
+other tools in [docs/mcp.md](docs/mcp.md) let it drill from there — exact callers, the blast
+radius of a change, the symbol behind a name — without guessing at file names.
 
 ## What comes back
 
@@ -212,7 +236,7 @@ The full formula, every weight, and the confidence thresholds are in
   moves and reformatting, so history and embeddings stay valid.
 - **One database.** Apache AGE and pgvector in the same PostgreSQL, so one query joins a
   graph traversal, a vector search and a SQL filter — and one `pg_dump` backs up the index.
-- **MCP and REST from one implementation.** Fourteen tools over stdio, the same functions
+- **MCP and REST from one implementation.** A focused tool set over stdio, the same functions
   over HTTP. Nothing to drift.
 - **A UI that explains itself.** `/ui` ships in the wheel and replays a real retrieval call
   stage by stage: anchors lighting up, expansion spreading, candidates scored and cut.
@@ -284,7 +308,7 @@ actually ask for reorders this list.
 | [Architecture](docs/architecture.md) | the deterministic line, the three layers, indexing |
 | [Retrieval](docs/retrieval.md) | anchors, expansion, every scoring weight, confidence |
 | [Data model](docs/data-model.md) | node labels, edge types, tables, symbol identity |
-| [MCP and API](docs/mcp.md) | all 14 tools, every endpoint, the CLI |
+| [MCP and API](docs/mcp.md) | every tool and endpoint, MCP configuration, the CLI |
 | [Languages](docs/languages.md) | what each parser extracts, and how to add one |
 | [Deployment](docs/deployment.md) | configuration reference, jobs, backup, benchmarking |
 | [Web interface](web/README.md) | developing the frontend |
@@ -315,6 +339,3 @@ rather than in an issue.
 ## License
 
 [MIT](LICENSE) © BGTS.
-
-Built by [Oğuz Öztürk](https://github.com/oztrkoguz) and
-[Enes İyidil](https://github.com/enesiyidil).

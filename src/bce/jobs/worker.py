@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections.abc import Sequence
 from dataclasses import asdict
 from typing import Any
 
@@ -62,10 +63,17 @@ def execute_job(conn: Any, job: dict[str, Any]) -> dict[str, Any]:
 
 
 class JobWorkerPool:
-    """Pool of daemon threads polling the jobs queue; sized by ``BCE_JOB_WORKERS``."""
+    """Pool of daemon threads polling the jobs queue; sized by ``BCE_JOB_WORKERS``.
 
-    def __init__(self, settings: Settings | None = None) -> None:
+    ``job_types`` restricts which jobs this pool will claim (default: all of them). The MCP server
+    passes the local-only subset so remote clones stay with the API server.
+    """
+
+    def __init__(
+        self, settings: Settings | None = None, *, job_types: Sequence[str] | None = None
+    ) -> None:
         self._settings = settings or get_settings()
+        self._job_types = tuple(job_types) if job_types is not None else None
         self._stop = threading.Event()
         self._threads: list[threading.Thread] = []
 
@@ -104,7 +112,7 @@ class JobWorkerPool:
         from bce.storage.relational.db import connection
 
         with connection(self._settings) as book:
-            job = claim_next_job(book)
+            job = claim_next_job(book, job_types=self._job_types)
             if job is None:
                 return False
             book.commit()

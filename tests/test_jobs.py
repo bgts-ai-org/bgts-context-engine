@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 import bce.api.rest.routes as routes_module
 from bce.api.rest.app import create_app
 from bce.api.rest.deps import get_repository
-from bce.jobs.store import _valid_uuid, enqueue_job
+from bce.jobs.store import _valid_uuid, claim_next_job, enqueue_job
 from bce.jobs.worker import execute_job
 
 _JOB_ID = "11111111-2222-3333-4444-555555555555"
@@ -50,6 +50,56 @@ def test_uuid_guard() -> None:
     assert _valid_uuid(_JOB_ID)
     assert not _valid_uuid("index")  # path-param collisions must not hit the DB
     assert not _valid_uuid("")
+
+
+class _RecordingCursor:
+    """Captures the SQL a claim would run, so the job_type filter is testable without a database."""
+
+    def __init__(self, sink: dict[str, Any]) -> None:
+        self._sink = sink
+
+    def __enter__(self) -> _RecordingCursor:
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        return None
+
+    def execute(self, sql: str, params: Any = ()) -> None:
+        self._sink["sql"] = sql
+        self._sink["params"] = params
+
+    def fetchone(self) -> None:
+        return None
+
+
+class _RecordingConn:
+    def __init__(self) -> None:
+        self.seen: dict[str, Any] = {}
+
+    def cursor(self) -> _RecordingCursor:
+        return _RecordingCursor(self.seen)
+
+
+def test_claim_takes_any_job_type_by_default() -> None:
+    conn = _RecordingConn()
+
+    claim_next_job(conn)  # type: ignore[arg-type]
+
+    assert "job_type = ANY" not in conn.seen["sql"]
+    assert conn.seen["params"] == ()
+
+
+def test_claim_restricted_to_local_job_types_for_mcp() -> None:
+    """The MCP pool must leave a clone job that REST enqueued to the API server."""
+    from bce.api.mcp.tools import MCP_JOB_TYPES
+
+    conn = _RecordingConn()
+
+    claim_next_job(conn, job_types=MCP_JOB_TYPES)  # type: ignore[arg-type]
+
+    assert "job_type = ANY(%s)" in conn.seen["sql"]
+    assert conn.seen["params"] == (["index", "reindex"],)
+    assert "index_remote" not in MCP_JOB_TYPES
 
 
 # --- worker dispatch ---

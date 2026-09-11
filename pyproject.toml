@@ -69,8 +69,10 @@ dev = [
     "httpx>=0.27",
 ]
 # Agent-native MCP surface (spec section 7). Optional: the REST API works without it.
+# Pin below 2.x: the Python SDK 2.x removed Server.list_tools / Server.call_tool, which
+# bce serve-mcp still uses.
 mcp = [
-    "mcp>=1.0",
+    "mcp>=1.0,<2",
 ]
 # Voyage AI embeddings (Phase 2). Optional: the hashing fallback works without it.
 embed = [
