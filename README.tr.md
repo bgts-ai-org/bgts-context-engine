@@ -349,6 +349,3 @@ issue olarak değil, özel kanaldan bildirin.
 ## Lisans
 
 [MIT](LICENSE) © BGTS.
-
-[Oğuz Öztürk](https://github.com/oztrkoguz) ve
-[Enes İyidil](https://github.com/enesiyidil) tarafından geliştirildi.

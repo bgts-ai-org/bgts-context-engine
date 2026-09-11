@@ -339,6 +339,3 @@ rather than in an issue.
 ## License
 
 [MIT](LICENSE) © BGTS.
-
-Built by [Oğuz Öztürk](https://github.com/oztrkoguz) and
-[Enes İyidil](https://github.com/enesiyidil).
