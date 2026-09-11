@@ -79,21 +79,50 @@ Then serve it:
 
 ```bash
 bce serve        # REST at :8000/docs, web UI at :8000/ui/
-bce serve-mcp    # MCP over stdio, for agents
+bce serve-mcp    # MCP over stdio, for agents (install the [mcp] extra; see below)
 ```
 
 ## Use it from your agent
 
-The MCP surface is behind the `mcp` extra: `pip install "bgts-context-engine[mcp]"`. It
-speaks stdio, so every MCP client configures it the same way — `bce serve-mcp`, plus the
-database connection in the environment.
+The MCP surface is behind the `mcp` extra (Python MCP SDK 1.x: `mcp>=1.0,<2`). Install it
+so `bce` is on the **user PATH**, not only inside a project `.venv`. Cursor and VS Code
+spawn `bce serve-mcp` themselves and do not activate the venv:
 
-**Cursor** — `.cursor/mcp.json` in the project, or `~/.cursor/mcp.json` for every project:
+```bash
+pip install "bgts-context-engine[mcp]"
+bce --version   # must work in a new terminal, with no venv activated
+```
+
+Every MCP client uses the same stdio command plus the database in the environment. Do not
+leave `bce serve-mcp` running in a terminal for the editor: stdout is the protocol, so the
+process stays silent, and the IDE starts its own copy.
+
+After you add or change the MCP config, **restart Cursor or VS Code** (or Command Palette
+→ “Developer: Reload Window”). The server should then show as enabled with 14 tools.
+Setup detail: [docs/mcp.md](docs/mcp.md).
+
+**Cursor** — user config `~/.cursor/mcp.json` (applies to every project), or a project
+`.cursor/mcp.json` that stays local (the directory is gitignored):
 
 ```json
 {
   "mcpServers": {
     "bgts-context-engine": {
+      "command": "bce",
+      "args": ["serve-mcp"],
+      "env": { "BCE_DB_HOST": "localhost", "BCE_DB_NAME": "bce" }
+    }
+  }
+}
+```
+
+**VS Code** — user MCP settings, or a project `.vscode/mcp.json` (also gitignored):
+
+```json
+{
+  "servers": {
+    "bgts-context-engine": {
+      "type": "stdio",
       "command": "bce",
       "args": ["serve-mcp"],
       "env": { "BCE_DB_HOST": "localhost", "BCE_DB_NAME": "bce" }
@@ -108,20 +137,15 @@ database connection in the environment.
 claude mcp add bgts-context-engine --env BCE_DB_HOST=localhost -- bce serve-mcp
 ```
 
-**VS Code** — `.vscode/mcp.json`:
-
-```json
-{
-  "servers": {
-    "bgts-context-engine": { "type": "stdio", "command": "bce", "args": ["serve-mcp"] }
-  }
-}
-```
-
 **Claude Desktop** — same block as Cursor, in `claude_desktop_config.json`.
 
-Without a global install, `uvx --from "bgts-context-engine[mcp]" bce serve-mcp` works as the
-`command` anywhere above.
+If `command: "bce"` stays disconnected, the editor cannot see `bce` on PATH. Install as
+above, or skip a permanent install with `uvx`:
+
+```json
+"command": "uvx",
+"args": ["--from", "bgts-context-engine[mcp]", "bce", "serve-mcp"]
+```
 
 Then ask your agent something that needs the repository rather than the file you have open:
 *"what breaks if I change the session TTL?"* The agent calls `get_context_for_task`, and the

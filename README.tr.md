@@ -79,21 +79,50 @@ Ardından servis edin:
 
 ```bash
 bce serve        # :8000/docs adresinde REST, :8000/ui/ adresinde web arayüzü
-bce serve-mcp    # ajanlar için stdio üzerinden MCP
+bce serve-mcp    # ajanlar için stdio üzerinden MCP ([mcp] eki gerekir; aşağıya bakın)
 ```
 
 ## Ajanınızdan kullanma
 
-MCP yüzeyi `mcp` ekinin arkasındadır: `pip install "bgts-context-engine[mcp]"`. stdio
-konuştuğu için her MCP istemcisi aynı şekilde yapılandırılır — `bce serve-mcp` ve ortamda
-veritabanı bağlantısı.
+MCP yüzeyi `mcp` ekinin arkasındadır (Python MCP SDK 1.x: `mcp>=1.0,<2`). `bce` komutunu
+yalnızca proje `.venv` içine değil, **kullanıcı PATH'ine** kurun. Cursor ve VS Code
+`bce serve-mcp` sürecini kendileri başlatır; sanal ortamı etkinleştirmezler:
 
-**Cursor** — proje içinde `.cursor/mcp.json`, ya da tüm projeler için `~/.cursor/mcp.json`:
+```bash
+pip install "bgts-context-engine[mcp]"
+bce --version   # venv kapalı, yeni bir terminalde çalışmalı
+```
+
+Her MCP istemcisi aynı stdio komutunu ve ortamındaki veritabanı bağlantısını kullanır.
+Editör için terminalde `bce serve-mcp` açık bırakmayın: stdout protokoldür, bu yüzden
+süreç sessiz kalır; IDE kendi kopyasını başlatır.
+
+MCP yapılandırmasını ekledikten veya değiştirdikten sonra **Cursor veya VS Code'u
+yeniden başlatın** (veya Komut Paleti → “Developer: Reload Window”). Sunucu 14 araçla
+etkin görünmelidir. Ayrıntı: [docs/mcp.md](docs/mcp.md).
+
+**Cursor** — her proje için kullanıcı yapılandırması `~/.cursor/mcp.json`, ya da yerelde
+kalan bir proje `.cursor/mcp.json` (dizin gitignore'dadır):
 
 ```json
 {
   "mcpServers": {
     "bgts-context-engine": {
+      "command": "bce",
+      "args": ["serve-mcp"],
+      "env": { "BCE_DB_HOST": "localhost", "BCE_DB_NAME": "bce" }
+    }
+  }
+}
+```
+
+**VS Code** — kullanıcı MCP ayarları, ya da proje `.vscode/mcp.json` (o da gitignore'dadır):
+
+```json
+{
+  "servers": {
+    "bgts-context-engine": {
+      "type": "stdio",
       "command": "bce",
       "args": ["serve-mcp"],
       "env": { "BCE_DB_HOST": "localhost", "BCE_DB_NAME": "bce" }
@@ -108,20 +137,15 @@ veritabanı bağlantısı.
 claude mcp add bgts-context-engine --env BCE_DB_HOST=localhost -- bce serve-mcp
 ```
 
-**VS Code** — `.vscode/mcp.json`:
-
-```json
-{
-  "servers": {
-    "bgts-context-engine": { "type": "stdio", "command": "bce", "args": ["serve-mcp"] }
-  }
-}
-```
-
 **Claude Desktop** — `claude_desktop_config.json` içinde Cursor ile aynı blok.
 
-Global kurulum istemiyorsanız yukarıdaki her yerde `command` olarak
-`uvx --from "bgts-context-engine[mcp]" bce serve-mcp` kullanılabilir.
+`"command": "bce"` bağlı kalmazsa editör PATH'te `bce` görmüyordur. Yukarıdaki gibi
+kurun, ya da kalıcı kurulum olmadan `uvx` kullanın:
+
+```json
+"command": "uvx",
+"args": ["--from", "bgts-context-engine[mcp]", "bce", "serve-mcp"]
+```
 
 Sonra ajanınıza, açık olan dosyayı değil deponun tamamını gerektiren bir şey sorun:
 *"session TTL'i değiştirirsem ne bozulur?"* Ajan `get_context_for_task`'ı çağırır;

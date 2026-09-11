@@ -126,7 +126,7 @@ traversal, a vector search and a SQL join, and one `pg_dump` captures the whole 
 
 | Surface | For | Entry point |
 | --- | --- | --- |
-| MCP over stdio | AI coding agents | `bce serve-mcp` |
+| MCP over stdio | AI coding agents | `bce serve-mcp` (editor-spawned; see [mcp.md](mcp.md#connecting-an-agent)) |
 | REST | services and scripts | `bce serve`, OpenAPI at `/docs` |
 | Web UI | humans reading the graph | `/ui`, bundled in the wheel |
 | CLI | indexing and operations | `bce --help` |

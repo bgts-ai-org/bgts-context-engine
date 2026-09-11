@@ -99,12 +99,16 @@ messages. Clones are cached under `BCE_REPO_CACHE_DIR` and refreshed with `git f
 bce serve                      # REST + web UI
 bce serve --host 0.0.0.0 --port 8000
 bce serve --no-ui              # API only
-bce serve-mcp                  # MCP over stdio
+bce serve-mcp                  # MCP over stdio (agents; the IDE spawns this)
 ```
 
 - API documentation: `http://127.0.0.1:8000/docs`
 - Web interface: `http://127.0.0.1:8000/ui/`
 - Liveness: `GET /healthz`, which returns 503 when the database is unreachable
+
+`bce serve` is the HTTP process you start yourself. `bce serve-mcp` is stdio: Cursor and
+VS Code must be able to exec `bce` on their PATH (a project venv is not activated), and
+you restart the editor after changing MCP config. See [mcp.md](mcp.md#connecting-an-agent).
 
 The UI is served from the wheel and needs no separate deployment. In a source checkout it
 is absent until built; see [web/README.md](../web/README.md).

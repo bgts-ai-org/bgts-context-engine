@@ -6,12 +6,31 @@ the same arguments and return the same payload, so nothing can drift between the
 
 ## Connecting an agent
 
+Install the `mcp` extra onto an interpreter the editor can spawn. The extra is pinned to
+Python MCP SDK 1.x (`mcp>=1.0,<2`); 2.x removed the `list_tools` / `call_tool` decorators
+`bce serve-mcp` uses.
+
+Cursor and VS Code start the server themselves. They do **not** activate a project `.venv`,
+so `bce` must be on the user PATH (or you use `uvx` as the command):
+
+```bash
+pip install "bgts-context-engine[mcp]"
+bce --version   # in a new terminal, venv deactivated
+```
+
 ```bash
 bce serve-mcp
 ```
 
-This speaks MCP over stdio and registers as `bgts-context-engine`. Point any MCP client at
-it:
+That last command is what the editor runs over stdio. It registers as `bgts-context-engine`
+and prints nothing: stdout is the protocol. Do not leave a copy running in a terminal for
+the IDE.
+
+After you add or change MCP config, **restart Cursor or VS Code** (or Command Palette →
+“Developer: Reload Window”). The server should appear enabled with fourteen tools.
+
+**Cursor** — `~/.cursor/mcp.json` for every project, or a local `.cursor/mcp.json` (the
+`.cursor/` directory is gitignored):
 
 ```json
 {
@@ -19,10 +38,33 @@ it:
     "bgts-context-engine": {
       "command": "bce",
       "args": ["serve-mcp"],
-      "env": { "BCE_DB_HOST": "localhost", "BCE_DB_PASSWORD": "..." }
+      "env": { "BCE_DB_HOST": "localhost", "BCE_DB_NAME": "bce", "BCE_DB_PASSWORD": "..." }
     }
   }
 }
+```
+
+**VS Code** — user MCP settings, or a project `.vscode/mcp.json` (also gitignored):
+
+```json
+{
+  "servers": {
+    "bgts-context-engine": {
+      "type": "stdio",
+      "command": "bce",
+      "args": ["serve-mcp"],
+      "env": { "BCE_DB_HOST": "localhost", "BCE_DB_NAME": "bce", "BCE_DB_PASSWORD": "..." }
+    }
+  }
+}
+```
+
+If the status stays disconnected, the editor cannot resolve `bce`. Confirm `where bce` /
+`command -v bce` outside the venv, then restart the IDE. Without a global install:
+
+```json
+"command": "uvx",
+"args": ["--from", "bgts-context-engine[mcp]", "bce", "serve-mcp"]
 ```
 
 The database must be reachable and at least one repository indexed. The stdio server runs
@@ -194,7 +236,7 @@ whatever sits in front of the engine must authenticate the user and overwrite th
 | `bce bench --cases F [--out F] [--determinism-runs 3]` | benchmark report as JSON |
 | `bce languages` | list supported languages; needs no database |
 | `bce serve [--host] [--port] [--reload] [--no-ui]` | REST API and web UI |
-| `bce serve-mcp` | MCP over stdio |
+| `bce serve-mcp` | MCP over stdio; needs `[mcp]`, PATH-visible `bce`, IDE restart |
 | `bce --version` | version, for bug reports |
 
 Every command prints the human-readable message followed by the JSON payload, so output

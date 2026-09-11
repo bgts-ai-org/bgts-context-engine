@@ -7,6 +7,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- The optional `mcp` extra is now `mcp>=1.0,<2`. SDK 2.x dropped `Server.list_tools` /
+  `Server.call_tool`, so `bce serve-mcp` failed on a default `pip install` of 2.x.
+
 ## [0.2.0] - 2026-09-10
 
 ### Changed
