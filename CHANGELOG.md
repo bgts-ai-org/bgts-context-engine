@@ -7,6 +7,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-09-18
+
 ### Added
 
 - `bce bench-prs prepare` / `run`: a PR replay ablation that measures what the engine adds on
@@ -252,7 +254,8 @@ First public release.
 - Docker Compose deployment with PostgreSQL, Apache AGE and pgvector preconfigured.
 - `server.json` manifest describing the stdio server for the official MCP registry.
 
-[Unreleased]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/bgts-ai-org/bgts-context-engine/releases/tag/v0.1.0
