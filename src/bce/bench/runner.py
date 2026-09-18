@@ -118,6 +118,7 @@ def _run_once(
     result = orchestrator.retrieve(
         anchors,
         commit=case.commit,
+        task_text=case.task_text,
         max_candidates=case.max_candidates,
         scope_filter=(scope.allows if scope is not None else None),
     )

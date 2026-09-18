@@ -81,12 +81,41 @@ class Indexer:
         self.use_scip = use_scip
         self.upserter = Upserter(repository)
         # Embeddings are written into the same connection (P5). Disabled if ``embed=False`` or when
-        # no connection is available (e.g. unit tests with a fake repository).
+        # no connection is available (e.g. unit tests with a fake repository). Deferred: encoded in
+        # cross-file batches and flushed after each pass (see ``Embedder``), still one transaction.
         self.embedder = embedder
         if self.embedder is None and embed:
             conn = getattr(getattr(repository, "client", None), "conn", None)
             if conn is not None:
-                self.embedder = Embedder(VectorStore(conn))
+                self.embedder = Embedder(VectorStore(conn), defer=True)
+
+    def _flush_embeddings(self) -> None:
+        """Write buffered embeddings (deferred embedders only; fakes without ``flush`` are fine)."""
+        flush = getattr(self.embedder, "flush", None)
+        if callable(flush):
+            written = flush()
+            if written:
+                logger.info("embeddings flushed", extra={"rows": written})
+
+    def _record_churn(self, root: Path, repo_id: str, commit: str, paths: set[str] | None) -> None:
+        """Store per-file git churn at ``commit`` (scoring prior w11); no-op without a connection
+        or before migration 0010. ``paths`` limits the rows to this run's files; ``None`` means
+        every file the repo has in ``symbol_fts`` (incremental runs shift the whole window)."""
+        conn = getattr(getattr(self.repository, "client", None), "conn", None)
+        if conn is None:
+            return
+        from bce.indexing.churn import churn_available, file_churn, indexed_paths, write_file_churn
+
+        if not churn_available(conn):
+            return
+        counts = file_churn(root, commit=commit)
+        if not counts:
+            return
+        only = paths if paths is not None else indexed_paths(conn, repo_id)
+        rows = write_file_churn(
+            conn, repo_id=repo_id, counts=counts, commit=commit, only_paths=only
+        )
+        logger.info("file churn recorded", extra={"repo_id": repo_id, "rows": rows})
 
     def index_local_repo(
         self, *, path: str | Path, name: str, commit: str | None = None
@@ -158,6 +187,7 @@ class Indexer:
         # Pass 1: per-file extraction + upsert. Fragments are kept for the repo-wide link pass.
         files = 0
         fragments: list[GraphFragment] = []
+        indexed_paths: list[str] = []
         exts = self.extractor.registry.supported_extensions()
         for rel, abs_path in iter_source_files(root, exts):
             source = abs_path.read_bytes()
@@ -167,10 +197,13 @@ class Indexer:
             if fragment is None:
                 continue
             fragments.append(fragment)
+            indexed_paths.append(rel)
             self.upserter.upsert_file_fragment(fragment)
             if self.embedder is not None:
                 self.embedder.embed_fragment(fragment, repo_id=repo_id, indexed_at_commit=commit)
             files += 1
+        self._flush_embeddings()
+        self._record_churn(root, repo_id, commit, set(indexed_paths))
 
         logger.info(
             "extraction pass finished",
@@ -330,10 +363,12 @@ class Indexer:
                 added += 1
             else:
                 modified += 1
+        self._flush_embeddings()
 
         if changed_paths:
             fragments = self._collect_fragments_for_relink(root, repo_id, target, changed_fragments)
             self._link_and_upsert(root, fragments)
+        self._record_churn(root, repo_id, target, None)
 
         self._update_indexed_commit(repo_id, target)
         nodes, edges = self.repository.counts()

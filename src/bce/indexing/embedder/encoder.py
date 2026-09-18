@@ -89,6 +89,33 @@ class HashingEncoder(Encoder):
         return [v / norm for v in vec]
 
 
+#: Voyage rejects a request carrying more than 1000 texts, and caps the tokens per request. A
+#: single large source file can hold well over 1000 symbols, so requests are split to stay under
+#: both ceilings rather than failing the whole index.
+_MAX_BATCH_TEXTS = 500
+_MAX_BATCH_CHARS = 400_000  # ~100k tokens at the usual ~4 chars/token for code
+
+
+def _split_batches(texts: list[str]) -> list[list[str]]:
+    """Split ``texts`` into request-sized batches, preserving order.
+
+    A text that is on its own larger than the char budget still gets its own batch: Voyage
+    truncates over-long inputs per text, which is preferable to dropping the symbol.
+    """
+    batches: list[list[str]] = []
+    current: list[str] = []
+    size = 0
+    for text in texts:
+        if current and (len(current) >= _MAX_BATCH_TEXTS or size + len(text) > _MAX_BATCH_CHARS):
+            batches.append(current)
+            current, size = [], 0
+        current.append(text)
+        size += len(text)
+    if current:
+        batches.append(current)
+    return batches
+
+
 class VoyageEncoder(Encoder):
     """Voyage AI code embeddings (``voyage-code-3`` by default).
 
@@ -119,13 +146,17 @@ class VoyageEncoder(Encoder):
         self.model_id = f"{model}-{dim}"
 
     def _embed(self, texts: list[str], input_type: str) -> list[list[float]]:
-        result = self._client.embed(
-            texts,
-            model=self.model,
-            input_type=input_type,
-            output_dimension=self.dim,
-        )
-        return [list(vec) for vec in result.embeddings]
+        """Embed ``texts`` in order, splitting into as many API requests as the limits require."""
+        vectors: list[list[float]] = []
+        for batch in _split_batches(texts):
+            result = self._client.embed(
+                batch,
+                model=self.model,
+                input_type=input_type,
+                output_dimension=self.dim,
+            )
+            vectors.extend(list(vec) for vec in result.embeddings)
+        return vectors
 
     def encode(self, text: str) -> list[float]:
         return self._embed([text], "document")[0]
