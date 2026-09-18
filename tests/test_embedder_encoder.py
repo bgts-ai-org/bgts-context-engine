@@ -7,9 +7,12 @@ import math
 import pytest
 
 from bce.indexing.embedder.encoder import (
+    _MAX_BATCH_CHARS,
+    _MAX_BATCH_TEXTS,
     EncoderConfigError,
     HashingEncoder,
     VoyageEncoder,
+    _split_batches,
     build_default_encoder,
 )
 
@@ -171,3 +174,46 @@ def test_voyage_encoder_input_types(monkeypatch):
     assert calls[1][1] == "query"
     assert calls[2][1] == "document"
     assert all(c[2] == 8 for c in calls)
+
+
+def test_split_batches_respects_both_ceilings():
+    """Voyage rejects >1000 texts or too many tokens per request; splitting must keep order."""
+    texts = [f"t{i}" for i in range(_MAX_BATCH_TEXTS + 3)]
+    batches = _split_batches(texts)
+    assert [len(b) for b in batches] == [_MAX_BATCH_TEXTS, 3]
+    assert [t for b in batches for t in b] == texts
+
+    oversized = "x" * (_MAX_BATCH_CHARS + 1)
+    # An input larger than the char budget gets a request of its own rather than being dropped.
+    assert _split_batches(["a", oversized, "b"]) == [["a"], [oversized], ["b"]]
+    assert _split_batches([]) == []
+
+
+def test_voyage_encode_many_splits_oversized_input(monkeypatch):
+    """A single file can hold more symbols than one request allows; all of them must come back."""
+    pytest.importorskip("voyageai")
+
+    sizes = []
+
+    class _FakeClient:
+        def __init__(self, api_key):
+            pass
+
+        def embed(self, texts, model, input_type, output_dimension):
+            sizes.append(len(texts))
+            if len(texts) > 1000:
+                raise AssertionError("batch size limit is 1000")
+
+            class _Result:
+                embeddings = [[float(i)] * 4 for i in range(len(texts))]
+
+            return _Result()
+
+    monkeypatch.setattr("voyageai.Client", _FakeClient, raising=False)
+
+    enc = VoyageEncoder("k", model="voyage-code-4", dim=4)
+    vectors = enc.encode_many([f"symbol {i}" for i in range(1400)])
+
+    assert len(vectors) == 1400
+    assert sum(sizes) == 1400
+    assert max(sizes) <= _MAX_BATCH_TEXTS

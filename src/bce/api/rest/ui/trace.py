@@ -1,8 +1,8 @@
 """Stage-by-stage trace of the get_context_for_task retrieval pipeline (UI layer only).
 
 Replays the exact flow of :func:`bce.tools.layer3.orchestration.get_context_for_task` - same
-functions, same order, same two-pass task-signal handling - but records every intermediate stage
-so a frontend can animate the retrieval on the code graph:
+functions, same order, same single-pass scoring - but records every intermediate stage so a
+frontend can animate the retrieval on the code graph:
 
     semantic -> anchors -> expand -> score -> narrow -> assemble
 
@@ -20,21 +20,15 @@ from bce.core.assembler import assemble
 from bce.core.coverage import compute_coverage
 from bce.core.orchestrator.anchors import find_anchors
 from bce.core.orchestrator.expand import expand_from_anchors, to_candidates
-from bce.core.orchestrator.orchestrator import RetrievalResult
-from bce.core.scoring.engine import Candidate, ScoreWeights, score_candidates
+from bce.core.orchestrator.orchestrator import RetrievalResult, narrow
+from bce.core.orchestrator.text import content_tokens
+from bce.core.scoring.engine import ScoreWeights, score_candidates
 from bce.storage.graph.repository import GraphRepository
 from bce.storage.vector.store import VectorStore
-from bce.tools.layer3.orchestration import (
-    _auto_semantic_candidates,
-    _enrich_items,
-    _task_signals,
-)
+from bce.tools.layer3.orchestration import _auto_semantic_candidates, _enrich_items
 
 #: Symbol-id chunk size for the bulk metadata Cypher query.
 _META_CHUNK = 500
-
-#: Mirrors the prelim-pass multiplier in get_context_for_task (max_candidates * 4).
-_PRELIM_FACTOR = 4
 
 
 def _elapsed_ms(start: float) -> float:
@@ -60,7 +54,7 @@ def trace_context_for_task(
     semantic_error: str | None = None
     if auto_semantic and store is not None:
         try:
-            semantic_candidates = _auto_semantic_candidates(store, task_text, repo_ids)
+            semantic_candidates = _auto_semantic_candidates(store, task_text, repo_ids, repository)
         except Exception as exc:  # e.g. embeddings table empty / provider unavailable
             semantic_candidates = []
             semantic_error = str(exc)
@@ -73,7 +67,7 @@ def trace_context_for_task(
         stage["error"] = semantic_error
     stages.append(stage)
 
-    # Stage 1: multi-source anchors (spec section 6.2).
+    # Stage 1: multi-source anchors (spec section 6.2), with evidence strength per anchor.
     t = time.perf_counter()
     anchors = find_anchors(
         repository,
@@ -90,13 +84,14 @@ def trace_context_for_task(
             "stage": "anchors",
             "duration_ms": _elapsed_ms(t),
             "anchors": {sid: list(sources) for sid, sources in sorted(anchors.anchors.items())},
+            "strength": {sid: anchors.strength_of(sid) for sid in anchors.anchor_ids},
+            "task_tokens": content_tokens(task_text),
         }
     )
 
-    # Stage 2: deterministic expansion (section 6.3). Run once and reused for both scoring
-    # passes - expand_from_anchors is deterministic, so this equals the real double retrieve.
+    # Stage 2: deterministic expansion (section 6.3).
     t = time.perf_counter()
-    expansion = expand_from_anchors(repository, anchors.anchor_ids)
+    expansion = expand_from_anchors(repository, anchors)
     stages.append(
         {
             "stage": "expand",
@@ -106,6 +101,7 @@ def trace_context_for_task(
                     "symbol_id": info.symbol_id,
                     "distance": info.distance,
                     "is_anchor": info.is_anchor,
+                    "anchor_strength": info.anchor_strength,
                     "ref_kind": info.ref_kind,
                     "provenance": info.provenance,
                 }
@@ -114,31 +110,13 @@ def trace_context_for_task(
         }
     )
 
-    # Stage 3: scoring (section 6.4), two passes exactly like get_context_for_task:
-    # prelim (no task signals) -> task signals on prelim top -> final scoring.
-    # The second pass reuses the first pass's graph features (degree/leaf/ref_kind do not depend
-    # on task signals), so the result is identical to a second to_candidates() at half the cost.
+    # Stage 3: scoring (section 6.4), single pass exactly like get_context_for_task: features
+    # (degree/leaf/test) and task signals are attached to every candidate by to_candidates.
     weights = ScoreWeights()
     t = time.perf_counter()
-    base_candidates = _fast_to_candidates(repository, expansion)
-    prelim_ranked = score_candidates(base_candidates, weights)
-    prelim_top = prelim_ranked[: max_candidates * _PRELIM_FACTOR]
-    signals = _task_signals(task_text, [c.symbol_id for c in prelim_top], repository)
-    final_candidates = [
-        Candidate(
-            symbol_id=c.symbol_id,
-            repo_id=c.repo_id,
-            ref_kind=c.ref_kind,
-            provenance=c.provenance,
-            graph_distance=c.graph_distance,
-            degree=c.degree,
-            is_leaf=c.is_leaf,
-            task_signal=signals.get(c.symbol_id, 0.0),
-            anchor=c.anchor,
-        )
-        for c in base_candidates
-    ]
-    ranked = score_candidates(final_candidates, weights)
+    candidates = to_candidates(repository, expansion, task_text=task_text)
+    ranked = score_candidates(candidates, weights)
+    signals = {c.symbol_id: c.task_signal for c in ranked if c.task_signal > 0.0}
     stages.append(
         {
             "stage": "score",
@@ -151,6 +129,7 @@ def trace_context_for_task(
                     "score": c.score,
                     "graph_distance": c.graph_distance,
                     "is_anchor": c.anchor,
+                    "is_test": c.is_test,
                     "features": c.features,
                 }
                 for c in ranked
@@ -158,12 +137,13 @@ def trace_context_for_task(
         }
     )
 
-    # Stage 4: narrowing to top-N (the "1000 -> 8" step).
-    narrowed = ranked[:max_candidates]
+    # Stage 4: diversity-aware narrowing to top-N (the "1000 -> 8" step).
+    t = time.perf_counter()
+    narrowed = narrow(ranked, max_candidates)
     stages.append(
         {
             "stage": "narrow",
-            "duration_ms": 0.0,
+            "duration_ms": _elapsed_ms(t),
             "selected": [
                 {"symbol_id": c.symbol_id, "score": c.score, "rank": i + 1}
                 for i, c in enumerate(narrowed)
@@ -173,10 +153,14 @@ def trace_context_for_task(
 
     # Stage 5: token-budget assembly + coverage, same helpers as the real endpoint.
     t = time.perf_counter()
-    items = _enrich_items(repository, narrowed)
+    items = _enrich_items(repository, narrowed, with_body=True)
     package = assemble(items, max_tokens=max_tokens)
     result = RetrievalResult(
-        commit=None, anchors=anchors, candidates=narrowed, task_signals=signals
+        commit=None,
+        anchors=anchors,
+        candidates=narrowed,
+        task_signals=signals,
+        pool_size=len(ranked),
     )
     coverage = compute_coverage(result, repository)
     stages.append(
@@ -195,73 +179,6 @@ def trace_context_for_task(
         "stages": stages,
         "symbols": _symbol_metadata(repository, expansion.keys()),
     }
-
-
-def _fast_to_candidates(repository: GraphRepository, expansion: dict) -> list[Candidate]:
-    """Bulk-query equivalent of :func:`bce.core.orchestrator.expand.to_candidates`.
-
-    ``to_candidates`` issues 4 Cypher round-trips per symbol (degree x2, callers, callees), which
-    is minutes for a broad expansion. This computes the exact same ``degree``/``is_leaf`` features
-    with chunked bulk queries. Falls back to the core function when no real client is available
-    (unit-test fakes), keeping behaviour identical either way.
-    """
-    client = getattr(repository, "client", None)
-    if client is None or not hasattr(client, "cypher"):
-        return to_candidates(repository, expansion)
-
-    ids = sorted(expansion)
-    out_deg: dict[str, int] = dict.fromkeys(ids, 0)
-    in_deg: dict[str, int] = dict.fromkeys(ids, 0)
-    has_callees: set[str] = set()
-    has_callers: set[str] = set()
-
-    for i in range(0, len(ids), _META_CHUNK):
-        chunk = ids[i : i + _META_CHUNK]
-        params = {"ids": chunk}
-        # Any-type edge degree, matching GraphRepository.symbol_degree (out + in).
-        for (sid,) in client.cypher(
-            "MATCH (s:Symbol)-[r]->() WHERE s.symbol_id IN $ids RETURN s.symbol_id",
-            params,
-            ["sid"],
-        ):
-            out_deg[sid] = out_deg.get(sid, 0) + 1
-        for (sid,) in client.cypher(
-            "MATCH ()-[r]->(s:Symbol) WHERE s.symbol_id IN $ids RETURN s.symbol_id",
-            params,
-            ["sid"],
-        ):
-            in_deg[sid] = in_deg.get(sid, 0) + 1
-        # CALLS presence for the is_leaf feature (leaf = has callers but no callees).
-        for (sid,) in client.cypher(
-            "MATCH (s:Symbol)-[r:CALLS]->(c:Symbol) WHERE s.symbol_id IN $ids RETURN s.symbol_id",
-            params,
-            ["sid"],
-        ):
-            has_callees.add(sid)
-        for (sid,) in client.cypher(
-            "MATCH (c:Symbol)-[r:CALLS]->(s:Symbol) WHERE s.symbol_id IN $ids RETURN s.symbol_id",
-            params,
-            ["sid"],
-        ):
-            has_callers.add(sid)
-
-    candidates: list[Candidate] = []
-    for sid in ids:
-        info = expansion[sid]
-        candidates.append(
-            Candidate(
-                symbol_id=sid,
-                repo_id=info.repo_id,
-                ref_kind=info.ref_kind,
-                provenance=info.provenance,
-                graph_distance=info.distance,
-                degree=out_deg.get(sid, 0) + in_deg.get(sid, 0),
-                is_leaf=sid not in has_callees and sid in has_callers,
-                task_signal=0.0,
-                anchor=info.is_anchor,
-            )
-        )
-    return candidates
 
 
 def _symbol_metadata(repository: GraphRepository, symbol_ids: Any) -> dict[str, dict[str, Any]]:

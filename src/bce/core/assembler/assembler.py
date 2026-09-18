@@ -38,6 +38,42 @@ def _estimate_tokens(text: str) -> int:
     return max(1, (len(text) + _CHARS_PER_TOKEN - 1) // _CHARS_PER_TOKEN)
 
 
+#: Distance assumed when an item carries none (far -> reference-only rendering).
+_UNKNOWN_DISTANCE = 3
+
+
+def _distance_of(item: dict[str, Any]) -> int:
+    """``graph_distance`` (or ``distance``) as an int; 0 is a valid value (anchors), only a
+    missing/None entry falls back to the far default."""
+    for key in ("graph_distance", "distance"):
+        value = item.get(key)
+        if value is None:
+            continue
+        try:
+            return max(0, int(value))
+        except (TypeError, ValueError):
+            continue
+    return _UNKNOWN_DISTANCE
+
+
+#: Distance assumed when an item carries none (far -> reference-only rendering).
+_UNKNOWN_DISTANCE = 3
+
+
+def _distance_of(item: dict[str, Any]) -> int:
+    """``graph_distance`` (or ``distance``) as an int; 0 is a valid value (anchors), only a
+    missing/None entry falls back to the far default."""
+    for key in ("graph_distance", "distance"):
+        value = item.get(key)
+        if value is None:
+            continue
+        try:
+            return max(0, int(value))
+        except (TypeError, ValueError):
+            continue
+    return _UNKNOWN_DISTANCE
+
+
 def _render(item: dict[str, Any], level: DetailLevel) -> tuple[str, int]:
     """Return the (content, token_cost) for an item at a detail level."""
     sig = str(item.get("signature") or "")
@@ -71,7 +107,7 @@ def assemble(
     skipped = 0
 
     for item in items:
-        distance = int(item.get("graph_distance", item.get("distance", 3)) or 3)
+        distance = _distance_of(item)
         level = _detail_for_distance(distance)
         content, cost = _render(item, level)
         if used + cost > max_tokens:
