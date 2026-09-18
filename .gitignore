@@ -74,6 +74,7 @@ deploy/certs/*
 .cce_data/
 repos_cache/
 reports/
+local_bench/
 
 # ---------------------------------------------------------------------------
 # Editors and operating systems

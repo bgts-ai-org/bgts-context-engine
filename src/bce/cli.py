@@ -6,6 +6,7 @@ Commands:
 - ``index-remote``     clone a Bitbucket repo by URL and full-index it
 - ``reindex``          incrementally re-index changed files since the last commit (git-diff)
 - ``bench``            run the POC benchmark (latency/recall/precision/determinism/RLS) -> JSON
+- ``bench-prs``        PR replay ablation: Voyage alone vs Voyage + BCE (``prepare`` / ``run``)
 - ``resolve-symbol``   Layer-1: resolve a symbol by name
 - ``find-references``  Layer-1: find references to a symbol_id
 - ``languages``        list supported languages/extensions (no database needed)
@@ -119,6 +120,65 @@ def index(
             "nodes_added": summary.nodes_added,
             "edges_added": summary.edges_added,
             "commit": summary.commit,
+        }
+    )
+
+
+@app.command()
+def churn(
+    repo: Path = typer.Option(..., "--repo", help="Path to the local git repository"),
+    name: str = typer.Option(..., "--name", help="Logical repository name (as indexed)"),
+    commit: str | None = typer.Option(
+        None, "--commit", help="Commit the window ends at (default: the repo's indexed commit)"
+    ),
+    db_name: str | None = typer.Option(
+        None, "--db-name", help="Database to write to (default: the configured one)"
+    ),
+) -> None:
+    """(Re)compute per-file git churn for an indexed repository (scoring prior, migration 0010).
+
+    The indexer records churn on every run; this backfills databases indexed before the
+    migration or refreshes the window without re-indexing. Deterministic given the commit.
+    """
+    from bce.config import get_settings
+    from bce.indexing.churn import (
+        CHURN_WINDOW_COMMITS,
+        churn_available,
+        file_churn,
+        indexed_paths,
+        write_file_churn,
+    )
+    from bce.indexing.parser.symbol_id import make_repo_id
+    from bce.storage.relational.db import connection
+
+    settings = get_settings()
+    if db_name:
+        settings = settings.model_copy(update={"db_name": db_name})
+    repo_id = make_repo_id(name)
+    with connection(settings) as conn:
+        if not churn_available(conn):
+            typer.echo("file_churn table missing: run `bce migrate` first", err=True)
+            raise typer.Exit(code=2)
+        target = commit
+        if not target:
+            with conn.cursor() as cur:
+                cur.execute("SELECT last_indexed_commit FROM repos WHERE repo_id = %s", (repo_id,))
+                row = cur.fetchone()
+            target = row[0] if row and row[0] else "HEAD"
+        counts = file_churn(repo, commit=target)
+        paths = indexed_paths(conn, repo_id)
+        rows = write_file_churn(
+            conn, repo_id=repo_id, counts=counts, commit=target, only_paths=paths
+        )
+        conn.commit()
+    _echo_json(
+        {
+            "repo_id": repo_id,
+            "commit": target,
+            "window_commits": CHURN_WINDOW_COMMITS,
+            "files_indexed": len(paths),
+            "files_with_history": sum(1 for p in paths if counts.get(p)),
+            "rows": rows,
         }
     )
 
@@ -352,6 +412,188 @@ def bench(
         out.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         typer.echo(f"Wrote benchmark report to {out}")
     _echo_json(data)
+
+
+bench_prs_app = typer.Typer(
+    add_completion=False,
+    help=(
+        "PR replay ablation: Voyage embeddings alone vs Voyage + BCE on real merged PRs. "
+        "Each PR needs a database (default name bce_pr<N>) indexing the repo at the PR's base commit."
+    ),
+)
+app.add_typer(bench_prs_app, name="bench-prs")
+
+
+def _parse_numbers(raw: str) -> list[int]:
+    return [int(part) for part in raw.replace(";", ",").split(",") if part.strip()]
+
+
+_TUNE_HELP = (
+    "PR numbers the engine's constants may be fitted on; the rest are the holdout the report "
+    "scores separately"
+)
+
+
+@bench_prs_app.command("prepare")
+def bench_prs_prepare(
+    prs: str = typer.Option(..., "--prs", help="Comma-separated PR numbers, e.g. 829,831,833"),
+    repo: Path = typer.Option(
+        ..., "--repo", help="Local git clone holding the PRs' source/destination commits"
+    ),
+    out: Path = typer.Option(..., "--out", help="Where to write cases.json"),
+    workspace: str = typer.Option(..., "--workspace", help="Bitbucket workspace"),
+    repo_slug: str = typer.Option(..., "--repo-slug", help="Bitbucket repository slug"),
+    unscored: str = typer.Option(
+        "", "--unscored", help="PR numbers to report but leave out of the aggregate"
+    ),
+    tune: str = typer.Option("", "--tune", help=_TUNE_HELP),
+    db_prefix: str = typer.Option("bce_pr", "--db-prefix", help="Per-PR database name prefix"),
+) -> None:
+    """Fetch PR metadata, map each diff onto its snapshot and write the ground-truth cases."""
+    from bce.bench.pr_ablation import (
+        BenchPRCase,
+        build_ground_truth,
+        fetch_pr_specs,
+        save_cases,
+        task_variants,
+    )
+    from bce.config import get_settings
+    from bce.storage.graph.client import GraphClient
+    from bce.storage.graph.repository import GraphRepository
+    from bce.storage.relational.db import connection
+
+    settings = get_settings()
+    numbers = _parse_numbers(prs)
+    specs = fetch_pr_specs(
+        numbers,
+        workspace=workspace,
+        repo_slug=repo_slug,
+        username=settings.bitbucket_username,
+        token=settings.bitbucket_token,
+        unscored=set(_parse_numbers(unscored)),
+        tune=set(_parse_numbers(tune)),
+    )
+    cases: list[BenchPRCase] = []
+    for spec in specs:
+        spec.db_name = f"{db_prefix}{spec.number}"
+        db_settings = settings.model_copy(update={"db_name": spec.db_name})
+        with connection(db_settings) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT repo_id, last_indexed_commit FROM repos ORDER BY repo_id")
+                row = cur.fetchone()
+            if row is None:
+                typer.echo(f"PR #{spec.number}: {spec.db_name} has no indexed repo, skipping")
+                continue
+            repo_id, spec.indexed_commit = str(row[0]), str(row[1])
+            repository = GraphRepository(GraphClient(conn))
+            truth = build_ground_truth(repo, spec, repository, repo_id)
+        cases.append(BenchPRCase(spec=spec, truth=truth, tasks=task_variants(spec)))
+        typer.echo(
+            f"PR #{spec.number} [{spec.split}]: snapshot {spec.indexed_commit[:8]} -> "
+            f"{len(truth.symbols)} symbols / {len(truth.files)} files "
+            f"({len(truth.skipped)} paths skipped){'' if spec.scored else ' [not scored]'}"
+        )
+    save_cases(cases, out)
+    typer.echo(f"Wrote {len(cases)} cases to {out}")
+
+
+@bench_prs_app.command("run")
+def bench_prs_run(
+    cases: Path = typer.Option(..., "--cases", help="cases.json written by `bench-prs prepare`"),
+    out: Path = typer.Option(..., "--out", help="JSON report path"),
+    markdown: Path | None = typer.Option(None, "--markdown", help="Also write a Markdown report"),
+    k: str = typer.Option(
+        "10",
+        "--k",
+        help=(
+            "Results per system (Recall@K etc.). A comma list such as '5,10,20' runs once at the "
+            "largest K and reports every K as an extra column"
+        ),
+    ),
+    variants: str = typer.Option(
+        "full,title", "--variants", help="Task text variants: full (title+description), title"
+    ),
+    from_report: Path | None = typer.Option(
+        None,
+        "--from-report",
+        help="Re-score the returned lists of a previous JSON report instead of retrieving again",
+    ),
+    rerun_bce: bool = typer.Option(
+        False,
+        "--rerun-bce",
+        help=(
+            "With --from-report: keep the stored voyage lists and semantic pool (no embedding API "
+            "call) but run BCE again - the loop for engine changes"
+        ),
+    ),
+    only: str = typer.Option("", "--only", help="Run just these PR numbers (default: all cases)"),
+    tune: str = typer.Option("", "--tune", help=f"{_TUNE_HELP}; overrides the split in cases.json"),
+) -> None:
+    """Replay the cases: voyage_raw / voyage / bce -> per-PR metrics + aggregate gain."""
+    from bce.bench.pr_ablation import (
+        load_cases,
+        render_markdown,
+        replay_from_report,
+        run_ablation,
+    )
+
+    selected = tuple(v.strip() for v in variants.split(",") if v.strip())
+    ks = _parse_numbers(k)
+    if not ks:
+        raise typer.BadParameter("--k needs at least one positive integer", param_hint="--k")
+    replay = replay_from_report(from_report) if from_report is not None else None
+
+    bench_cases = load_cases(cases)
+    tune_numbers = set(_parse_numbers(tune))
+    if tune_numbers:
+        for case in bench_cases:
+            case.spec.split = "tune" if case.spec.number in tune_numbers else "holdout"
+    only_numbers = set(_parse_numbers(only))
+    if only_numbers:
+        bench_cases = [c for c in bench_cases if c.spec.number in only_numbers]
+
+    def _progress(outcome: object) -> None:
+        o = outcome  # CaseOutcome
+        v = o.systems["voyage"]["metrics"]  # type: ignore[attr-defined]
+        b = o.systems["bce"]  # type: ignore[attr-defined]
+        typer.echo(
+            f"PR #{o.number} [{o.variant}] voyage R={v['recall']:.2f} MRR={v['mrr']:.2f} | "  # type: ignore[attr-defined]
+            f"bce R={b['metrics']['recall']:.2f} MRR={b['metrics']['mrr']:.2f} "
+            f"({b['latency_ms']:.0f} ms)"
+        )
+
+    report = run_ablation(
+        bench_cases,
+        k=max(ks),
+        ks=tuple(ks) if len(ks) > 1 else (),
+        variants=selected,
+        progress=_progress,
+        replay=replay,
+        rerun_bce=rerun_bce,
+    )
+    data = report.to_dict()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    typer.echo(f"Wrote JSON report to {out}")
+    if markdown is not None:
+        markdown.write_text(render_markdown(report), encoding="utf-8")
+        typer.echo(f"Wrote Markdown report to {markdown}")
+    for variant in selected:
+        for label, agg in [
+            ("all", data["summary"][variant]),
+            ("tune", data["summary_by_split"]["tune"][variant]),
+            ("holdout", data["summary_by_split"]["holdout"][variant]),
+        ]:
+            if not agg["cases"]:
+                continue
+            v, b = agg["systems"]["voyage"], agg["systems"]["bce"]
+            typer.echo(
+                f"[{variant}/{label}] {agg['cases']} PRs | recall {v['recall'] * 100:.1f}% -> "
+                f"{b['recall'] * 100:.1f}% | MRR {v['mrr']:.2f} -> {b['mrr']:.2f} | "
+                f"hit {v['hit'] * 100:.1f}% -> {b['hit'] * 100:.1f}% | "
+                f"retention {b['semantic_retention'] * 100:.1f}% | "
+                f"bce {b['latency_median_ms']:.0f} ms"
+            )
 
 
 @app.command()
