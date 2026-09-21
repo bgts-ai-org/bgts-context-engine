@@ -16,7 +16,7 @@ that actually answer it — ranked, budgeted, and reproducible.
 [![MCP](https://img.shields.io/badge/MCP-compatible-000000.svg)](docs/mcp.md)
 [![Stars](https://img.shields.io/github/stars/bgts-ai-org/bgts-context-engine?style=flat&logo=github)](https://github.com/bgts-ai-org/bgts-context-engine/stargazers)
 
-[Quick start](#quick-start) · [Use it from your agent](#use-it-from-your-agent) · [How it works](#how-it-works) · [Documentation](#documentation) · [Türkçe](README.tr.md)
+[Quick start](#quick-start) · [Use it from your agent](#use-it-from-your-agent) · [How it works](#how-it-works) · [Supported models](#supported-models) · [Documentation](#documentation) · [Türkçe](README.tr.md)
 
 </div>
 
@@ -241,7 +241,36 @@ The full formula, every weight, and the confidence thresholds are in
 - **A UI that explains itself.** `/ui` ships in the wheel and replays a real retrieval call
   stage by stage: anchors lighting up, expansion spreading, candidates scored and cut.
 - **Runs offline.** The default embedding provider is deterministic arithmetic over token
-  digests. No API key, no network, repeatable benchmarks.
+  digests. No API key, no network, repeatable benchmarks. `openai` talks to any
+  OpenAI-compatible `/v1/embeddings` server (vLLM, TEI, Ollama), so a model such as
+  [jina-code-embeddings-1.5b](https://huggingface.co/jinaai/jina-code-embeddings-1.5b)
+  can run inside the perimeter.
+
+## Supported models
+
+Embeddings only find entry points when the task text names nothing the graph already
+knows. They never rank the answer. Out of the box that seed is `hashing`: deterministic
+arithmetic, no API key, no network. For a real code model, set `BCE_EMBEDDING_PROVIDER`
+and `BCE_EMBEDDING_MODEL` to one of these:
+
+| Model | Provider | Dimension |
+| --- | --- | --- |
+| [`voyage-code-3`](https://blog.voyageai.com/2024/12/04/voyage-code-3/) | Voyage AI (`voyage`) | 1024 |
+| [`voyage-code-4`](https://blog.voyageai.com/2026/08/13/voyage-code-4/) | Voyage AI (`voyage`) | 1024 |
+| [`jina-code-embeddings-1.5b`](https://huggingface.co/jinaai/jina-code-embeddings-1.5b) | OpenAI-compatible (`openai`) | 1536 |
+
+Voyage is a hosted API — `pip install "bgts-context-engine[embed]"` and
+`BCE_VOYAGE_API_KEY`. Jina is the on-prem path: any server that speaks `/v1/embeddings`
+(vLLM, TEI, Ollama). Switching the model or the dimension is a re-index
+(`bce migrate --reset-embeddings`). The knobs are in
+[docs/deployment.md](docs/deployment.md).
+
+**Coming next** — same `openai` socket, not yet a fitted retrieval profile:
+
+- [`jina-code-embeddings-0.5b`](https://huggingface.co/jinaai/jina-code-embeddings-0.5b)
+  — the smaller sibling of 1.5b, for hosts that cannot hold 1.5B parameters.
+- [`Nomic Embed Code`](https://huggingface.co/nomic-ai/nomic-embed-code) — an open 7B
+  code retriever.
 
 ## Where it fits
 

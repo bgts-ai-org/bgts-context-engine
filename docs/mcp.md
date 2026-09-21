@@ -85,8 +85,11 @@ The variables that matter for MCP:
 | Variable | |
 | --- | --- |
 | `BCE_DB_*` | database connection; without it the server starts but every tool fails |
-| `BCE_EMBEDDING_PROVIDER` | `hashing` (offline default) or `voyage` |
+| `BCE_EMBEDDING_PROVIDER` | `hashing` (offline default), `voyage` or `openai` (OpenAI-compatible server, e.g. vLLM) |
+| `BCE_EMBEDDING_MODEL` / `BCE_EMBEDDING_DIM` | pinned together as the stored model id; a change is a re-index (`bce migrate --reset-embeddings`) |
 | `BCE_VOYAGE_API_KEY` | required when the provider is `voyage` |
+| `BCE_EMBEDDING_BASE_URL` | the server URL when the provider is `openai` |
+| `BCE_EMBEDDING_API_KEY` | `openai` only; leave empty for a local server that does not check one |
 | `BCE_MCP_ALLOW_WRITE` | `false` by default; `true` adds the two indexing tools |
 
 The encoder is built once at startup rather than on the first search. It pulls in numpy, and

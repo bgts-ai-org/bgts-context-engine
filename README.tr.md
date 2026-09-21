@@ -14,7 +14,7 @@ veren sekiz sembolü sıralanmış, bütçelenmiş ve yeniden üretilebilir şek
 [![MCP](https://img.shields.io/badge/MCP-uyumlu-000000.svg)](docs/mcp.md)
 [![Yıldızlar](https://img.shields.io/github/stars/bgts-ai-org/bgts-context-engine?style=flat&logo=github)](https://github.com/bgts-ai-org/bgts-context-engine/stargazers)
 
-[Hızlı başlangıç](#hızlı-başlangıç) · [Ajanınızdan kullanma](#ajanınızdan-kullanma) · [Nasıl çalışır](#nasıl-çalışır) · [Dokümantasyon](#dokümantasyon) · [English](README.md)
+[Hızlı başlangıç](#hızlı-başlangıç) · [Ajanınızdan kullanma](#ajanınızdan-kullanma) · [Nasıl çalışır](#nasıl-çalışır) · [Desteklenen modeller](#desteklenen-modeller) · [Dokümantasyon](#dokümantasyon) · [English](README.md)
 
 </div>
 
@@ -245,7 +245,36 @@ Formülün tamamı, her ağırlık ve güven eşikleri
   aşama aşama oynatır: çapaların yanması, genişlemenin yayılması, adayların skorlanıp
   kesilmesi.
 - **Çevrimdışı çalışır.** Varsayılan embedding sağlayıcısı, token özetleri üzerinde
-  deterministik aritmetiktir. API anahtarı yok, ağ yok, tekrarlanabilir ölçümler.
+  deterministik aritmetiktir. API anahtarı yok, ağ yok, tekrarlanabilir ölçümler. `openai`
+  sağlayıcısı OpenAI uyumlu herhangi bir `/v1/embeddings` sunucusuna konuşur (vLLM, TEI,
+  Ollama); [jina-code-embeddings-1.5b](https://huggingface.co/jinaai/jina-code-embeddings-1.5b)
+  gibi bir model çevre içinde çalışır.
+
+## Desteklenen modeller
+
+Embedding yalnızca grafın tanımadığı bir görev metninde giriş noktası bulur. Cevabı asla
+sıralamaz. Varsayılan `hashing`'dir: deterministik aritmetik, API anahtarı yok, ağ yok.
+Gerçek bir kod modeli için `BCE_EMBEDDING_PROVIDER` ve `BCE_EMBEDDING_MODEL`'i şunlardan
+birine ayarlayın:
+
+| Model | Sağlayıcı | Boyut |
+| --- | --- | --- |
+| [`voyage-code-3`](https://blog.voyageai.com/2024/12/04/voyage-code-3/) | Voyage AI (`voyage`) | 1024 |
+| [`voyage-code-4`](https://blog.voyageai.com/2026/08/13/voyage-code-4/) | Voyage AI (`voyage`) | 1024 |
+| [`jina-code-embeddings-1.5b`](https://huggingface.co/jinaai/jina-code-embeddings-1.5b) | OpenAI uyumlu (`openai`) | 1536 |
+
+Voyage barındırılan bir API'dir — `pip install "bgts-context-engine[embed]"` ve
+`BCE_VOYAGE_API_KEY`. Jina çevre-içi yoldur: `/v1/embeddings` konuşan herhangi bir
+sunucu (vLLM, TEI, Ollama). Model veya boyutu değiştirmek yeniden indekslemedir
+(`bce migrate --reset-embeddings`). Ayarlar
+[docs/deployment.md](docs/deployment.md) içindedir.
+
+**Sırada** — aynı `openai` soketi, henüz ayrı bir getirme profili yok:
+
+- [`jina-code-embeddings-0.5b`](https://huggingface.co/jinaai/jina-code-embeddings-0.5b)
+  — 1.5b'nin küçük kardeşi; 1.5B parametreyi taşıyamayan makineler için.
+- [`Nomic Embed Code`](https://huggingface.co/nomic-ai/nomic-embed-code) — açık kaynaklı
+  7B kod getiricisi.
 
 ## Nereye oturur
 

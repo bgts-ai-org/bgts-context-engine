@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 
 from bce.core.orchestrator.anchors import AnchorResult
 from bce.core.orchestrator.expand import expand_from_anchors, to_candidates
+from bce.core.orchestrator.profile import RetrievalProfile
 from bce.core.orchestrator.text import query_terms
 from bce.core.scoring.engine import (
     CONTAINER_KINDS,
@@ -59,6 +60,8 @@ PER_CONTAINER_SHARE = 0.3
 #: that split is where the model is weak (recall 10 %); on the holdout split, where the model is
 #: stronger (18 %), 0.3 let three of the model's own hits slip from the top 5 / out of the list.
 #: 0.5 is the a-priori choice: half the list is the model's, whatever the engine thinks.
+#: This is the voyage-code-4 value; another embedding model may carry its own share and a
+#: guard on its top ranks in its :class:`~bce.core.orchestrator.profile.RetrievalProfile`.
 SEMANTIC_RESERVE_SHARE = 0.5
 #: Diversity rule 3: at most ceil(n * share) container symbols among the first n (a class is a
 #: location, not a change site; its members carry the change).
@@ -95,9 +98,12 @@ class RetrievalOrchestrator:
         self,
         repository: GraphRepository,
         weights: ScoreWeights | None = None,
+        profile: RetrievalProfile | None = None,
     ) -> None:
         self.repository = repository
         self.weights = weights or ScoreWeights()
+        #: Model-specific narrowing constants; ``None`` = the voyage defaults.
+        self.profile = profile
 
     def retrieve(
         self,
@@ -141,7 +147,7 @@ class RetrievalOrchestrator:
         timings["score_ms"] = _elapsed_ms(stage)
 
         stage = time.perf_counter()
-        narrowed = narrow(ranked, max_candidates)
+        narrowed = narrow(ranked, max_candidates, profile=self.profile)
         timings["narrow_ms"] = _elapsed_ms(stage)
 
         signals = {c.symbol_id: c.task_signal for c in ranked if c.task_signal > 0.0}
@@ -168,7 +174,9 @@ def _container_of(cand: Candidate) -> str | None:
     return "::".join(segments[:-1])
 
 
-def narrow(ranked: list[Candidate], max_candidates: int) -> list[Candidate]:
+def narrow(
+    ranked: list[Candidate], max_candidates: int, *, profile: RetrievalProfile | None = None
+) -> list[Candidate]:
     """Deterministic, diversity-aware top-N over an already ranked (score desc, id asc) list.
 
     The list is built one slot at a time from two streams - the embedding model's ranks (rank
@@ -176,9 +184,15 @@ def narrow(ranked: list[Candidate], max_candidates: int) -> list[Candidate]:
     ``narrow(pool, n) == narrow(pool, n + 1)[:n]``: asking for a longer list never changes what
     the shorter one was (K-monotonic), and a K=20 run can be cut to K=10 exactly.
 
-    Slot ``i`` (1-based) goes to:
+    ``profile`` supplies the two model-specific constants (default: the voyage values,
+    :data:`SEMANTIC_RESERVE_SHARE` and no guard). Slot ``i`` (1-based) goes to:
 
-    1. the model's next rank while fewer than ``i * SEMANTIC_RESERVE_SHARE`` slots came from the
+    0. the model's next rank while ``i <= profile.semantic_guard_ranks`` (the guard: the model's
+       first ``n`` ranks *are* slots 1..n, whatever the engine scored - only the container cap
+       can skip one). A model whose correct hits spread over ranks 1-15 (jina) needs this;
+       without it the engine's agreement with the model's *deeper* ranks satisfies the share
+       below and its own picks push the model's ranks 7-15 to positions 11-19 or out;
+    1. the model's next rank while fewer than ``i * semantic_reserve_share`` slots came from the
        model stream (so position 1 is always the model's #1, and the model's top ranks can never
        be ranked out of the answer);
     2. else the engine's head (score order). An engine pick that *is* one of the model's ranks
@@ -206,6 +220,8 @@ def narrow(ranked: list[Candidate], max_candidates: int) -> list[Candidate]:
     """
     if max_candidates <= 0 or not ranked:
         return []
+    reserve_share = SEMANTIC_RESERVE_SHARE if profile is None else profile.semantic_reserve_share
+    guard_ranks = 0 if profile is None else max(0, int(profile.semantic_guard_ranks))
 
     model_stream = sorted(
         (c for c in ranked if c.semantic_rank is not None),
@@ -261,7 +277,7 @@ def narrow(ranked: list[Candidate], max_candidates: int) -> list[Candidate]:
         if model_head is None and engine_head is None:
             break
         if model_head is not None and (
-            engine_head is None or model_taken < slot * SEMANTIC_RESERVE_SHARE
+            engine_head is None or slot <= guard_ranks or model_taken < slot * reserve_share
         ):
             take(model_head, from_model=True)
         elif engine_head is not None:
