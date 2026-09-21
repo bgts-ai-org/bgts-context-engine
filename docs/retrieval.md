@@ -5,8 +5,8 @@ meeting webhook"* into a small, ordered set of symbols with a reason attached to
 
 The whole pipeline is arithmetic over a graph. There is no language model anywhere in it,
 and every step that could depend on iteration order sorts first. That is what makes the
-output reproducible: the same task text, against the same commit, with the same weights,
-produces the same context pack byte for byte.
+output reproducible: the same task text, against the same commit, with the same weights
+and the same retrieval profile, produces the same context pack byte for byte.
 
 ## The pipeline
 
@@ -38,7 +38,7 @@ evidence** each one brought, as a strength in `[0, 1]`.
 | `explicit` | Identifier-looking names, backticked spans, `Class.method` tails and route paths in the task text, or names passed by the caller | `1.0 / √matches`, halved for a member echoing its container's name | names matching more than 8 symbols are dropped |
 | `history` | Every symbol in files that previous work on this task touched | 0.7 | none |
 | `lexical` | Full-text search over a weighted document - exact name (A), its camelCase / snake_case parts (B), container and file-stem words (C), signature and docstring (D) - scored by how many of the task's content terms a symbol covers | up to 0.8 | 15 anchors (pool of 25 rows per term) |
-| `semantic` | Vector nearest neighbours for the task text, in the model's rank order | `0.9 / (1 + rank/30)`: 0.9 at #1, 0.45 at #30 - decays with the absolute rank, so a wider pool does not get a stronger tail | 30 non-test hits |
+| `semantic` | Vector nearest neighbours for the task text, in the model's rank order | `0.9 / (1 + rank/scale)`: 0.9 at #1, 0.45 at rank `scale` — decays with the absolute rank, so a wider pool does not get a stronger tail. `scale` is the active [retrieval profile](#tuning)'s `semantic_rank_scale` (30 for both voyage and jina) | 30 non-test hits |
 
 **Which words count.** Tokens are pulled out with a Unicode-aware word pattern (so "toplantı"
 is one word, not `toplant` + a stray letter; `İ` folds to `i`) and path-like fragments with
@@ -291,19 +291,29 @@ and a K=20 run can be cut to K=10. (The earlier proportional budgets, `ceil(N ·
 rule, did not have this property: in the 40-PR replay one PR went from 100 % recall at K=10 to
 50 % at K=20.)
 
-Slot `i` (1-based) is filled as follows:
+The two numbers that decide *how much* of the list the model keeps — the reserve share and
+an optional guard on its top ranks — come from the active [retrieval profile](#tuning).
+Voyage (and any unfitted model) is share 0.5 and no guard, which is what every constant
+below was first fitted with. Slot `i` (1-based) is filled as follows:
 
+- **While `i` is inside the profile's `semantic_guard_ranks`, the model's next rank is
+  taken.** Those ranks *are* slots 1..n; only the container cap can skip one. A model whose
+  correct hits sit at ranks 7–15 (jina-code) needs this: without it the engine's agreement
+  with the model's *deeper* ranks already satisfies the share below, and its own picks push
+  those mid ranks to positions 11–19 or out of the answer. Voyage's guard is 0, so this
+  rule is inert there.
 - **Position 1 is always the model's #1.** The model is the only channel that reads *meaning*
   rather than names, and MRR is decided here.
-- **The model's next rank is taken while fewer than `i · 0.5` of the picks so far count as
-  the model's.** An engine pick that is itself one of the model's ranks counts too - both
-  channels agree on it, and the reserve exists to keep the model's ranks in the answer, which
-  an agreed pick does. In practice the streams mostly agree and the floor only bites when the
-  engine's scores disagree with the model; without the agreement rule the streams alternated
-  even when they agreed, and the engine's own hits (explicit / lexical anchors the model never
-  returned) sat at positions 10-14 instead of 5. Model picks ignore the diversity caps - a task
-  that reworks one big service class is exactly where the model's ranks and the file cap
-  collide, and there the cap is the thing that is wrong.
+- **The model's next rank is taken while fewer than `i · semantic_reserve_share` of the picks
+  so far count as the model's.** The voyage value is 0.5. An engine pick that is itself one
+  of the model's ranks counts too - both channels agree on it, and the reserve exists to keep
+  the model's ranks in the answer, which an agreed pick does. In practice the streams mostly
+  agree and the floor only bites when the engine's scores disagree with the model; without
+  the agreement rule the streams alternated even when they agreed, and the engine's own hits
+  (explicit / lexical anchors the model never returned) sat at positions 10-14 instead of 5.
+  Model picks ignore the diversity caps - a task that reworks one big service class is
+  exactly where the model's ranks and the file cap collide, and there the cap is the thing
+  that is wrong.
 - **Otherwise the engine's best remaining candidate**, subject to at most `ceil(i · 0.6)`
   symbols per file (a strong anchor's file would otherwise fill the pack with its siblings),
   `ceil(i · 0.3)` members of the same container, and `ceil(i · 0.2)` containers overall (a
@@ -428,10 +438,11 @@ Two places, both upstream of the deterministic core:
 
 **Vector search.** Embeddings decide which anchors are *found*, never how candidates are
 ranked. The default `hashing` provider is pure arithmetic over token digests and is exactly
-reproducible. A hosted provider such as Voyage may return marginally different floats
-across calls; results are still ordered by `(distance, ref_id)`, so ties break stably, but
-the anchor set itself is only as reproducible as the provider. Pin the model, or use the
-hashing provider, when you need bit-exact reproducibility.
+reproducible. A remote provider — Voyage, or `openai` talking to vLLM / TEI / Ollama /
+OpenAI — may return marginally different floats across calls; results are still ordered by
+`(distance, ref_id)`, so ties break stably, but the anchor set itself is only as
+reproducible as the provider. Pin the model, or use the hashing provider, when you need
+bit-exact reproducibility.
 
 **Task history.** Which files past work touched is data about the past, and it changes as
 work happens.
@@ -453,10 +464,21 @@ a context pack is only comparable to another pack produced with the same weights
 them means changing `SCORE_WEIGHTS_VERSION`, and a pull request that does so needs to show
 its effect on `bce bench`.
 
+Three constants *do* depend on the embedding model, because they encode an assumption about
+where in that model's ranked list the right answers sit: `semantic_rank_scale` (anchor
+strength), `semantic_reserve_share` and `semantic_guard_ranks` (narrowing). They live in a
+*retrieval profile* (`bce.core.orchestrator.profile`), selected automatically from
+`BCE_EMBEDDING_MODEL` (`voyage-*` → the historical voyage set, `jina-*` → a guard of 10,
+anything else → voyage). `BCE_RETRIEVAL_PROFILE` forces a named profile;
+`BCE_RETRIEVAL_SEMANTIC_*` overrides a single knob for a fitting run. None of this changes
+stored data, so a profile switch is a query-side re-run, not a re-index. The active profile
+is written into every `bce bench-prs` report. See [docs/deployment.md](deployment.md#retrieval-profile).
+
 **How the constants were chosen.** `bce bench-prs` replays merged pull requests: the task is
 the PR title and description, the ground truth is the symbols the PR actually changed, and it
 reports the engine against the raw embedding ranking on the same query. The pull requests are
 split into a tune half and a holdout half; every constant above was tuned against the tune
 half only and then measured once on the holdout, which is the number worth quoting. Tuning a
 retrieval engine against the cases you report on produces a number that describes those cases
-and nothing else.
+and nothing else. The jina profile's guard of 10 is the only setting that beat jina-alone on
+that holdout at every K while keeping the most of the model's own hits.

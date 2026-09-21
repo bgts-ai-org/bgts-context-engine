@@ -245,7 +245,9 @@ Formülün tamamı, her ağırlık ve güven eşikleri
   aşama aşama oynatır: çapaların yanması, genişlemenin yayılması, adayların skorlanıp
   kesilmesi.
 - **Çevrimdışı çalışır.** Varsayılan embedding sağlayıcısı, token özetleri üzerinde
-  deterministik aritmetiktir. API anahtarı yok, ağ yok, tekrarlanabilir ölçümler.
+  deterministik aritmetiktir. API anahtarı yok, ağ yok, tekrarlanabilir ölçümler. `openai`
+  sağlayıcısı OpenAI uyumlu herhangi bir `/v1/embeddings` sunucusuna konuşur (vLLM, TEI,
+  Ollama); jina-code-embeddings-1.5b gibi bir model çevre içinde çalışır.
 
 ## Nereye oturur
 

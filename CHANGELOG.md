@@ -7,6 +7,54 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `BCE_EMBEDDING_PROVIDER=openai`: an encoder that talks to any server speaking the OpenAI
+  `/v1/embeddings` protocol (vLLM, Text Embeddings Inference, Ollama, or OpenAI itself), using
+  only the standard library. This is how an open model such as `jinaai/jina-code-embeddings-1.5b`
+  runs on-prem. Query/document asymmetry is a text prefix — the jina-code family's `nl2code`
+  prompts are the default when the model name contains `jina-code`; anything else is unset
+  unless `BCE_EMBEDDING_QUERY_PREFIX` / `BCE_EMBEDDING_DOCUMENT_PREFIX` say otherwise.
+  `BCE_EMBEDDING_BASE_URL`, `BCE_EMBEDDING_API_KEY`, `BCE_EMBEDDING_EXTRA_BODY` (default
+  `{"truncate_prompt_tokens": -1}` so vLLM truncates instead of rejecting a long batch; set
+  `{}` for OpenAI's own API, which rejects unknown fields) and `BCE_EMBEDDING_TIMEOUT` (600 s)
+  configure the client. Vectors wider than `BCE_EMBEDDING_DIM` are truncated and re-normalised
+  (Matryoshka); a narrower reply is a configuration error. Transient 5xx / connection failures
+  retry three times; 4xx does not.
+- Retrieval profiles (`bce.core.orchestrator.profile`): the three engine constants that encode
+  *where in the model's ranked list the right answers sit* — semantic-anchor rank scale, the
+  share of the answer reserved for the model's ranks, and a guard on its top ranks in
+  narrowing — grouped per embedding family. `BCE_RETRIEVAL_PROFILE=auto` (the default) picks
+  `voyage` for `voyage-*` and unknown models (the historical constants, unchanged) and `jina`
+  for `jina-*`. Name one to force it; `BCE_RETRIEVAL_SEMANTIC_GUARD_RANKS` /
+  `_RESERVE_SHARE` / `_RANK_SCALE` override a single knob for fitting runs. A profile change
+  never needs a re-index. The active profile is written into every `bce bench-prs` report.
+- `bce migrate --reset-embeddings`: after the SQL migrations, `align_embedding_dim` re-types
+  `embeddings.embedding` to `BCE_EMBEDDING_DIM`. Stored vectors of another width are refused
+  unless the flag is set (they belong to another model and would be discarded); then the HNSW
+  index is rebuilt the same way migration `0005` did.
+
+### Changed
+
+- Narrowing reads the active retrieval profile. The voyage path is unchanged (no guard,
+  share 0.5). The jina profile adds a guard of 10: the model's first ten ranks fill slots
+  1–10 (only the container cap can skip one). jina-code finds more correct symbols than
+  voyage-code-4 but spreads them over ranks 1–15, and under the voyage constants the engine's
+  agreement with the model's *deeper* ranks satisfied the reserve share and pushed those mid
+  hits to positions 11–19 or out of the answer (PR replay, 30 PRs: recall@20 35.7 % → 38.2 %,
+  holdout 27.8 % → 34.9 %, retention of the model's own hits 83 % → 92 %). The list stays
+  K-monotonic.
+- `bce bench-prs` titles the markdown with the encoder that actually produced the snapshots
+  (`jina-code-embeddings-1.5b vs … + BCE`), because the JSON key `voyage` is historical, not
+  the model.
+
+### Fixed
+
+- `bce bench-prs --from-report` / `--rerun-bce` no longer treats a stored semantic pool
+  shorter than K as incomplete. A task whose neighbours are mostly tests legitimately has a
+  pool shorter than K — the live run had nothing more either — so the check is now "non-empty
+  and at least as long as the list scored from it".
+
 ## [0.2.2] - 2026-09-18
 
 ### Added

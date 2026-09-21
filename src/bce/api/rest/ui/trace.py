@@ -21,6 +21,7 @@ from bce.core.coverage import compute_coverage
 from bce.core.orchestrator.anchors import find_anchors
 from bce.core.orchestrator.expand import expand_from_anchors, to_candidates
 from bce.core.orchestrator.orchestrator import RetrievalResult, narrow
+from bce.core.orchestrator.profile import active_profile
 from bce.core.orchestrator.text import content_tokens
 from bce.core.scoring.engine import ScoreWeights, score_candidates
 from bce.storage.graph.repository import GraphRepository
@@ -69,6 +70,7 @@ def trace_context_for_task(
 
     # Stage 1: multi-source anchors (spec section 6.2), with evidence strength per anchor.
     t = time.perf_counter()
+    profile = active_profile()
     anchors = find_anchors(
         repository,
         task_text=task_text,
@@ -78,6 +80,7 @@ def trace_context_for_task(
         component_repo_ids=None,
         repo_ids=repo_ids,
         semantic_candidates=semantic_candidates,
+        profile=profile,
     )
     stages.append(
         {
@@ -139,7 +142,7 @@ def trace_context_for_task(
 
     # Stage 4: diversity-aware narrowing to top-N (the "1000 -> 8" step).
     t = time.perf_counter()
-    narrowed = narrow(ranked, max_candidates)
+    narrowed = narrow(ranked, max_candidates, profile=profile)
     stages.append(
         {
             "stage": "narrow",

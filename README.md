@@ -241,7 +241,9 @@ The full formula, every weight, and the confidence thresholds are in
 - **A UI that explains itself.** `/ui` ships in the wheel and replays a real retrieval call
   stage by stage: anchors lighting up, expansion spreading, candidates scored and cut.
 - **Runs offline.** The default embedding provider is deterministic arithmetic over token
-  digests. No API key, no network, repeatable benchmarks.
+  digests. No API key, no network, repeatable benchmarks. `openai` talks to any
+  OpenAI-compatible `/v1/embeddings` server (vLLM, TEI, Ollama), so a model such as
+  jina-code-embeddings-1.5b can run inside the perimeter.
 
 ## Where it fits
 

@@ -9,8 +9,11 @@ import pytest
 from bce.indexing.embedder.encoder import (
     _MAX_BATCH_CHARS,
     _MAX_BATCH_TEXTS,
+    JINA_CODE_DOCUMENT_PREFIX,
+    JINA_CODE_QUERY_PREFIX,
     EncoderConfigError,
     HashingEncoder,
+    OpenAICompatEncoder,
     VoyageEncoder,
     _split_batches,
     build_default_encoder,
@@ -217,3 +220,177 @@ def test_voyage_encode_many_splits_oversized_input(monkeypatch):
     assert len(vectors) == 1400
     assert sum(sizes) == 1400
     assert max(sizes) <= _MAX_BATCH_TEXTS
+
+
+# --------------------------------------------------------------------------- OpenAI-compatible
+
+
+@pytest.fixture
+def fake_embeddings_server(monkeypatch):
+    """Stand-in for a vLLM ``/v1/embeddings`` endpoint: records requests, answers 6-dim vectors
+    whose first component encodes the input position, in shuffled ``index`` order."""
+    from bce.indexing.embedder import encoder as module
+
+    calls: list[dict] = []
+
+    def _post(url, body, headers, timeout):
+        calls.append({"url": url, "body": body, "headers": headers, "timeout": timeout})
+        rows = [
+            {"index": i, "embedding": [float(i + 1), 1.0, 0.0, 0.0, 0.0, 0.0]}
+            for i in range(len(body["input"]))
+        ]
+        return {"object": "list", "model": body["model"], "data": list(reversed(rows))}
+
+    monkeypatch.setattr(module, "_post_json", _post)
+    return calls
+
+
+def test_openai_encoder_applies_jina_prompts_and_pins_model_id(fake_embeddings_server):
+    enc = OpenAICompatEncoder("http://127.0.0.1:8001/v1/", model="jina-code-embeddings-1.5b", dim=6)
+    assert enc.model_id == "jina-code-embeddings-1.5b-6"
+    assert enc.url == "http://127.0.0.1:8001/v1/embeddings"
+
+    enc.encode_query("login timeout")
+    enc.encode_many(["def a(): ...", "def b(): ..."])
+
+    query, docs = fake_embeddings_server
+    assert query["body"]["input"] == [JINA_CODE_QUERY_PREFIX + "login timeout"]
+    assert docs["body"]["input"] == [
+        JINA_CODE_DOCUMENT_PREFIX + "def a(): ...",
+        JINA_CODE_DOCUMENT_PREFIX + "def b(): ...",
+    ]
+    assert docs["body"]["model"] == "jina-code-embeddings-1.5b"
+    # No key -> no Authorization header; a local server does not check one.
+    assert "Authorization" not in docs["headers"]
+
+
+def test_openai_encoder_orders_by_index_and_uses_extra_body(fake_embeddings_server):
+    enc = OpenAICompatEncoder(
+        "http://h/v1",
+        model="some-model",
+        dim=6,
+        api_key="secret",
+        extra_body={"truncate_prompt_tokens": -1},
+    )
+    vectors = enc.encode_many(["a", "b", "c"])
+
+    # The server answered in reverse order; the encoder must put them back by ``index``.
+    assert [v[0] for v in vectors] == [1.0, 2.0, 3.0]
+    (call,) = fake_embeddings_server
+    assert call["body"]["truncate_prompt_tokens"] == -1
+    assert call["headers"]["Authorization"] == "Bearer secret"
+    # No jina in the name -> no prompt prefixes unless configured.
+    assert call["body"]["input"] == ["a", "b", "c"]
+
+
+def test_openai_encoder_explicit_prefixes_override_the_defaults(fake_embeddings_server):
+    enc = OpenAICompatEncoder(
+        "http://h/v1",
+        model="jina-code-embeddings-1.5b",
+        dim=6,
+        query_prefix="Q: ",
+        document_prefix="",
+    )
+    enc.encode_query("x")
+    enc.encode("y")
+    assert fake_embeddings_server[0]["body"]["input"] == ["Q: x"]
+    assert fake_embeddings_server[1]["body"]["input"] == ["y"]
+
+
+def test_openai_encoder_truncates_matryoshka_vectors_and_renormalises(fake_embeddings_server):
+    enc = OpenAICompatEncoder("http://h/v1", model="m", dim=2)
+    (vec,) = enc.encode_many(["a"])
+    # Server gave [1, 1, 0, 0, 0, 0]; the first two components re-normalised.
+    assert len(vec) == 2
+    assert abs(math.sqrt(sum(v * v for v in vec)) - 1.0) < 1e-9
+    assert abs(vec[0] - vec[1]) < 1e-9
+
+
+def test_openai_encoder_rejects_narrower_vectors(fake_embeddings_server):
+    enc = OpenAICompatEncoder("http://h/v1", model="m", dim=1536)
+    with pytest.raises(EncoderConfigError, match="BCE_EMBEDDING_DIM=6"):
+        enc.encode("a")
+
+
+def test_openai_encoder_does_not_retry_client_errors(monkeypatch):
+    import io
+    import urllib.error
+
+    from bce.indexing.embedder import encoder as module
+
+    attempts = []
+
+    def _post(url, body, headers, timeout):
+        attempts.append(1)
+        raise urllib.error.HTTPError(
+            url, 400, "Bad Request", {}, io.BytesIO(b'{"error":"maximum context length"}')
+        )
+
+    monkeypatch.setattr(module, "_post_json", _post)
+    enc = OpenAICompatEncoder("http://h/v1", model="m", dim=6)
+    with pytest.raises(RuntimeError, match="maximum context length"):
+        enc.encode("a")
+    assert len(attempts) == 1
+
+
+def test_openai_encoder_retries_when_the_server_is_down(monkeypatch):
+    import urllib.error
+
+    from bce.indexing.embedder import encoder as module
+
+    attempts = []
+
+    def _post(url, body, headers, timeout):
+        attempts.append(1)
+        raise urllib.error.URLError("connection refused")
+
+    monkeypatch.setattr(module, "_post_json", _post)
+    monkeypatch.setattr(module.time, "sleep", lambda s: None)
+    enc = OpenAICompatEncoder("http://h/v1", model="m", dim=6)
+    with pytest.raises(RuntimeError, match="unreachable"):
+        enc.encode("a")
+    assert len(attempts) == module._HTTP_ATTEMPTS
+
+
+def test_default_encoder_selects_openai_from_settings(monkeypatch, fake_embeddings_server):
+    from bce import config
+
+    monkeypatch.setattr(
+        config,
+        "get_settings",
+        lambda: config.Settings(
+            embedding_provider="openai",
+            embedding_model="jina-code-embeddings-1.5b",
+            embedding_dim=6,
+            embedding_base_url="http://127.0.0.1:8001/v1",
+        ),
+    )
+    enc = build_default_encoder()
+    assert isinstance(enc, OpenAICompatEncoder)
+    assert enc.model_id == "jina-code-embeddings-1.5b-6"
+    assert enc.query_prefix == JINA_CODE_QUERY_PREFIX
+    assert enc.extra_body == {"truncate_prompt_tokens": -1}
+
+
+def test_default_encoder_rejects_openai_without_base_url(monkeypatch):
+    from bce import config
+
+    monkeypatch.setattr(
+        config,
+        "get_settings",
+        lambda: config.Settings(embedding_provider="openai", embedding_base_url=" "),
+    )
+    with pytest.raises(EncoderConfigError, match="BCE_EMBEDDING_BASE_URL"):
+        build_default_encoder()
+
+
+def test_settings_parse_extra_body_from_env(monkeypatch):
+    from bce import config
+
+    monkeypatch.setenv("BCE_EMBEDDING_EXTRA_BODY", "{}")
+    monkeypatch.setenv("BCE_EMBEDDING_DOCUMENT_PREFIX", "")
+    s = config.Settings(_env_file=None)
+    assert s.embedding_extra_body == {}
+    # An empty string is a deliberate "no prefix", distinct from unset (None -> model default).
+    assert s.embedding_document_prefix == ""
+    assert s.embedding_query_prefix is None

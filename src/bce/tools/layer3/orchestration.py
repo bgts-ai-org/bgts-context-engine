@@ -18,6 +18,7 @@ from bce.core.coverage import compute_coverage, coverage_message
 from bce.core.i18n import get_translator
 from bce.core.orchestrator import RetrievalOrchestrator, bulk
 from bce.core.orchestrator.anchors import AnchorResult, find_anchors
+from bce.core.orchestrator.profile import RetrievalProfile, active_profile
 from bce.core.orchestrator.text import is_test_symbol
 from bce.storage.graph.repository import GraphRepository
 from bce.storage.vector.store import VectorStore
@@ -84,6 +85,7 @@ def _build_anchors(
     component_repo_ids: list[str] | None,
     repo_ids: list[str] | None,
     semantic_candidates: list[str] | None,
+    profile: RetrievalProfile | None = None,
 ) -> AnchorResult:
     return find_anchors(
         repository,
@@ -94,6 +96,7 @@ def _build_anchors(
         component_repo_ids=component_repo_ids,
         repo_ids=repo_ids,
         semantic_candidates=semantic_candidates,
+        profile=profile,
     )
 
 
@@ -120,6 +123,8 @@ def get_context_for_task(
     tr = get_translator()
     loc = tr.resolve(locale)
     t0 = time.perf_counter()
+    # Engine constants fitted for the configured embedding model (voyage / jina / default).
+    profile = active_profile()
 
     # D1: automatic semantic anchor when the caller did not pre-compute one (opt-out: auto_semantic).
     if semantic_candidates is None and auto_semantic and store is not None:
@@ -140,6 +145,7 @@ def get_context_for_task(
         component_repo_ids=component_repo_ids,
         repo_ids=repo_ids,
         semantic_candidates=semantic_candidates,
+        profile=profile,
     )
     logger.debug(
         "get_context_for_task: anchors resolved",
@@ -151,7 +157,7 @@ def get_context_for_task(
     )
 
     # Single pass: task signals are computed for every expanded candidate inside retrieve().
-    orchestrator = RetrievalOrchestrator(repository)
+    orchestrator = RetrievalOrchestrator(repository, profile=profile)
     stage = time.perf_counter()
     result = orchestrator.retrieve(
         anchors,
@@ -368,6 +374,8 @@ def suggest_change_sites(
     tr = get_translator()
     loc = tr.resolve(locale)
     t0 = time.perf_counter()
+    # Engine constants fitted for the configured embedding model (voyage / jina / default).
+    profile = active_profile()
 
     timings: dict[str, float] = {}
 
@@ -391,13 +399,14 @@ def suggest_change_sites(
         component_repo_ids=component_repo_ids,
         repo_ids=repo_ids,
         semantic_candidates=semantic_candidates,
+        profile=profile,
     )
     timings["anchors_ms"] = _elapsed_ms(stage)
     logger.debug(
         "suggest_change_sites: anchors resolved",
         extra={"anchor_count": len(anchors.anchor_ids), "duration_ms": timings["anchors_ms"]},
     )
-    orchestrator = RetrievalOrchestrator(repository)
+    orchestrator = RetrievalOrchestrator(repository, profile=profile)
     stage = time.perf_counter()
     result = orchestrator.retrieve(
         anchors,

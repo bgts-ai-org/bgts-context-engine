@@ -96,6 +96,9 @@ Applied in order by `bce migrate`, tracked in `schema_migrations`.
 
 Note that `0005` **truncates** `embeddings`. Widening a vector column cannot preserve
 existing rows, so upgrading across that migration means re-indexing to repopulate them.
+Later width changes do not get another numbered SQL file: after the SQL migrations,
+`bce migrate` runs `align_embedding_dim` to re-type the column to `BCE_EMBEDDING_DIM`.
+Stored vectors of another width are discarded only with `--reset-embeddings`.
 
 ### repos
 
@@ -131,13 +134,15 @@ told — which is only meaningful because retrieval is reproducible.
 ### embeddings
 
 `kind` (`symbol` or `file`), `ref_id`, `repo_id`, `content`, `model`, `embedding
-vector(1024)`, `indexed_at_commit`, unique on `(kind, ref_id)`. Indexed with HNSW using
+vector(N)`, `indexed_at_commit`, unique on `(kind, ref_id)`. `N` is `BCE_EMBEDDING_DIM`
+(1024 for Voyage, 1536 for jina-code-embeddings-1.5b, …). Indexed with HNSW using
 `vector_cosine_ops`; searches use the `<=>` cosine distance operator and order by
 `(distance, ref_id)` so ties break stably.
 
-The `model` column records which encoder produced each row. Embeddings from different
-models are not comparable, so this is what makes it possible to detect a stale index after
-switching providers.
+The `model` column records which encoder produced each row (`<model>-<dim>`). Embeddings
+from different models are not comparable, so this is what makes it possible to detect a
+stale index after switching providers. Changing `N` is a re-index boundary: `bce migrate`
+refuses to drop the stored vectors unless run with `--reset-embeddings`.
 
 ### symbol_fts
 

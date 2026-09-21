@@ -62,6 +62,9 @@ bce migrate
 
 `bce migrate` creates the graph, the tables, the vector column, the full-text side table
 and the job queue. It is idempotent and tracks what it has applied in `schema_migrations`.
+After the SQL files it also fits `embeddings.embedding` to `BCE_EMBEDDING_DIM` (see
+[Embeddings](#embeddings) below); if the column already holds vectors of another width the
+command refuses unless run with `--reset-embeddings`.
 
 One upgrade caveat: migration `0005` widens the embedding column and **truncates**
 `embeddings`. Re-index after crossing it.
@@ -164,16 +167,45 @@ Every setting is an environment variable prefixed `BCE_`, also read from `.env`.
 
 | Variable | Default | |
 | --- | --- | --- |
-| `BCE_EMBEDDING_PROVIDER` | `hashing` | `hashing` or `voyage` |
+| `BCE_EMBEDDING_PROVIDER` | `hashing` | `hashing`, `voyage` or `openai` |
 | `BCE_EMBEDDING_MODEL` | `voyage-code-3` | pinned model id |
-| `BCE_EMBEDDING_DIM` | `1024` | must match the pgvector column |
+| `BCE_EMBEDDING_DIM` | `1024` | width of the pgvector column; `bce migrate` re-types it |
 | `BCE_VOYAGE_API_KEY` | empty | required when provider is `voyage` |
+| `BCE_EMBEDDING_BASE_URL` | `http://127.0.0.1:8001/v1` | `openai` only: server base URL |
+| `BCE_EMBEDDING_API_KEY` | empty | `openai` only: bearer token, if the server checks one |
+| `BCE_EMBEDDING_QUERY_PREFIX` / `_DOCUMENT_PREFIX` | unset | `openai` only: instruction prefixes; unset picks a default from the model name |
+| `BCE_EMBEDDING_EXTRA_BODY` | `{"truncate_prompt_tokens": -1}` | `openai` only: JSON merged into every request (vLLM truncation; use `{}` for OpenAI) |
+| `BCE_EMBEDDING_TIMEOUT` | `600` | `openai` only: seconds per request |
 
 The default `hashing` provider needs no API key and no network. It is deterministic
 arithmetic over token digests, so it reproduces exactly — worse at semantic recall than a
 real model, but it means the engine works out of the box and benchmarks are repeatable.
 Switching providers invalidates existing embeddings; re-index after changing either the
-provider or the dimension.
+provider or the dimension. `bce migrate` fits the `embeddings.embedding` column to
+`BCE_EMBEDDING_DIM`, but refuses to drop vectors of another width unless run with
+`--reset-embeddings`.
+
+`openai` talks to any server that implements the OpenAI `/v1/embeddings` protocol — vLLM,
+Text Embeddings Inference, Ollama, or OpenAI itself — and needs nothing beyond the standard
+library. It is how an open model runs on-prem; for `jinaai/jina-code-embeddings-1.5b`:
+
+```bash
+vllm serve jinaai/jina-code-embeddings-1.5b --runner pooling --port 8001 \
+  --served-model-name jina-code-embeddings-1.5b
+```
+
+```dotenv
+BCE_EMBEDDING_PROVIDER=openai
+BCE_EMBEDDING_MODEL=jina-code-embeddings-1.5b
+BCE_EMBEDDING_DIM=1536
+```
+
+The model id stored with every vector is `<model>-<dim>` (`jina-code-embeddings-1.5b-1536`),
+so `BCE_EMBEDDING_MODEL` has to be the name the server serves under. The jina-code family is
+instruction-tuned: its `nl2code` prompts are prepended automatically (query at search time,
+passage at index time). Other models take theirs from the two prefix variables. A model that
+returns wider vectors than `BCE_EMBEDDING_DIM` is truncated and re-normalised (Matryoshka);
+a narrower one is a configuration error.
 
 `voyage` needs two things the base install does not give you: the key above and the
 `voyageai` package, which ships in the `embed` extra (`pip install
@@ -182,6 +214,31 @@ the CLI exits with a single message and the API answers `503`. It is deliberatel
 fall back to `hashing`, because nearest-neighbour search does not filter on the stored
 `model`: an encoder substituted at query time would be compared against Voyage vectors and
 return confident nonsense rather than an error.
+
+#### Retrieval profile
+
+Three engine constants encode an assumption about *where in the model's ranked list the
+right answers sit*: the semantic anchor's rank decay, the share of the answer reserved for
+the model's ranks, and a guard on its top ranks in narrowing. They are grouped in a
+*retrieval profile* (`bce.core.orchestrator.profile`) and selected automatically from
+`BCE_EMBEDDING_MODEL`:
+
+| Variable | Default | |
+| --- | --- | --- |
+| `BCE_RETRIEVAL_PROFILE` | `auto` | `auto` (from the model name), `voyage` or `jina` |
+| `BCE_RETRIEVAL_SEMANTIC_GUARD_RANKS` | unset | override: model's first *n* ranks fill slots 1..*n* |
+| `BCE_RETRIEVAL_SEMANTIC_RESERVE_SHARE` | unset | override: floor on the model's share of the list |
+| `BCE_RETRIEVAL_SEMANTIC_RANK_SCALE` | unset | override: rank at which semantic anchor strength halves |
+
+`voyage` is the historical set every constant was fitted with (no guard, share 0.5, scale
+30) and is also what an unknown model or the `hashing` fallback gets. `jina` differs in one
+value, a guard of 10: jina-code finds more correct symbols than voyage-code-4 but spreads them
+over ranks 1–15, and under the voyage constants the engine ranked those mid hits out of the
+answer (PR replay, 30 PRs: recall@20 35.7 % → 38.2 %, holdout 27.8 % → 34.9 %, retention of
+the model's own hits 83 % → 92 % with the guard). The overrides exist for fitting runs
+(`local_bench/bench40_jina.py rerun <tag> BCE_RETRIEVAL_SEMANTIC_GUARD_RANKS=7`); they do
+not change stored data, so a profile change never needs a re-index — only a re-run of the
+query side. The active profile is written into every `bce bench-prs` report.
 
 ### API
 

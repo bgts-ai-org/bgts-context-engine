@@ -4,7 +4,7 @@ An encoder maps text to a fixed-dimension unit vector. Per P2 the embedding is a
 the graph), never the answer, and per the determinism rules the model identity is pinned so results
 are reproducible within a snapshot.
 
-Three encoders ship:
+Four encoders ship:
 
 - :class:`HashingEncoder` - dependency-free, fully deterministic (a hashed bag-of-tokens projected
   to the unit sphere). It is the default "lexical safety-net" fallback the plan calls for: no heavy
@@ -13,6 +13,11 @@ Three encoders ship:
   ``document`` (indexing) from ``query`` (search) input types. Its outputs are written into pgvector
   at index time and pinned there; since embeddings only *find anchors* (P2), the deterministic
   payload is unaffected by any minor API float variation.
+- :class:`OpenAICompatEncoder` - any server speaking the OpenAI ``/v1/embeddings`` protocol (vLLM,
+  Text Embeddings Inference, Ollama, OpenAI). This is how an open model such as
+  ``jinaai/jina-code-embeddings-1.5b`` runs on-prem. Query/document asymmetry is expressed as
+  instruction prefixes, which the encoder knows for the jina-code family and otherwise takes from
+  settings.
 - :class:`Encoder` - the abstract contract. Any other on-prem encoder can implement this without
   touching the rest of the pipeline; its ``model_id`` must be pinned.
 
@@ -24,8 +29,13 @@ from __future__ import annotations
 
 import abc
 import hashlib
+import json
 import math
 import re
+import time
+import urllib.error
+import urllib.request
+from typing import Any
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_]+")
 
@@ -170,8 +180,147 @@ class VoyageEncoder(Encoder):
         return self._embed(list(texts), "document")
 
 
+#: Instruction prompts of the ``jinaai/jina-code-embeddings-*`` family for its ``nl2code`` task
+#: (natural-language query -> code passage), which is what anchor finding does: the task text is
+#: prose, the indexed content is a symbol. Taken from the model card; the model was trained with
+#: these exact strings, so a different prefix costs retrieval quality.
+JINA_CODE_QUERY_PREFIX = "Find the most relevant code snippet given the following query:\n"
+JINA_CODE_DOCUMENT_PREFIX = "Candidate code snippet:\n"
+
+#: Retries for one embedding request. A local server drops a request now and then (model reload,
+#: memory pressure); a transient failure should not cost the whole indexing run.
+_HTTP_ATTEMPTS = 3
+_HTTP_RETRY_SECONDS = 2.0
+
+
+def _post_json(url: str, body: dict[str, Any], headers: dict[str, str], timeout: float) -> Any:
+    """POST ``body`` as JSON and return the decoded response; the seam tests monkeypatch."""
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(body).encode("utf-8"),
+        headers={"Content-Type": "application/json", **headers},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
+        return json.loads(response.read().decode("utf-8"))
+
+
+def default_prefixes(model: str) -> tuple[str, str]:
+    """``(query_prefix, document_prefix)`` the encoder uses when settings leave them unset."""
+    if "jina-code" in model.lower():
+        return JINA_CODE_QUERY_PREFIX, JINA_CODE_DOCUMENT_PREFIX
+    return "", ""
+
+
+def _fit_dimension(vector: list[float], dim: int, model: str) -> list[float]:
+    """Cut a wider (Matryoshka) vector to ``dim`` and re-normalise; refuse a narrower one."""
+    if len(vector) == dim:
+        return vector
+    if len(vector) < dim:
+        raise EncoderConfigError(
+            f"{model} returned {len(vector)}-dimensional vectors but BCE_EMBEDDING_DIM={dim}. "
+            f"Set BCE_EMBEDDING_DIM={len(vector)} (and re-run `bce migrate`, then reindex)."
+        )
+    head = vector[:dim]
+    norm = math.sqrt(sum(v * v for v in head))
+    return [v / norm for v in head] if norm else head
+
+
+class OpenAICompatEncoder(Encoder):
+    """Embeddings from an OpenAI-compatible ``/v1/embeddings`` endpoint (vLLM, TEI, Ollama, ...).
+
+    The wire format has no ``input_type``; instruction-tuned models express the query/document
+    asymmetry as a text prefix instead, so the encoder prepends ``query_prefix`` at search time
+    and ``document_prefix`` at index time. ``model_id`` pins model + dimension like the Voyage
+    encoder does. Vectors wider than ``dim`` are truncated and re-normalised (Matryoshka
+    training makes leading dimensions self-contained); narrower ones are a configuration error.
+
+    Only the standard library is used, so the provider needs no extra install.
+    """
+
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        model: str,
+        dim: int,
+        api_key: str = "",
+        query_prefix: str | None = None,
+        document_prefix: str | None = None,
+        extra_body: dict[str, Any] | None = None,
+        timeout: float = 600.0,
+    ) -> None:
+        if not base_url.strip():
+            raise EncoderConfigError(
+                "BCE_EMBEDDING_PROVIDER=openai needs BCE_EMBEDDING_BASE_URL (for example "
+                "http://127.0.0.1:8001/v1 for a local vLLM server)."
+            )
+        if not model.strip():
+            raise EncoderConfigError(
+                "BCE_EMBEDDING_PROVIDER=openai needs BCE_EMBEDDING_MODEL: the name the server "
+                "serves the model under (vLLM: --served-model-name)."
+            )
+        self.url = base_url.rstrip("/") + "/embeddings"
+        self.model = model
+        self.dim = dim
+        self.model_id = f"{model}-{dim}"
+        auto_query, auto_document = default_prefixes(model)
+        self.query_prefix = auto_query if query_prefix is None else query_prefix
+        self.document_prefix = auto_document if document_prefix is None else document_prefix
+        self.extra_body = dict(extra_body or {})
+        self.timeout = timeout
+        self._headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+
+    def _request(self, texts: list[str]) -> list[list[float]]:
+        body = {**self.extra_body, "model": self.model, "input": texts}
+        last: Exception | None = None
+        for attempt in range(1, _HTTP_ATTEMPTS + 1):
+            try:
+                payload = _post_json(self.url, body, self._headers, self.timeout)
+                break
+            except urllib.error.HTTPError as exc:
+                detail = exc.read().decode("utf-8", "replace")[:500]
+                if exc.code < 500:
+                    # The request itself is wrong (unknown model, too long, bad field): retrying
+                    # cannot help, and the server's message says what to fix.
+                    raise RuntimeError(
+                        f"embedding request rejected ({exc.code}): {detail}"
+                    ) from exc
+                last = RuntimeError(f"embedding server error ({exc.code}): {detail}")
+            except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as exc:
+                last = RuntimeError(f"embedding server unreachable at {self.url}: {exc}")
+            if attempt < _HTTP_ATTEMPTS:
+                time.sleep(_HTTP_RETRY_SECONDS * attempt)
+        else:
+            assert last is not None
+            raise last
+        rows = sorted(payload["data"], key=lambda item: item["index"])
+        if len(rows) != len(texts):
+            raise RuntimeError(
+                f"embedding server returned {len(rows)} vectors for {len(texts)} texts"
+            )
+        return [_fit_dimension(list(row["embedding"]), self.dim, self.model) for row in rows]
+
+    def _embed(self, texts: list[str], prefix: str) -> list[list[float]]:
+        vectors: list[list[float]] = []
+        for batch in _split_batches([prefix + text for text in texts]):
+            vectors.extend(self._request(batch))
+        return vectors
+
+    def encode(self, text: str) -> list[float]:
+        return self._embed([text], self.document_prefix)[0]
+
+    def encode_query(self, text: str) -> list[float]:
+        return self._embed([text], self.query_prefix)[0]
+
+    def encode_many(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        return self._embed(list(texts), self.document_prefix)
+
+
 def build_default_encoder(dim: int | None = None, model_id: str | None = None) -> Encoder:
-    """Encoder from settings: Voyage when it is selected, else the deterministic hashing encoder.
+    """Encoder from settings: the selected remote provider, else the deterministic hashing encoder.
 
     Reads :class:`bce.config.Settings` for the provider/model/dim/key. Explicit ``dim``/``model_id``
     args override settings (used by tests); otherwise the hashing encoder adopts the settings dim so
@@ -198,10 +347,22 @@ def build_default_encoder(dim: int | None = None, model_id: str | None = None) -
             dim=settings.embedding_dim,
         )
 
+    if provider == "openai":
+        return OpenAICompatEncoder(
+            settings.embedding_base_url,
+            model=settings.embedding_model,
+            dim=settings.embedding_dim,
+            api_key=settings.embedding_api_key,
+            query_prefix=settings.embedding_query_prefix,
+            document_prefix=settings.embedding_document_prefix,
+            extra_body=settings.embedding_extra_body,
+            timeout=settings.embedding_timeout,
+        )
+
     if provider != "hashing":
         raise EncoderConfigError(
             f"Unknown BCE_EMBEDDING_PROVIDER {settings.embedding_provider!r}. "
-            "Supported values are 'hashing' and 'voyage'."
+            "Supported values are 'hashing', 'voyage' and 'openai'."
         )
 
     fallback_dim = dim if dim is not None else settings.embedding_dim
