@@ -37,6 +37,7 @@ import re
 from dataclasses import dataclass, field
 
 from bce.core.orchestrator import bulk
+from bce.core.orchestrator.profile import RetrievalProfile
 from bce.core.orchestrator.text import (
     explicit_references,
     is_test_symbol,
@@ -86,6 +87,8 @@ _SATURATED_TERM_WEIGHT = 0.35
 #: ``rank / len(list)`` form made rank 29 of a 30-list as strong as rank 10 of an 11-list).
 #: Measured on the PR-replay tune split: 8 / 10 / 15 all lost semantic retention (80 %) and
 #: recall@20 against 30, which keeps every model rank in the pool; steeper decay is not paid for.
+#: This is the voyage-code-4 value; another embedding model may carry its own in its
+#: :class:`~bce.core.orchestrator.profile.RetrievalProfile` (``semantic_rank_scale``).
 SEMANTIC_RANK_SCALE = 30
 
 
@@ -144,11 +147,13 @@ def find_anchors(
     lexical_terms: list[str] | None = None,
     semantic_candidates: list[str] | None = None,
     include_tests: bool = False,
+    profile: RetrievalProfile | None = None,
 ) -> AnchorResult:
     """Combine the four anchor sources deterministically. Callers supply pre-fetched metadata.
 
     ``semantic_candidates`` must be in the model's rank order (best first); rank decides the
     semantic evidence strength. ``include_tests`` admits test symbols from lexical/semantic.
+    ``profile`` supplies the model-specific rank scale (default: the voyage constants).
     """
     result = AnchorResult()
     for rid in sorted(set(component_repo_ids or [])):
@@ -181,7 +186,10 @@ def find_anchors(
         result.add(sid, "lexical", strength)
 
     # Source 4b: semantic candidates (lowest priority; caller supplies the model's ranked list).
-    for sid, rank, strength in _semantic_anchors(repository, semantic_candidates, include_tests):
+    scale = profile.semantic_rank_scale if profile is not None else SEMANTIC_RANK_SCALE
+    for sid, rank, strength in _semantic_anchors(
+        repository, semantic_candidates, include_tests, scale=scale
+    ):
         result.add(sid, "semantic", strength)
         result.semantic_rank[sid] = rank
 
@@ -246,11 +254,13 @@ def _semantic_anchors(
     repository: GraphRepository,
     semantic_candidates: list[str] | None,
     include_tests: bool,
+    *,
+    scale: float = SEMANTIC_RANK_SCALE,
 ) -> list[tuple[str, int, float]]:
     """``(symbol_id, rank, strength)`` for the model's ranked list, strongest first.
 
     Strength decays hyperbolically with the absolute rank - ``cap / (1 + rank / scale)``
-    (:data:`SEMANTIC_RANK_SCALE`) - so the best hit is worth as much as a moderately ambiguous
+    (:data:`SEMANTIC_RANK_SCALE` unless the profile says otherwise) - so the best hit is worth as much as a moderately ambiguous
     explicit name, mid ranks still expand, and the tail of a wide pool is kept as candidates only.
     Only the rank enters the engine: a similarity number would let the model reorder candidates,
     which is the one thing the deterministic core does not delegate.
@@ -265,13 +275,13 @@ def _semantic_anchors(
             info = meta.get(sid) or {}
             if is_test_symbol(sid, info.get("name"), info.get("file_id")):
                 continue
-        out.append((sid, rank, semantic_strength(rank)))
+        out.append((sid, rank, semantic_strength(rank, scale=scale)))
     return out
 
 
-def semantic_strength(rank: int) -> float:
+def semantic_strength(rank: int, *, scale: float = SEMANTIC_RANK_SCALE) -> float:
     """Anchor strength for the model's 0-based ``rank`` (see :data:`SEMANTIC_RANK_SCALE`)."""
-    return round(SOURCE_STRENGTH["semantic"] / (1.0 + max(rank, 0) / SEMANTIC_RANK_SCALE), 6)
+    return round(SOURCE_STRENGTH["semantic"] / (1.0 + max(rank, 0) / float(scale)), 6)
 
 
 def _lexical_anchors(

@@ -10,6 +10,8 @@ from bce.indexing.embedder.encoder import (
     Encoder,
     EncoderConfigError,
     HashingEncoder,
+    OpenAICompatEncoder,
+    VoyageEncoder,
     build_default_encoder,
 )
 
@@ -18,5 +20,7 @@ __all__ = [
     "Encoder",
     "EncoderConfigError",
     "HashingEncoder",
+    "OpenAICompatEncoder",
+    "VoyageEncoder",
     "build_default_encoder",
 ]

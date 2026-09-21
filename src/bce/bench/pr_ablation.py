@@ -666,6 +666,9 @@ class AblationReport:
     cases: list[CaseOutcome]
     #: Extra K columns derived from the K-long lists (see :func:`score_runs`).
     ks: list[int] = field(default_factory=list)
+    #: The retrieval profile BCE ran with (name + the model-specific constants), so two runs of
+    #: the same snapshots can be told apart by their engine tuning.
+    profile: dict[str, Any] = field(default_factory=dict)
 
     def _rows(
         self, variant: str, *, scored_only: bool, split: str | None, level: str = "symbol"
@@ -848,6 +851,7 @@ class AblationReport:
             "k": self.k,
             "ks": list(self.ks),
             "encoder_model": self.encoder_model,
+            "profile": dict(self.profile),
             "variants": list(self.variants),
             "summary": {v: self.aggregate(v) for v in self.variants},
             "summary_by_split": {
@@ -1124,10 +1128,14 @@ def run_ablation(
                     for system in SYSTEMS
                     if replay is not None and (case.spec.number, variant, system) in replay
                 }
+                # The stored pool is complete when it is at least as long as the list that was
+                # scored from it: a task whose neighbours are mostly tests legitimately has a
+                # pool shorter than K (the live run had nothing more either).
                 baselines_ok = (
                     "voyage" in replayed
                     and "voyage_raw" in replayed
-                    and len(replayed["voyage"].semantic_pool) >= k
+                    and bool(replayed["voyage"].semantic_pool)
+                    and len(replayed["voyage"].semantic_pool) >= len(replayed["voyage"].returned)
                 )
                 if len(replayed) == len(SYSTEMS) and not rerun_bce:
                     runs = replayed
@@ -1157,8 +1165,15 @@ def run_ablation(
                 outcomes.append(outcome)
                 if progress is not None:
                     progress(outcome)
+    from bce.core.orchestrator.profile import active_profile
+
     return AblationReport(
-        k=k, encoder_model=encoder_model, variants=list(variants), cases=outcomes, ks=list(ks)
+        k=k,
+        encoder_model=encoder_model,
+        variants=list(variants),
+        cases=outcomes,
+        ks=list(ks),
+        profile=asdict(active_profile()),
     )
 
 
@@ -1355,9 +1370,15 @@ def _render_text_buckets(lines: list[str], buckets: dict[str, Any]) -> None:
 
 def render_markdown(report: AblationReport) -> str:
     lines: list[str] = []
-    lines.append("# Voyage vs Voyage + BCE - PR replay benchmark")
+    # The pure-embedding baseline is keyed ``voyage`` in the JSON for historical reasons; the
+    # actual model is whatever encoded the snapshots, so the title says that instead.
+    model_name = report.encoder_model.rpartition("-")[0] or report.encoder_model
+    lines.append(f"# {model_name} vs {model_name} + BCE - PR replay benchmark")
     lines.append("")
     lines.append(f"- Encoder: `{report.encoder_model}` (same embedding rows for both systems)")
+    if report.profile:
+        knobs = ", ".join(f"{k}={v}" for k, v in report.profile.items() if k != "name")
+        lines.append(f"- Retrieval profile: `{report.profile.get('name', '?')}` ({knobs})")
     lines.append(f"- K (results per system): {report.k}")
     scored = sorted({c.number for c in report.cases if c.scored})
     unscored = sorted({c.number for c in report.cases if not c.scored})
@@ -1370,8 +1391,9 @@ def render_markdown(report: AblationReport) -> str:
     lines.append("")
     lines.append(
         "Ground truth = symbols of the pre-PR snapshot that the PR's diff touched (tests and "
-        "files created by the PR excluded). `voyage` = nearest non-test symbol embeddings; "
-        "`voyage_raw` = unfiltered nearest neighbours; `bce` = full engine with the same "
+        f"files created by the PR excluded). `voyage` = pure `{model_name}` search, nearest "
+        f"non-test symbol embeddings (the key is historical, not the model); `voyage_raw` = "
+        "unfiltered nearest neighbours; `bce` = full engine with the same "
         "neighbours as semantic anchors. Retention = share of `voyage`'s correct hits the system "
         "still returns. Engine constants were fitted on `tune` only, so `holdout` is the honest "
         "number."

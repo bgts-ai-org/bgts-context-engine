@@ -69,15 +69,39 @@ def _root(
 
 
 @app.command()
-def migrate() -> None:
-    """Apply pending database migrations."""
-    from bce.storage.relational.migrator import run_migrations
+def migrate(
+    reset_embeddings: bool = typer.Option(
+        False,
+        "--reset-embeddings",
+        help=(
+            "Allow re-typing embeddings.embedding to BCE_EMBEDDING_DIM even when it holds vectors "
+            "of another width (they are discarded; reindex afterwards)"
+        ),
+    ),
+) -> None:
+    """Apply pending database migrations and fit the vector column to BCE_EMBEDDING_DIM."""
+    from bce.config import get_settings
+    from bce.storage.relational.db import connection
+    from bce.storage.relational.migrator import (
+        EmbeddingDimMismatch,
+        align_embedding_dim,
+        run_migrations,
+    )
 
-    applied = run_migrations()
+    dim = get_settings().embedding_dim
+    with connection() as conn:
+        applied = run_migrations(conn)
+        try:
+            resized = align_embedding_dim(conn, dim, reset=reset_embeddings)
+        except EmbeddingDimMismatch as exc:
+            typer.echo(f"Configuration error: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
     if applied:
         typer.echo("Applied migrations: " + ", ".join(applied))
     else:
         typer.echo("No pending migrations.")
+    if resized:
+        typer.echo(f"Re-typed embeddings.embedding to vector({dim}).")
 
 
 @app.command()

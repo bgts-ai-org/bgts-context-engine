@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 from functools import lru_cache
+from typing import Any
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -61,19 +62,54 @@ class Settings(BaseSettings):
     cors_origins: tuple[str, ...] = ("http://localhost:5173", "http://127.0.0.1:5173")
 
     # --- Embedding (Phase 2; pinned for determinism, P2) ---
-    # Provider selects the encoder: "hashing" (default, dependency-free, deterministic fallback) or
-    # "voyage" (Voyage AI code embeddings). Model + dim are pinned; a change is a reindex boundary.
+    # Provider selects the encoder: "hashing" (default, dependency-free, deterministic fallback),
+    # "voyage" (Voyage AI code embeddings) or "openai" (any OpenAI-compatible ``/v1/embeddings``
+    # server: vLLM, TEI, Ollama, OpenAI itself - the way to run an open model such as
+    # jinaai/jina-code-embeddings-1.5b). Model + dim are pinned; a change is a reindex boundary.
     embedding_provider: str = Field(
         default="hashing",
-        description="Embedding backend: 'hashing' (local fallback) or 'voyage' (Voyage AI).",
+        description=(
+            "Embedding backend: 'hashing' (local fallback), 'voyage' (Voyage AI) or 'openai' "
+            "(OpenAI-compatible HTTP endpoint)."
+        ),
     )
     embedding_model: str = Field(
         default="voyage-code-3",
         description="Pinned embedding model identifier. Versioned for reproducibility (P2).",
     )
+    # Width of the pgvector column. ``bce migrate`` re-types ``embeddings.embedding`` to this width;
+    # an encoder returning wider vectors is truncated to it and re-normalised (Matryoshka models).
     embedding_dim: int = 1024
     # Voyage AI API key (used only when embedding_provider == 'voyage').
     voyage_api_key: str = ""
+    # --- provider "openai" only ---
+    # Base URL of the OpenAI-compatible server; ``/embeddings`` is appended.
+    embedding_base_url: str = "http://127.0.0.1:8001/v1"
+    # Bearer token; leave empty for a local server that does not check one.
+    embedding_api_key: str = ""
+    # Instruction prefixes prepended to queries / documents (instruction-tuned models). ``None``
+    # picks a built-in default from the model name (jina-code-* -> its nl2code prompts); set a
+    # string - even an empty one - to override.
+    embedding_query_prefix: str | None = None
+    embedding_document_prefix: str | None = None
+    # Extra JSON fields merged into every request body. The default asks vLLM to truncate inputs
+    # longer than its ``--max-model-len`` instead of rejecting the batch; other servers ignore the
+    # field, OpenAI's own API rejects unknown fields, so set it to ``{}`` there.
+    embedding_extra_body: dict[str, Any] = Field(
+        default_factory=lambda: {"truncate_prompt_tokens": -1}
+    )
+    # Seconds to wait for one embedding request (a local model on a laptop can need minutes).
+    embedding_timeout: float = 600.0
+
+    # --- Retrieval profile (engine constants that depend on the embedding model) ---
+    # "auto" (default) picks the profile fitted for ``embedding_model`` - "voyage" for voyage-*,
+    # "jina" for jina-*, voyage's constants for anything else; or name one explicitly. The three
+    # optional knobs override single values of the chosen profile (fitting runs; leave unset).
+    # See ``bce.core.orchestrator.profile``.
+    retrieval_profile: str = "auto"
+    retrieval_semantic_guard_ranks: int | None = None
+    retrieval_semantic_reserve_share: float | None = None
+    retrieval_semantic_rank_scale: float | None = None
 
     # --- Logging (JSON to stdout; optional rotating file sink) ---
     log_level: str = "INFO"
