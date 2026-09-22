@@ -97,9 +97,31 @@ Her MCP istemcisi aynı stdio komutunu ve ortamındaki veritabanı bağlantısı
 Editör için terminalde `bce serve-mcp` açık bırakmayın: stdout protokoldür, bu yüzden
 süreç sessiz kalır; IDE kendi kopyasını başlatır.
 
+**Editör başına tek komut.** Ajanın çalıştığı projede (indekslediğiniz depoda), motorun
+`.env` dosyasını göstererek çalıştırın:
+
+```bash
+bce --env-file /path/to/engine/.env cursor-init --repo-id my-service   # Cursor
+bce --env-file /path/to/engine/.env claude-init --repo-id my-service   # Claude Code
+```
+
+`cursor-init`, `.cursor/mcp.json` dosyasını (varsa üzerine birleştirerek) ve
+`.cursor/rules/bgts-context-engine.mdc` kuralını yazar. Kural ajana şunları söyler:
+`get_context_for_task` aracını *ilk iş olarak* çağır, döndürdüğü `dosya:satır`
+girdilerini doğrulanmış konum say ve onları grep ile arama, listelendi diye bir dosyayı
+düzenleme. `claude-init` ise `.mcp.json`, `CLAUDE.md` içinde işaretli bir bölüm ve
+`bce precontext` komutunu çalıştıran bir `UserPromptSubmit` kancası yazar: kanca her
+istemde grafı bir kez sorgular ve yanıtı ajana ilk turundan önce verir. Ajan
+benchmark'ında ölçülen akış budur (−%20 token, yarıya inen arama çıktısı, eşit veya daha
+iyi kontroller; React/TypeScript bir kod tabanında 14 görev, aynı model ve makine).
+Cursor'ın istem kancası bağlam ekleyemediği için orada bu işi kural yapar. `--no-hook`,
+`--repo-id` (tekrarlanabilir) ve `--bce-command` dosyaları ayarlar; iki komut da tekrar
+çalıştırılmaya uygundur.
+
 MCP yapılandırmasını ekledikten veya değiştirdikten sonra **Cursor veya VS Code'u
 yeniden başlatın** (veya Komut Paleti → “Developer: Reload Window”). Sunucu sekiz araçla
 (indeksleme açıkken on araçla) etkin görünmelidir. Ayrıntı: [docs/mcp.md](docs/mcp.md).
+Elle yapmanın karşılıkları:
 
 **Cursor** — her proje için kullanıcı yapılandırması `~/.cursor/mcp.json`, ya da yerelde
 kalan bir proje `.cursor/mcp.json` (dizin gitignore'dadır):
@@ -165,12 +187,14 @@ Dosya yolu listesi değil. Gerekçesi ekli, sıralanmış bir paket:
   },
   "context": {
     "items": [
-      { "symbol_id": "...refresh_session#88c2", "detail_level": "full",
+      { "symbol_id": "...refresh_session#88c2", "name": "refresh_session", "kind": "function",
+        "file_id": "my-service:src/auth/session.py", "line": 41, "detail_level": "full",
         "graph_distance": 0, "score": 11.42, "tokens": 214, "content": "def refresh_session(...)" },
-      { "symbol_id": "...SESSION_TTL#4b0d",     "detail_level": "signature",
+      { "symbol_id": "...SESSION_TTL#4b0d", "name": "SESSION_TTL", "kind": "constant",
+        "file_id": "my-service:src/auth/config.py", "line": 12, "detail_level": "signature",
         "graph_distance": 2, "score": 6.10,  "tokens": 31,  "content": "SESSION_TTL: int" }
     ],
-    "used_tokens": 2913, "budget": 4000, "included": 8, "skipped": 0
+    "used_tokens": 1388, "budget": 1500, "included": 20, "skipped": 0
   },
   "coverage": {
     "anchor_source_count": 3, "connected_component_ratio": 0.875,
@@ -192,7 +216,8 @@ gereken an. `commit_mismatch` ise indeksin çalışma ağacınızın gerisinde k
 
 **`detail_level`** graf mesafesiyle azalır: değiştirdiğiniz sembol tam gövdesiyle,
 komşuları imza olarak, dış halka `name @ dosya:satır` biçiminde gelir. Gerçekten ilgili
-sekiz sembolün 4000 token'a sığması bu sayede olur.
+yirmi sembolün 1500 token'a sığması bu sayede olur — bir ajanın her turda taşıyabileceği
+kadar kısa. Her öge `file_id` ve `line` da taşır; ajan sembolü aramak yerine dosyayı açar.
 
 ## Nasıl çalışır
 

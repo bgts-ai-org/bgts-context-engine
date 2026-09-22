@@ -36,6 +36,49 @@ After you add or change MCP config, **restart Cursor or VS Code** (or Command Pa
 “Developer: Reload Window”). The server should appear enabled with eight tools, or ten once
 indexing is enabled (see [Configuration](#configuration)).
 
+### One-command setup: `bce cursor-init`, `bce claude-init`
+
+Run in the project the agent works on, pointing at the engine's `.env`:
+
+```bash
+bce --env-file /path/to/engine/.env cursor-init --repo-id my-service
+bce --env-file /path/to/engine/.env claude-init --repo-id my-service
+```
+
+| | writes | merged into existing? |
+| --- | --- | --- |
+| `cursor-init` | `.cursor/mcp.json` — server entry with the absolute path of this `bce`, `serve-mcp --env-file …`, `PYTHONUTF8=1` | yes: other servers kept |
+| | `.cursor/rules/bgts-context-engine.mdc` — `alwaysApply` rule | overwritten (ours) |
+| `claude-init` | `.mcp.json` — same server entry | yes |
+| | `CLAUDE.md` — a section between `<!-- bgts-context-engine:begin/end -->` markers | yes: rest of the file kept |
+| | `.claude/settings.json` — `UserPromptSubmit` hook running `bce precontext` (skip with `--no-hook`) | yes: other hooks kept |
+
+Options: `--project DIR` (default `.`), `--repo-id ID` (repeatable; default: the directory
+name — must match the name the repository was indexed under), `--env-file PATH` (default:
+`bce --env-file` / `BCE_ENV_FILE`, then `<project>/.env`, then `./.env`; without one the
+server reads `BCE_*` from the editor's environment and the command says so), `--bce-command`
+(default: the running `bce`). Both commands are idempotent.
+
+**Why a rule and a hook, not just the server.** In the agent benchmark (a Cursor CLI agent
+on 14 tasks against a React/TypeScript codebase, plain vs. with the engine) the server alone made
+things worse: the agent asked the graph late, after a round of grep, or asked it eight times
+per task. Two changes turned that around — a rule that says *call it first, treat `file:line`
+as a verified location, do not edit a file because it was listed*, and handing the agent the
+graph's answer before its first turn. With both, on 14 tasks against the same model and
+machine: total tokens −20 %, grep/glob output −46 %, model turns −13 %, 73/73 checks passed
+against 72/73 for the plain agent, with 23 % fewer lines changed.
+
+The hook is Claude Code only. Its `UserPromptSubmit` event accepts `additionalContext`;
+Cursor's `beforeSubmitPrompt` can only allow or block a prompt, so under Cursor the rule
+carries the whole instruction and the agent makes the one call itself. `bce precontext`
+reads the hook JSON on stdin, runs `get_context_for_task` once for the prompt (skipping
+prompts under 20 characters and slash commands), and prints the context block capped at
+Claude Code's 10 000-character limit. It fails open: an unreachable database means a
+prompt without context, never a blocked prompt. `bce precontext --task "…"` prints the same
+block for inspection.
+
+### Manual configuration
+
 **Cursor** — `~/.cursor/mcp.json` for every project, or a local `.cursor/mcp.json` (the
 `.cursor/` directory is gitignored):
 
@@ -91,6 +134,7 @@ The variables that matter for MCP:
 | `BCE_EMBEDDING_BASE_URL` | the server URL when the provider is `openai` |
 | `BCE_EMBEDDING_API_KEY` | `openai` only; leave empty for a local server that does not check one |
 | `BCE_MCP_ALLOW_WRITE` | `false` by default; `true` adds the two indexing tools |
+| `BCE_MCP_TOOLS` | comma-separated names to advertise (default: all). Agents fetch a tool's schema before first use and chain small calls when many tools are offered, so a narrow catalog such as `get_context_for_task,find_references` costs fewer model turns. Unknown names fail at startup. |
 
 The encoder is built once at startup rather than on the first search. It pulls in numpy, and
 loading that lazily inside a tool call can stall for minutes on Windows; paying it during
@@ -111,7 +155,7 @@ boundary.
 
 ## Tools
 
-Eight read-only tools, plus two indexing tools when `BCE_MCP_ALLOW_WRITE=true`. Every one
+Eight read-only tools (narrow the catalog with `BCE_MCP_TOOLS`), plus two indexing tools when `BCE_MCP_ALLOW_WRITE=true`. Every one
 accepts an optional `locale` and returns the same envelope.
 
 ### Retrieval
@@ -168,8 +212,8 @@ This is the tool an agent should reach for first. Full options:
 | --- | --- | --- |
 | `task_text` | required | the task in prose |
 | `task_id` | `null` | for audit correlation and history lookup |
-| `max_candidates` | `8` | how many symbols to return |
-| `max_tokens` | `4000` | budget for the assembled context |
+| `max_candidates` | `20` | how many symbols to return (K). 20 is where recall@K flattened in the retrieval benchmarks for both fitted profiles |
+| `max_tokens` | `1500` | budget for the assembled context. Kept short because an agent re-sends it on every turn; raise it for longer snippets |
 | `commit` | `null` | pin the answer to a commit |
 | `repo_ids` | `null` | restrict to these repositories |
 | `explicit_symbols` | `null` | symbol names you already know are relevant |
@@ -210,8 +254,9 @@ A `get_context_for_task` payload contains:
 - **`anchors`** — `symbol_id` → the sources that nominated it (`explicit`, `history`,
   `lexical`, `semantic`). Reading this tells you *why* the engine looked where it did.
 - **`context`** — `items` plus `used_tokens`, `budget`, `included` and `skipped`. Each item
-  has `symbol_id`, `repo_id`, `detail_level`, `graph_distance`, `score`, `tokens` and
-  `content`. A non-zero `skipped` means relevant symbols were dropped for budget; raise
+  has `symbol_id`, `repo_id`, `detail_level`, `graph_distance`, `score`, `tokens`,
+  `content` and, where the graph knows them, `name`, `kind`, `file_id` and `line` (so an
+  agent opens the file directly instead of searching for the symbol). A non-zero `skipped` means relevant symbols were dropped for budget; raise
   `max_tokens` or lower `max_candidates`.
 - **`coverage`** — the trust report, ending in `confidence` of `high`, `medium` or `low`.
   See [docs/retrieval.md](retrieval.md#7-coverage-and-confidence). Treat `low` as a signal
@@ -281,7 +326,10 @@ whatever sits in front of the engine must authenticate the user and overwrite th
 | `bce reindex --repo P --name N [--since C] [--to HEAD]` | incremental re-index from git diff |
 | `bce resolve-symbol --name N [--repo R]` | Layer 1 from the shell |
 | `bce find-references --symbol-id S` | Layer 1 from the shell |
-| `bce context --task T [--max-tokens 4000] [--max-candidates 8]` | Layer 3 from the shell |
+| `bce context --task T [--max-tokens 1500] [--max-candidates 20]` | Layer 3 from the shell |
+| `bce precontext --task T [--repo-id R]` | the compact context block an agent prompt carries; without `--task` it is a Claude Code `UserPromptSubmit` hook |
+| `bce cursor-init [--project DIR] [--repo-id R] [--env-file PATH]` | write `.cursor/mcp.json` + the agent rule into a project |
+| `bce claude-init [--project DIR] [--repo-id R] [--env-file PATH] [--no-hook]` | write `.mcp.json`, a `CLAUDE.md` section and the pre-context hook |
 | `bce bench --cases F [--out F] [--determinism-runs 3]` | benchmark report as JSON |
 | `bce languages` | list supported languages; needs no database |
 | `bce serve [--host] [--port] [--reload] [--no-ui] [--env-file PATH]` | REST API and web UI |

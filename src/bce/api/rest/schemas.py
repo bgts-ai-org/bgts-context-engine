@@ -11,6 +11,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from bce.core.defaults import DEFAULT_MAX_CANDIDATES, DEFAULT_MAX_TOKENS
+
 
 class IndexRequest(BaseModel):
     repo_path: str = Field(..., description="Path to a local repository to index.")
@@ -64,9 +66,11 @@ class ContextForTaskRequest(BaseModel):
     task_id: str | None = Field(
         default=None, description="Optional Jira task id (audit + history)."
     )
-    max_tokens: int = Field(default=4000, ge=1, le=200000, description="Token budget for assembly.")
+    max_tokens: int = Field(
+        default=DEFAULT_MAX_TOKENS, ge=1, le=200000, description="Token budget for assembly."
+    )
     max_candidates: int = Field(
-        default=8, ge=1, le=100, description="Narrow to at most N candidates."
+        default=DEFAULT_MAX_CANDIDATES, ge=1, le=100, description="Narrow to at most N candidates."
     )
     commit: str | None = Field(default=None, description="Pinned commit sha (stage 0).")
     repo_ids: list[str] | None = Field(
@@ -108,7 +112,7 @@ class AssembleContextRequest(BaseModel):
     symbol_ids: list[str] = Field(
         ..., description="Symbols to deduplicate and fit into the budget."
     )
-    max_tokens: int = Field(default=4000, ge=1, le=200000)
+    max_tokens: int = Field(default=DEFAULT_MAX_TOKENS, ge=1, le=200000)
 
 
 class ToolResponse(BaseModel):

@@ -282,7 +282,7 @@ The scope filter runs *after* scoring and *before* narrowing. That ordering matt
 means a caller with access to two repositories out of five gets their own best eight
 results, not whatever survives from a global top eight.
 
-Narrowing to `max_candidates` (default 8) builds the answer one slot at a time from two
+Narrowing to `max_candidates` (default 20) builds the answer one slot at a time from two
 streams, in `narrow()` in `src/bce/core/orchestrator/orchestrator.py`: the embedding model's
 ranks (in rank order) and the engine's ranking (in score order). The list is returned **in
 selection order**, which makes it K-monotonic - `narrow(pool, n)` is exactly the first `n` of
@@ -345,7 +345,7 @@ anchors always filled that slice, meant a neighbour could never receive a task s
 
 ## 6. Assembly
 
-Selected candidates are rendered into a token budget, default 4000, estimated at four
+Selected candidates are rendered into a token budget, default 1500, estimated at four
 characters per token. Detail level falls off with distance:
 
 | Distance | Detail | What you get |

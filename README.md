@@ -97,9 +97,28 @@ Every MCP client uses the same stdio command plus the database in the environmen
 leave `bce serve-mcp` running in a terminal for the editor: stdout is the protocol, so the
 process stays silent, and the IDE starts its own copy.
 
+**One command per editor.** Run it in the project the agent works on (the repository you
+indexed), pointing at the engine's `.env`:
+
+```bash
+bce --env-file /path/to/engine/.env cursor-init --repo-id my-service   # Cursor
+bce --env-file /path/to/engine/.env claude-init --repo-id my-service   # Claude Code
+```
+
+`cursor-init` writes `.cursor/mcp.json` (merged into an existing one) and the rule
+`.cursor/rules/bgts-context-engine.mdc`, which tells the agent to call
+`get_context_for_task` *first*, treat its `file:line` entries as verified locations instead
+of grepping for them, and not to edit a file just because it was listed. `claude-init`
+writes `.mcp.json`, a marked section in `CLAUDE.md`, and a `UserPromptSubmit` hook
+(`bce precontext`) that runs the graph once per prompt and hands the agent the answer
+before its first turn — the flow the agent benchmark measured (−20 % tokens, half the search
+output, same or better checks; 14 tasks on a React/TypeScript codebase, same model and machine).
+Cursor's prompt hook cannot add context, so there the rule does that job. `--no-hook`,
+`--repo-id` (repeatable) and `--bce-command` adjust the files; both commands are safe to rerun.
+
 After you add or change the MCP config, **restart Cursor or VS Code** (or Command Palette
 → “Developer: Reload Window”). The server should then show as enabled with eight tools (ten with indexing enabled).
-Setup detail: [docs/mcp.md](docs/mcp.md).
+Setup detail: [docs/mcp.md](docs/mcp.md). The manual equivalents:
 
 **Cursor** — user config `~/.cursor/mcp.json` (applies to every project), or a project
 `.cursor/mcp.json` that stays local (the directory is gitignored):
@@ -164,12 +183,14 @@ Not a list of file paths. A ranked pack, with the reasoning attached:
   },
   "context": {
     "items": [
-      { "symbol_id": "...refresh_session#88c2", "detail_level": "full",
+      { "symbol_id": "...refresh_session#88c2", "name": "refresh_session", "kind": "function",
+        "file_id": "my-service:src/auth/session.py", "line": 41, "detail_level": "full",
         "graph_distance": 0, "score": 11.42, "tokens": 214, "content": "def refresh_session(...)" },
-      { "symbol_id": "...SESSION_TTL#4b0d",     "detail_level": "signature",
+      { "symbol_id": "...SESSION_TTL#4b0d", "name": "SESSION_TTL", "kind": "constant",
+        "file_id": "my-service:src/auth/config.py", "line": 12, "detail_level": "signature",
         "graph_distance": 2, "score": 6.10,  "tokens": 31,  "content": "SESSION_TTL: int" }
     ],
-    "used_tokens": 2913, "budget": 4000, "included": 8, "skipped": 0
+    "used_tokens": 1388, "budget": 1500, "included": 20, "skipped": 0
   },
   "coverage": {
     "anchor_source_count": 3, "connected_component_ratio": 0.875,
@@ -190,8 +211,10 @@ could not corroborate it — the moment for an agent to ask a follow-up question
 editing. `commit_mismatch` means the index is behind your working tree.
 
 **`detail_level`** falls off with graph distance: the symbol you are changing arrives in
-full, its neighbours as signatures, the outer ring as `name @ file:line`. That is how eight
-genuinely relevant symbols fit in 4000 tokens.
+full, its neighbours as signatures, the outer ring as `name @ file:line`. That is how twenty
+genuinely relevant symbols fit in 1500 tokens — short enough for an agent to carry on every
+turn. Every item also names its `file_id` and `line`, so the agent opens the file instead of
+searching for the symbol.
 
 ## How it works
 

@@ -118,17 +118,22 @@ def assemble(
                 continue
             level = DetailLevel.REFERENCE
         used += cost
-        assembled.append(
-            {
-                "symbol_id": item.get("symbol_id"),
-                "repo_id": item.get("repo_id"),
-                "detail_level": str(level),
-                "graph_distance": distance,
-                "score": item.get("score"),
-                "tokens": cost,
-                "content": content,
-            }
-        )
+        entry: dict[str, Any] = {
+            "symbol_id": item.get("symbol_id"),
+            "repo_id": item.get("repo_id"),
+            "detail_level": str(level),
+            "graph_distance": distance,
+            "score": item.get("score"),
+            "tokens": cost,
+            "content": content,
+        }
+        # Where the symbol lives. Without these an agent has to search the tree for the file
+        # behind a symbol_id (the module path does not say .ts vs .tsx, nor the line), which costs
+        # it a tool call per item; the cost of carrying them is a few bytes.
+        for key in ("name", "kind", "file_id", "line"):
+            if item.get(key) is not None:
+                entry[key] = item[key]
+        assembled.append(entry)
 
     return {
         "items": assembled,

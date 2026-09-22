@@ -249,6 +249,7 @@ class OpenAICompatEncoder(Encoder):
         document_prefix: str | None = None,
         extra_body: dict[str, Any] | None = None,
         timeout: float = 600.0,
+        query_timeout: float | None = None,
     ) -> None:
         if not base_url.strip():
             raise EncoderConfigError(
@@ -269,14 +270,20 @@ class OpenAICompatEncoder(Encoder):
         self.document_prefix = auto_document if document_prefix is None else document_prefix
         self.extra_body = dict(extra_body or {})
         self.timeout = timeout
+        # Query-time embedding is one short text: bound the wait so a search tool call fails (and
+        # can degrade to lexical) instead of hanging on a stalled connection. None = same as timeout.
+        self.query_timeout = min(query_timeout, timeout) if query_timeout else timeout
         self._headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
-    def _request(self, texts: list[str]) -> list[list[float]]:
+    def _request(
+        self, texts: list[str], *, timeout: float | None = None, attempts: int = _HTTP_ATTEMPTS
+    ) -> list[list[float]]:
         body = {**self.extra_body, "model": self.model, "input": texts}
+        wait = self.timeout if timeout is None else timeout
         last: Exception | None = None
-        for attempt in range(1, _HTTP_ATTEMPTS + 1):
+        for attempt in range(1, attempts + 1):
             try:
-                payload = _post_json(self.url, body, self._headers, self.timeout)
+                payload = _post_json(self.url, body, self._headers, wait)
                 break
             except urllib.error.HTTPError as exc:
                 detail = exc.read().decode("utf-8", "replace")[:500]
@@ -289,7 +296,7 @@ class OpenAICompatEncoder(Encoder):
                 last = RuntimeError(f"embedding server error ({exc.code}): {detail}")
             except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as exc:
                 last = RuntimeError(f"embedding server unreachable at {self.url}: {exc}")
-            if attempt < _HTTP_ATTEMPTS:
+            if attempt < attempts:
                 time.sleep(_HTTP_RETRY_SECONDS * attempt)
         else:
             assert last is not None
@@ -311,7 +318,8 @@ class OpenAICompatEncoder(Encoder):
         return self._embed([text], self.document_prefix)[0]
 
     def encode_query(self, text: str) -> list[float]:
-        return self._embed([text], self.query_prefix)[0]
+        # two bounded attempts: a stalled connection costs at most ~2 x query_timeout + 2 s
+        return self._request([self.query_prefix + text], timeout=self.query_timeout, attempts=2)[0]
 
     def encode_many(self, texts: list[str]) -> list[list[float]]:
         if not texts:
@@ -357,6 +365,7 @@ def build_default_encoder(dim: int | None = None, model_id: str | None = None) -
             document_prefix=settings.embedding_document_prefix,
             extra_body=settings.embedding_extra_body,
             timeout=settings.embedding_timeout,
+            query_timeout=settings.embedding_query_timeout,
         )
 
     if provider != "hashing":

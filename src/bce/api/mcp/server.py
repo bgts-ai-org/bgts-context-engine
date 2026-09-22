@@ -44,8 +44,9 @@ def build_server(name: str = "bgts-context-engine") -> Any:
     from bce.config import get_settings
     from bce.storage.relational.db import connection
 
-    allow_write = get_settings().mcp_allow_write
-    specs = available_tool_specs(allow_write=allow_write)
+    settings = get_settings()
+    allow_write = settings.mcp_allow_write
+    specs = available_tool_specs(allow_write=allow_write, allowlist=settings.mcp_tool_allowlist)
     server = Server(name)
 
     @server.list_tools()
@@ -56,6 +57,8 @@ def build_server(name: str = "bgts-context-engine") -> Any:
         ]
 
     def _dispatch_blocking(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        if name not in specs:
+            raise KeyError(f"tool '{name}' is not advertised by this server (BCE_MCP_TOOLS)")
         with connection() as conn:
             try:
                 result = dispatch_tool(conn, name, arguments, allow_write=allow_write)
