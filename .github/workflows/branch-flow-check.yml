@@ -1,0 +1,30 @@
+name: Branch Flow Check
+
+on:
+  pull_request:
+    branches:
+      - main
+      - releases
+
+jobs:
+  validate-branch-flow:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Validate source branch
+        shell: bash
+        run: |
+          echo "Source branch: ${{ github.head_ref }}"
+          echo "Target branch: ${{ github.base_ref }}"
+
+          if [[ "${{ github.base_ref }}" == "main" && "${{ github.head_ref }}" != "releases" ]]; then
+            echo "ERROR: Only releases -> main pull requests are allowed."
+            exit 1
+          fi
+
+          if [[ "${{ github.base_ref }}" == "releases" && "${{ github.head_ref }}" != "development" ]]; then
+            echo "ERROR: Only development -> releases pull requests are allowed."
+            exit 1
+          fi
+
+          echo "Branch flow is valid."
