@@ -100,6 +100,11 @@ class Settings(BaseSettings):
     )
     # Seconds to wait for one embedding request (a local model on a laptop can need minutes).
     embedding_timeout: float = 600.0
+    # Seconds to wait when embedding a single *query* at search time (openai provider). Queries are
+    # one short text, so a healthy server answers in well under a second; a longer wait only means
+    # the network stalled. Kept short so a tool call returns (possibly without its semantic anchor)
+    # before an agent's own MCP timeout (Cursor: 60 s) kills it. Each query gets two attempts.
+    embedding_query_timeout: float = 10.0
 
     # --- Retrieval profile (engine constants that depend on the embedding model) ---
     # "auto" (default) picks the profile fitted for ``embedding_model`` - "voyage" for voyage-*,
@@ -128,6 +133,15 @@ class Settings(BaseSettings):
     # only read-only tools and runs no job workers. Turning it on also starts a worker pool inside
     # the MCP process, so queued indexing runs without a separate ``bce serve``.
     mcp_allow_write: bool = False
+    # Which tools the MCP server advertises (comma-separated names; empty = all). Agents fetch a
+    # tool's schema before using it and tend to chain small calls when many tools are on offer, so a
+    # narrow catalog (e.g. "get_context_for_task,find_references") costs fewer model turns.
+    mcp_tools: str = ""
+
+    @property
+    def mcp_tool_allowlist(self) -> frozenset[str] | None:
+        names = frozenset(n.strip() for n in self.mcp_tools.split(",") if n.strip())
+        return names or None
 
     @property
     def dsn(self) -> str:

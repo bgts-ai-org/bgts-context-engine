@@ -16,8 +16,8 @@ authors:
     affiliation: BGTS
 repository-code: "https://github.com/bgts-ai-org/bgts-context-engine"
 license: MIT
-version: 0.1.0
-date-released: "2026-09-08"
+version: 0.2.4
+date-released: "2026-09-22"
 keywords:
   - context engineering
   - code graph

@@ -5,6 +5,7 @@
 a localized message (P1 i18n boundary).
 """
 
+from bce.core.defaults import DEFAULT_MAX_CANDIDATES, DEFAULT_MAX_TOKENS
 from bce.tools.layer3.orchestration import (
     assemble_context,
     expand_blast_radius,
@@ -14,6 +15,8 @@ from bce.tools.layer3.orchestration import (
 )
 
 __all__ = [
+    "DEFAULT_MAX_CANDIDATES",
+    "DEFAULT_MAX_TOKENS",
     "get_context_for_task",
     "expand_blast_radius",
     "suggest_change_sites",

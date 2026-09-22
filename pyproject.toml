@@ -106,6 +106,7 @@ include = ["bce*"]
 bce = [
     "core/i18n/catalogs/*.json",
     "storage/relational/migrations/*.sql",
+    "integrations/templates/*",
     # Compiled frontend served at /ui; vendored by scripts/build_ui.py before a release build.
     "api/rest/static/**/*",
 ]

@@ -4,6 +4,7 @@ include README.tr.md
 include CHANGELOG.md
 recursive-include src/bce/core/i18n/catalogs *.json
 recursive-include src/bce/storage/relational/migrations *.sql
+recursive-include src/bce/integrations/templates *.mdc *.md
 
 # Compiled frontend, vendored by scripts/build_ui.py before a release build.
 recursive-include src/bce/api/rest/static *
