@@ -26,6 +26,7 @@ from typing import Any
 import psycopg
 
 from bce.core.auth.scope import Principal, ScopeFilter
+from bce.core.defaults import DEFAULT_MAX_CANDIDATES, DEFAULT_MAX_TOKENS
 from bce.core.i18n import get_translator
 from bce.jobs.store import enqueue_job, get_job, list_jobs
 from bce.storage.graph.client import GraphClient
@@ -57,10 +58,21 @@ TOOL_SPECS: dict[str, dict[str, Any]] = {
         ),
         "schema": _schema(
             {
-                "task_text": _STR,
+                "task_text": {
+                    **_STR,
+                    "description": "The task in prose; pass the full request text, once.",
+                },
                 "task_id": _STR,
-                "max_tokens": _INT,
-                "max_candidates": _INT,
+                "max_tokens": {
+                    **_INT,
+                    "default": DEFAULT_MAX_TOKENS,
+                    "description": "Token budget of the assembled context.",
+                },
+                "max_candidates": {
+                    **_INT,
+                    "default": DEFAULT_MAX_CANDIDATES,
+                    "description": "How many symbols to return (K).",
+                },
                 "commit": _STR,
                 "repo_ids": _STR_LIST,
                 "explicit_symbols": _STR_LIST,
@@ -137,11 +149,24 @@ TOOL_SPECS: dict[str, dict[str, Any]] = {
 }
 
 
-def available_tool_specs(*, allow_write: bool) -> dict[str, dict[str, Any]]:
-    """The catalog to advertise: write tools are hidden unless ``allow_write`` is set."""
-    if allow_write:
-        return dict(TOOL_SPECS)
-    return {name: spec for name, spec in TOOL_SPECS.items() if name not in WRITE_TOOLS}
+def available_tool_specs(
+    *, allow_write: bool, allowlist: frozenset[str] | None = None
+) -> dict[str, dict[str, Any]]:
+    """The catalog to advertise: write tools are hidden unless ``allow_write`` is set, and an
+    ``allowlist`` (``BCE_MCP_TOOLS``) narrows it further. Unknown names in the allowlist raise, so a
+    typo does not silently publish nothing."""
+    if allowlist is not None:
+        unknown = sorted(allowlist - set(TOOL_SPECS))
+        if unknown:
+            raise ValueError(
+                f"BCE_MCP_TOOLS names unknown tools {unknown}; known: {sorted(TOOL_SPECS)}"
+            )
+    specs = {
+        name: spec
+        for name, spec in TOOL_SPECS.items()
+        if (allow_write or name not in WRITE_TOOLS) and (allowlist is None or name in allowlist)
+    }
+    return specs
 
 
 def dispatch_tool(

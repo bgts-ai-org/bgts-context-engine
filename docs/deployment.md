@@ -175,7 +175,8 @@ Every setting is an environment variable prefixed `BCE_`, also read from `.env`.
 | `BCE_EMBEDDING_API_KEY` | empty | `openai` only: bearer token, if the server checks one |
 | `BCE_EMBEDDING_QUERY_PREFIX` / `_DOCUMENT_PREFIX` | unset | `openai` only: instruction prefixes; unset picks a default from the model name |
 | `BCE_EMBEDDING_EXTRA_BODY` | `{"truncate_prompt_tokens": -1}` | `openai` only: JSON merged into every request (vLLM truncation; use `{}` for OpenAI) |
-| `BCE_EMBEDDING_TIMEOUT` | `600` | `openai` only: seconds per request |
+| `BCE_EMBEDDING_TIMEOUT` | `600` | `openai` only: seconds per request while indexing |
+| `BCE_EMBEDDING_QUERY_TIMEOUT` | `10` | `openai` only: seconds per query embedding at search time (two attempts). On failure the search tools answer from lexical and structural anchors alone and say so in `coverage`, instead of hanging past an agent's MCP timeout |
 
 The default `hashing` provider needs no API key and no network. It is deterministic
 arithmetic over token digests, so it reproduces exactly — worse at semantic recall than a

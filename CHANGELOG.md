@@ -7,6 +7,72 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-09-22
+
+This release turns the agent benchmark (a Cursor CLI agent on 14 tasks against a
+React/TypeScript codebase, plain vs. with the engine) into product behaviour. The MCP server alone made a Cursor agent *worse*: it asked the graph late (after
+a round of grep) or eight times per task, and the answer it got back had no file or line.
+With one advertised tool, a rule that says "call it first and treat `file:line` as a
+verified location", the answer handed over before the first turn, and a shorter context
+budget, the same agent on the same 14 tasks, model and machine used 20 % fewer tokens,
+produced 46 % less grep/glob output and 13 % fewer model turns, passed 73/73 checks against
+72/73, and changed 23 % fewer lines. Everything below is what that took.
+
+### Added
+
+- `bce cursor-init [--project DIR] [--repo-id ID]... [--env-file PATH] [--bce-command X]`:
+  writes a project's `.cursor/mcp.json` (merged into an existing one; other servers are
+  kept) with the absolute path of the running `bce`, `serve-mcp --env-file …` and
+  `PYTHONUTF8=1`, plus the `alwaysApply` rule `.cursor/rules/bgts-context-engine.mdc`. The
+  rule ships in the wheel as a template, so every install gets the same instruction: call
+  `get_context_for_task` first with the full task text, open the returned `file:line`
+  entries directly instead of grepping for them, treat the list as places to inspect rather
+  than files to edit, never repeat a call with the same text. Idempotent.
+- `bce claude-init …[--no-hook]`: the Claude Code counterpart — `.mcp.json` (merged), a
+  section in `CLAUDE.md` between `<!-- bgts-context-engine:begin/end -->` markers (the rest
+  of the file is kept), and by default a `UserPromptSubmit` hook in `.claude/settings.json`
+  (other hooks kept) that runs `bce precontext` before every prompt. Cursor gets no hook: its
+  `beforeSubmitPrompt` event can only allow or block a prompt, so there the rule carries the
+  instruction and the agent makes the one call itself.
+- `bce precontext [--task TEXT] [--repo-id ID]...`: the compact "Code context for this
+  task" block an agent prompt carries — a file list in rank order, then one line per symbol
+  (`path:line kind name distance`) with a snippet of at most 12 lines where the snippet says
+  more than the name; about 5 k characters at the default budget. Without `--task` it is the
+  Claude Code hook: reads the hook JSON on stdin, skips prompts under 20 characters and slash
+  commands, prints `hookSpecificOutput.additionalContext` capped at Claude Code's
+  10 000-character limit, and fails open (an unreachable database is a prompt without
+  context, never a blocked prompt). `bce.integrations.precontext.render_context_markdown`
+  is the renderer, for other hosts.
+- `BCE_MCP_TOOLS`: comma-separated names the MCP server advertises (default: all read
+  tools). Agents fetch a tool's schema before first use and chain small calls when many
+  tools are on offer; the benchmark ran with `get_context_for_task` alone. Unknown names
+  fail at startup, and a tool not advertised cannot be dispatched either.
+- `BCE_EMBEDDING_QUERY_TIMEOUT` (10 s, two attempts): the wait for embedding a single
+  *query* at search time, separate from the indexing timeout (600 s). When it expires,
+  `get_context_for_task` and `suggest_change_sites` answer from lexical and structural
+  anchors alone — visible as lower `coverage.confidence` — instead of failing after having
+  waited past an agent's MCP timeout (Cursor: 60 s). Motivated by a RunPod TCP proxy that
+  stalled connects for 19–67 s during the benchmark.
+- Context items carry `name`, `kind`, `file_id` and `line` next to `symbol_id`. Without
+  them an agent had to search the tree for the file behind every symbol id (the module path
+  does not say `.ts` vs `.tsx`, nor the line) — one tool call, one model turn, per item.
+
+### Changed
+
+- **Defaults: `max_candidates` 8 → 20, `max_tokens` 4000 → 1500**, on every surface (CLI
+  `bce context`, REST, MCP schema defaults, and the `bce.core.defaults` module they all
+  read). K=20 is where recall@K flattened in the PR replay for both fitted profiles and
+  what the agent benchmark ran with. The budget is shorter because an agent re-sends the
+  context on every turn: at 1500 it travelled as ~1.3 k tokens per turn and still halved
+  the agent's search output; 4000 travelled as ~4 k per turn for no further gain. Callers
+  wanting longer snippets pass `max_tokens` per request; the assembler still degrades items
+  to reference level rather than dropping them.
+- `.env.example` shows `voyage-code-4` (the model the voyage profile was fitted on) as the
+  Voyage example and documents `BCE_EMBEDDING_QUERY_TIMEOUT` and `BCE_MCP_TOOLS`. The code
+  default stays `voyage-code-3` so indexes built with it keep matching.
+- `server.json` describes the catalog as eight read-only tools plus two write tools rather
+  than "14 tools".
+
 ## [0.2.3] - 2026-09-21
 
 ### Added
@@ -304,7 +370,8 @@ First public release.
 - Docker Compose deployment with PostgreSQL, Apache AGE and pgvector preconfigured.
 - `server.json` manifest describing the stdio server for the official MCP registry.
 
-[Unreleased]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v0.2.3...HEAD
+[Unreleased]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v0.2.4...HEAD
+[0.2.4]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v0.2.0...v0.2.1

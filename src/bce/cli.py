@@ -9,10 +9,16 @@ Commands:
 - ``bench-prs``        PR replay ablation: Voyage alone vs Voyage + BCE (``prepare`` / ``run``)
 - ``resolve-symbol``   Layer-1: resolve a symbol by name
 - ``find-references``  Layer-1: find references to a symbol_id
+- ``context``          Layer-3: assemble the context package for a task
+- ``precontext``       the compact context block an agent prompt carries (also a Claude Code hook)
+- ``cursor-init``      write .cursor/mcp.json + the agent rule into a project
+- ``claude-init``      write .mcp.json, a CLAUDE.md section and the pre-context hook into a project
 - ``languages``        list supported languages/extensions (no database needed)
 - ``serve``            run the REST API (FastAPI/uvicorn)
+- ``serve-mcp``        run the MCP server over stdio
 
-Read/write commands need a running PostgreSQL (Apache AGE + pgvector); ``languages`` does not.
+Read/write commands need a running PostgreSQL (Apache AGE + pgvector); ``languages``,
+``cursor-init`` and ``claude-init`` do not.
 """
 
 from __future__ import annotations
@@ -22,6 +28,8 @@ import sys
 from pathlib import Path
 
 import typer
+
+from bce.core.defaults import DEFAULT_MAX_CANDIDATES, DEFAULT_MAX_TOKENS
 
 app = typer.Typer(add_completion=False, help="BGTS Context Engine CLI")
 
@@ -382,9 +390,11 @@ def find_references_cmd(
 @app.command()
 def context(
     task: str = typer.Option(..., "--task", help="Task title + description text"),
-    max_tokens: int = typer.Option(4000, "--max-tokens", help="Token budget for assembly"),
+    max_tokens: int = typer.Option(
+        DEFAULT_MAX_TOKENS, "--max-tokens", help="Token budget for assembly"
+    ),
     max_candidates: int = typer.Option(
-        8, "--max-candidates", help="Narrow to at most N candidates"
+        DEFAULT_MAX_CANDIDATES, "--max-candidates", help="Narrow to at most N candidates (K)"
     ),
     commit: str | None = typer.Option(None, "--commit", help="Pinned commit sha (stage 0)"),
     locale: str | None = typer.Option(None, "--locale", help="Message locale (en/tr)"),
@@ -410,6 +420,123 @@ def context(
     if result["message"]:
         typer.echo(result["message"])
     _echo_json(result["payload"])
+
+
+@app.command()
+def precontext(
+    task: str | None = typer.Option(
+        None,
+        "--task",
+        help="Task text. Omit it to read a Claude Code UserPromptSubmit hook payload from stdin.",
+    ),
+    repo_id: list[str] = typer.Option(
+        [], "--repo-id", help="Restrict to these repository ids (repeatable)"
+    ),
+    max_candidates: int = typer.Option(DEFAULT_MAX_CANDIDATES, "--max-candidates", help="K"),
+    max_tokens: int = typer.Option(DEFAULT_MAX_TOKENS, "--max-tokens", help="Token budget"),
+) -> None:
+    """The compact "Code context for this task" block an agent starts with (markdown).
+
+    With ``--task`` it prints the block. Without it, it acts as a Claude Code ``UserPromptSubmit``
+    hook: reads the hook JSON on stdin and prints the ``additionalContext`` response, or nothing
+    when the prompt is not a task. It never fails the prompt: errors go to stderr, exit code 0.
+    """
+    from bce.integrations.precontext import claude_hook_response, precontext_for_task
+
+    if task is not None:
+        pre = precontext_for_task(
+            task, repo_ids=repo_id or None, max_candidates=max_candidates, max_tokens=max_tokens
+        )
+        typer.echo(pre["text"], nl=False)
+        return
+    try:
+        payload = json.loads(sys.stdin.read() or "{}")
+    except json.JSONDecodeError as exc:
+        typer.echo(f"bce precontext: stdin is not JSON ({exc})", err=True)
+        return
+    response = claude_hook_response(payload, repo_ids=repo_id or None)
+    if response is not None:
+        typer.echo(json.dumps(response, ensure_ascii=False))
+
+
+def _agent_init_common(
+    project: Path, repo_id: list[str], env_file: Path | None, bce_command: str | None
+) -> tuple[Path, list[str], str, Path | None]:
+    from bce.integrations.agents import resolve_bce_command, resolve_env_file
+
+    project = project.resolve()
+    if not project.is_dir():
+        raise typer.BadParameter(f"not a directory: {project}", param_hint="--project")
+    repo_ids = [r.strip() for r in repo_id if r.strip()] or [project.name]
+    try:
+        resolved_env = resolve_env_file(env_file, project)
+    except FileNotFoundError as exc:
+        raise typer.BadParameter(str(exc), param_hint="--env-file") from None
+    return project, repo_ids, resolve_bce_command(bce_command), resolved_env
+
+
+def _report_setup(result, env_file: Path | None) -> None:
+    for p in result.written:
+        typer.echo(f"wrote {p}")
+    if env_file is None:
+        typer.secho(
+            "No .env found: the MCP server will read BCE_* from the editor's environment. Pass "
+            "--env-file PATH (or run `bce --env-file PATH ...`) to point it at your engine "
+            "configuration.",
+            err=True,
+            fg=typer.colors.YELLOW,
+        )
+    for n in result.notes:
+        typer.echo(f"- {n}")
+
+
+_INIT_PROJECT_HELP = "Project directory to configure (default: current directory)"
+_INIT_REPO_HELP = "Repository id as indexed in the engine (repeatable; default: the directory name)"
+_INIT_ENV_HELP = "The engine .env the MCP server loads (default: --env-file/BCE_ENV_FILE, then <project>/.env, then ./.env)"
+_INIT_CMD_HELP = "Executable the editor spawns (default: this bce)"
+
+
+@app.command(name="cursor-init")
+def cursor_init(
+    project: Path = typer.Option(Path("."), "--project", help=_INIT_PROJECT_HELP),
+    repo_id: list[str] = typer.Option([], "--repo-id", help=_INIT_REPO_HELP),
+    env_file: Path | None = typer.Option(None, "--env-file", help=_INIT_ENV_HELP),
+    bce_command: str | None = typer.Option(None, "--bce-command", help=_INIT_CMD_HELP),
+) -> None:
+    """Connect a project to the engine for Cursor: .cursor/mcp.json + the agent rule.
+
+    Merges into an existing mcp.json (other servers are kept) and is safe to rerun.
+    """
+    from bce.integrations.agents import setup_cursor
+
+    project, repo_ids, cmd, env = _agent_init_common(project, repo_id, env_file, bce_command)
+    _report_setup(setup_cursor(project, repo_ids=repo_ids, bce_cmd=cmd, env_file=env), env)
+
+
+@app.command(name="claude-init")
+def claude_init(
+    project: Path = typer.Option(Path("."), "--project", help=_INIT_PROJECT_HELP),
+    repo_id: list[str] = typer.Option([], "--repo-id", help=_INIT_REPO_HELP),
+    env_file: Path | None = typer.Option(None, "--env-file", help=_INIT_ENV_HELP),
+    bce_command: str | None = typer.Option(None, "--bce-command", help=_INIT_CMD_HELP),
+    hook: bool = typer.Option(
+        True,
+        "--hook/--no-hook",
+        help="Install the UserPromptSubmit hook that adds the graph's answer to every prompt",
+    ),
+) -> None:
+    """Connect a project to the engine for Claude Code: .mcp.json, a CLAUDE.md section and, by
+    default, the pre-computed context hook in .claude/settings.json.
+
+    Merges into existing files (other servers, hooks and CLAUDE.md content are kept) and is safe
+    to rerun.
+    """
+    from bce.integrations.agents import setup_claude
+
+    project, repo_ids, cmd, env = _agent_init_common(project, repo_id, env_file, bce_command)
+    _report_setup(
+        setup_claude(project, repo_ids=repo_ids, bce_cmd=cmd, env_file=env, hook=hook), env
+    )
 
 
 @app.command()

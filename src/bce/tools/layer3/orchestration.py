@@ -15,6 +15,7 @@ from typing import Any
 from bce.core.assembler import assemble
 from bce.core.auth.scope import ScopeFilter
 from bce.core.coverage import compute_coverage, coverage_message
+from bce.core.defaults import DEFAULT_MAX_CANDIDATES, DEFAULT_MAX_TOKENS
 from bce.core.i18n import get_translator
 from bce.core.orchestrator import RetrievalOrchestrator, bulk
 from bce.core.orchestrator.anchors import AnchorResult, find_anchors
@@ -37,6 +38,27 @@ AUTO_SEMANTIC_LIMIT = 30
 #: Over-fetch factor: test functions usually dominate the raw nearest neighbours of a task
 #: description (they literally spell it out), so fetch more and keep the first non-test hits.
 _AUTO_SEMANTIC_OVERFETCH = 4
+
+
+def _auto_semantic_or_none(
+    tool: str,
+    store: VectorStore,
+    task_text: str,
+    repo_ids: list[str] | None,
+    repository: GraphRepository | None,
+) -> list[str] | None:
+    """:func:`_auto_semantic_candidates`, degraded to ``None`` when the embedding server cannot be
+    reached. The semantic anchor is one of several signals; losing it lowers coverage/confidence
+    (which the caller sees in the report) but the lexical and structural anchors still produce an
+    answer. Failing the whole tool call instead would leave the agent with nothing, after having
+    waited on a stalled network."""
+    try:
+        return _auto_semantic_candidates(store, task_text, repo_ids, repository)
+    except Exception as exc:
+        logger.warning(
+            "%s: semantic anchor skipped, embedding query failed", tool, extra={"detail": str(exc)}
+        )
+        return None
 
 
 def _auto_semantic_candidates(
@@ -104,8 +126,8 @@ def get_context_for_task(
     repository: GraphRepository,
     *,
     task_text: str,
-    max_tokens: int = 4000,
-    max_candidates: int = 8,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
+    max_candidates: int = DEFAULT_MAX_CANDIDATES,
     commit: str | None = None,
     repo_ids: list[str] | None = None,
     explicit_symbols: list[str] | None = None,
@@ -129,10 +151,12 @@ def get_context_for_task(
     # D1: automatic semantic anchor when the caller did not pre-compute one (opt-out: auto_semantic).
     if semantic_candidates is None and auto_semantic and store is not None:
         stage = time.perf_counter()
-        semantic_candidates = _auto_semantic_candidates(store, task_text, repo_ids, repository)
+        semantic_candidates = _auto_semantic_or_none(
+            "get_context_for_task", store, task_text, repo_ids, repository
+        )
         logger.debug(
             "get_context_for_task: auto semantic anchors",
-            extra={"count": len(semantic_candidates), "duration_ms": _elapsed_ms(stage)},
+            extra={"count": len(semantic_candidates or []), "duration_ms": _elapsed_ms(stage)},
         )
 
     stage = time.perf_counter()
@@ -351,7 +375,7 @@ def suggest_change_sites(
     repository: GraphRepository,
     *,
     task_text: str,
-    max_candidates: int = 8,
+    max_candidates: int = DEFAULT_MAX_CANDIDATES,
     commit: str | None = None,
     repo_ids: list[str] | None = None,
     explicit_symbols: list[str] | None = None,
@@ -382,11 +406,13 @@ def suggest_change_sites(
     # D1: automatic semantic anchor when the caller did not pre-compute one (opt-out: auto_semantic).
     if semantic_candidates is None and auto_semantic and store is not None:
         stage = time.perf_counter()
-        semantic_candidates = _auto_semantic_candidates(store, task_text, repo_ids, repository)
+        semantic_candidates = _auto_semantic_or_none(
+            "suggest_change_sites", store, task_text, repo_ids, repository
+        )
         timings["semantic_ms"] = _elapsed_ms(stage)
         logger.debug(
             "suggest_change_sites: auto semantic anchors",
-            extra={"count": len(semantic_candidates), "duration_ms": timings["semantic_ms"]},
+            extra={"count": len(semantic_candidates or []), "duration_ms": timings["semantic_ms"]},
         )
 
     stage = time.perf_counter()
@@ -496,7 +522,7 @@ def assemble_context(
     repository: GraphRepository,
     *,
     symbol_ids: list[str],
-    max_tokens: int = 4000,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
     scope: ScopeFilter | None = None,
     locale: str | None = None,
 ) -> dict[str, Any]:
