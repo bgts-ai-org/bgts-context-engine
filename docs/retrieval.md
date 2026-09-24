@@ -13,7 +13,7 @@ and the same retrieval profile, produces the same context pack byte for byte.
 ```
 task text
    │
-   ├─ 1. anchors        four independent sources vote on entry points, with evidence strength
+   ├─ 1. anchors        seven independent sources vote on entry points, with evidence strength
    ├─ 2. expansion      fixed-shape graph walk outward from the best-evidenced anchors
    ├─ 3. features       degree, distance, reference kind, provenance, kind, task signal
    ├─ 4. scoring        weighted sum, deterministic sort
@@ -29,16 +29,23 @@ Stages 1 to 6 live in `src/bce/core/orchestrator/` and `src/bce/core/scoring/`; 
 
 ## 1. Anchors
 
-An anchor is a symbol the engine is confident the task is *about*. Four sources nominate
+An anchor is a symbol the engine is confident the task is *about*. Seven sources nominate
 anchors independently, and each anchor remembers which sources nominated it **and how much
 evidence** each one brought, as a strength in `[0, 1]`.
 
 | Source | What it looks at | Evidence | Limit |
 | --- | --- | --- | --- |
 | `explicit` | Identifier-looking names, backticked spans, `Class.method` tails and route paths in the task text, or names passed by the caller | `1.0 / √matches`, halved for a member echoing its container's name | names matching more than 8 symbols are dropped |
+| `path` | Source-file paths the task names — `src/utils/auth.ts`, a bare `Layout.tsx`, the `File "/opt/app/flask/app.py"` of a traceback — matched as a suffix of indexed file ids (longest tail first, so an absolute path still finds its file); every symbol of the file is nominated | `0.85 / files matched` | a suffix matching more than 4 files (`index.ts`) names nothing |
 | `history` | Every symbol in files that previous work on this task touched | 0.7 | none |
-| `lexical` | Full-text search over a weighted document - exact name (A), its camelCase / snake_case parts (B), container and file-stem words (C), signature and docstring (D) - scored by how many of the task's content terms a symbol covers | up to 0.8 | 15 anchors (pool of 25 rows per term) |
-| `semantic` | Vector nearest neighbours for the task text, in the model's rank order | `0.9 / (1 + rank/scale)`: 0.9 at #1, 0.45 at rank `scale` — decays with the absolute rank, so a wider pool does not get a stronger tail. `scale` is the active [retrieval profile](#tuning)'s `semantic_rank_scale` (30 for both voyage and jina) | 30 non-test hits |
+| `lexical` | Full-text search over a weighted document - exact name (A), its camelCase / snake_case parts (B), container and every word of the file *path* (C), signature, docstring and the identifier words of the whole body (D) - scored by how many of the task's content terms a symbol covers, each term counting 1.0 when it matched the name, 0.9 in the name parts, 0.6 in container / path words and 0.35 when it only occurs in the signature, docstring or body, plus a bonus for adjacent word pairs (`access token`) found together | up to 0.8 | `max(15, K)` anchors from a pool of `max(25, 2K)` rows per term |
+| `usage` | Code fragments the task wrote out — `localStorage` as a whole word, `'token'` as a quoted literal, `error?.response?.data?.message` as a substring — found *inside* symbol bodies (trigram index, no model) | `0.8 · √(1 − matches / pool)`: a fragment in 3 symbols is near-certain evidence for each, one in 40 of a 100-pool is worth 0.62 | a fragment matching `pool` (= `max(60, 2K)`) or more symbols is generic (`useState`) and dropped |
+| `semantic` | Vector nearest neighbours of the task text, in rank order; every symbol has one vector per ~2000-character chunk of its text, so a long component can be found by the code in its middle | `0.9 / (1 + rank/scale)`: 0.9 at #1, 0.45 at rank `scale` — decays with the absolute rank, so a wider pool does not get a stronger tail. `scale` is the active [retrieval profile](#tuning)'s `semantic_rank_scale` (30 for both voyage and jina) | `max(30, 2K)` non-test hits |
+| `impact` | Callers and referrers (one hop) of the task's *dominant* anchors — the five strongest with combined strength ≥ 0.9 — the places a change to the named thing reaches; plus the symbols quoting one of a root's *namespaced string literals* (query keys, storage keys, route paths, i18n / config keys), which are its users through data | `0.7 · root · √(1 − users / pool)` with the usage pool; for a literal, `users` = the symbols quoting it against a quarter of the pool | a root with `pool` or more users is a hub (`cn()`) and nominates nothing; a literal quoted by a quarter of the pool (`'en-US'`) is a convention and nominates nothing, bare words (`'undefined'`, `'dark'`) are never keys |
+
+`K` is the requested answer size (`max_candidates`). The lexical, usage and semantic widths
+grow with it because a 50-symbol answer that draws on a 30-candidate channel cannot cover
+more than the channel saw; the head of every channel is unchanged for small `K`.
 
 **Which words count.** Tokens are pulled out with a Unicode-aware word pattern (so "toplantı"
 is one word, not `toplant` + a stray letter; `İ` folds to `i`) and path-like fragments with
@@ -87,13 +94,36 @@ nominated the symbol. A lexical 0.5 plus a semantic 0.6 gives 0.8; an explicit n
 regardless of the others; a lone common term stays near 0.2. Corroboration is what pushes a
 symbol to the top, and a single weak vote is beatable downstream.
 
+**Names find the thing; usage finds the places that use the thing.** The four channels
+above all match a symbol by what it is *called* — its name, its docstring, its embedding.
+A task that says "every place that reads the raw `localStorage` key" is not about a symbol
+called `localStorage`; it is about the thirty components whose bodies contain that word, and
+none of them is named after it. The `usage` source greps the task's own code fragments —
+backticked spans, quoted strings, dotted expressions, identifier-looking words — through the
+stored symbol bodies, and its strength falls with the number of matches: `'token'` in 14
+symbols is strong evidence for each, `queryClient` in 60 is weak, `projectId` in 267 is
+noise and is dropped. A literal and the identifier of the same word (`'ACTIVE'` and
+`ACTIVE`) are one piece of evidence, not two. The `impact` source does the same through the
+graph for names the task did not spell out: when "the admin check" resolved to `isAdmin` at
+0.98, its nine callers are the answer to "every component that calls the admin check", and
+they get anchor evidence of their own rather than a decayed hop. It also follows the coupling
+the graph cannot see: a helper that invalidates `['monitoring-executions']` and the hook that
+registers a query under that key share no edge, only a string. The namespaced literals of a
+dominant anchor's body — a separator, a digit or a camelCase hump make a key; `'undefined'`
+is a word — are looked up in the other bodies, and the symbols quoting them are nominated
+with the same fan-out rule against a quarter of the pool, so a locale tag quoted by forty
+date formatters names nothing while a query key quoted by three registrations names each.
+
 **Tests are not anchors.** A task description almost always resembles the tests that assert
 it, so the raw nearest neighbours of "authorization check and proper error responses" are
 ten test functions. Symbols in `tests/`, `test_*.py`, `*_test.go`, `*.test.ts`, `*Test.java`
-and the like are skipped by the lexical and semantic sources (the semantic channel
-over-fetches four times and keeps the first thirty non-test hits). `explicit` and `history`
-still admit them — the caller named them on purpose — and `include_tests=True` turns the
-filter off.
+and the like are skipped by the lexical, semantic, usage and impact sources (the semantic
+channel over-fetches four times and keeps the first non-test hits). `explicit`, `path` and
+`history` still admit them — the caller named them on purpose — and `include_tests=True`
+turns the filter off. The *name* rules are narrower than they were: `test_x` / `should_x`
+are tests wherever they live, but the CamelCase `TestFoo` / `testFoo` forms are trusted only
+when no path is known — `TestBotTriggerPanel` is a production component, and real
+`TestFoo` classes sit in test directories the path rules already catch.
 
 Anchors are deduplicated by symbol id and handed to expansion in sorted order. Their
 nomination order carries no weight; their strength does.
@@ -108,13 +138,16 @@ task, which is what keeps expansion reproducible.
 | Who calls this | `CALLS` inbound | 2 hops |
 | What this calls | `CALLS` outbound | 1 hop |
 | Who references this | `REFERENCES` inbound | 1 hop |
+| What this reads, writes or passes | `REFERENCES` outbound — the constants, types and fields named in the body | 1 hop |
 | Types above and below | `INHERITS`, `IMPLEMENTS` | 1 hop each way |
 | Siblings | other symbols in the same file, nearest by line first | 1 hop, anchors with strength ≥ 0.7 only, 12 per anchor, never from a container |
 
 Callers reach two hops and callees only one on purpose. When you are about to change a
 function, the code that will break is upstream of it, and it is usually one level further
 away than you expect. What the function calls is mostly detail you can read from the body
-you already have.
+you already have. What it *references* is different: the key constant a storage helper
+passes to `getItem` is where an inventory task's answer lives, and the type a root builds is
+what a signature change has to follow, so outbound `REFERENCES` are walked one hop.
 
 Siblings are gated on anchor strength because they are the one rule that multiplies: a
 weak, single-term anchor would otherwise drag its whole file into the pool, and thirty such
@@ -315,10 +348,16 @@ below was first fitted with. Slot `i` (1-based) is filled as follows:
   exactly where the model's ranks and the file cap collide, and there the cap is the thing
   that is wrong.
 - **Otherwise the engine's best remaining candidate**, subject to at most `ceil(i · 0.6)`
-  symbols per file (a strong anchor's file would otherwise fill the pack with its siblings),
-  `ceil(i · 0.3)` members of the same container, and `ceil(i · 0.2)` containers overall (a
-  class is a location, not a change site). A candidate blocked at slot `i` is reconsidered at
-  every later slot.
+  symbols per file for the first ten slots (a strong anchor's file would otherwise fill the
+  pack with its siblings) and one more per ten slots after that — 10 of 50, 15 of 100,
+  instead of the 30 and 60 a linear share allowed — `ceil(i · 0.3)` members of the same
+  container, and `ceil(i · 0.2)` containers overall (a class is a location, not a change
+  site). A candidate blocked at slot `i` is reconsidered at every later slot. The taper is
+  what a long answer is *for*: nobody asks for fifty symbols to read the fourteenth helper
+  of `userPreferences.ts`; they ask for fifty to see every place a `localStorage` key is
+  touched, and on the K=50 evaluation the taper turned a 24-file answer into a 27-file one
+  with the first ten slots untouched. The cap depends on the slot alone, never on `K`, so the
+  list stays K-monotonic.
 
 The cost of the interleave is at the very top of the list: the model's rank `r` lands no
 lower than position `2r - 1`, so a model hit at rank 4 or 5 sits at 7-9 in the answer. On the

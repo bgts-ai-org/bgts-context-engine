@@ -4,7 +4,7 @@
 
 | Version | Supported |
 | ------- | --------- |
-| 0.1.x   | Yes       |
+| 0.3.x   | Yes       |
 
 While the project is pre-1.0, only the latest minor release receives security fixes.
 

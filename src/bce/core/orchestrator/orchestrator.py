@@ -41,6 +41,14 @@ from bce.storage.graph.repository import GraphRepository
 #: the engine's second hit in a file at slots 2-5 (a fix usually lands in one or two files);
 #: 0.6 lifted recall@5 on the tune split with no change at K=10/20.
 PER_FILE_SHARE = 0.6
+#: Diversity rule 1 tapers past this slot. The share above was fitted on recall@5/@10 and holds
+#: for the head of the list; beyond it a file earns one more slot per ``1 / PER_FILE_TAIL_SHARE``
+#: slots, so a 50-slot answer holds at most 6 + 4 = 10 symbols of one file instead of 30 and a
+#: 100-slot answer 15 instead of 60. Long answers are asked for to cover *more places* (an
+#: inventory of every ``localStorage`` key, every caller of a helper); the ninth member of a file
+#: already in the answer is what they should give up first. Model-stream picks stay exempt.
+PER_FILE_TAPER_FROM = 10
+PER_FILE_TAIL_SHARE = 0.1
 #: Diversity rule 1b: at most ceil(n * share) of the first n selected symbols may be members of
 #: the same container (engine picks only). A class rework legitimately puts several methods of
 #: one class in the answer; the cap keeps the engine from filling the list with them.
@@ -166,6 +174,19 @@ def _is_container(cand: Candidate) -> bool:
     return (cand.kind or "").lower() in CONTAINER_KINDS
 
 
+def file_cap(slot: int) -> int:
+    """Symbols one file may hold among the first ``slot`` engine picks (diversity rule 1).
+
+    Linear in the head (``ceil(slot * PER_FILE_SHARE)``), then :data:`PER_FILE_TAIL_SHARE` per
+    slot past :data:`PER_FILE_TAPER_FROM`. Non-decreasing in ``slot`` and independent of the
+    answer size, which is what keeps :func:`narrow` K-monotonic.
+    """
+    if slot <= PER_FILE_TAPER_FROM:
+        return max(1, math.ceil(slot * PER_FILE_SHARE))
+    head = max(1, math.ceil(PER_FILE_TAPER_FROM * PER_FILE_SHARE))
+    return head + math.ceil((slot - PER_FILE_TAPER_FROM) * PER_FILE_TAIL_SHARE)
+
+
 def _container_of(cand: Candidate) -> str | None:
     """Id prefix of the container a member belongs to (None for top-level / container ids)."""
     segments = cand.symbol_id.split("#", 1)[0].split("::")
@@ -210,7 +231,8 @@ def narrow(
     "explicit" is cheap there and it flooded the top). Explicit evidence enters through the score.
 
     Diversity caps grow with the slot index (``ceil(i * share)``) and apply to engine picks only:
-    per file (:data:`PER_FILE_SHARE`), per container (:data:`PER_CONTAINER_SHARE`) and containers
+    per file (:data:`PER_FILE_SHARE`, tapering past :data:`PER_FILE_TAPER_FROM` - see
+    :func:`file_cap`), per container (:data:`PER_CONTAINER_SHARE`) and containers
     overall (:data:`CONTAINER_SHARE`, applied to both streams). A task that reworks one big
     service class is exactly where the model's ranks and the file cap collide, and there the cap
     is the thing that is wrong, so the model stream ignores it. A candidate blocked by a cap at
@@ -241,9 +263,7 @@ def narrow(
             return False
         if not engine_pick:
             return True
-        if cand.file_id and per_file.get(cand.file_id, 0) >= max(
-            1, math.ceil(slot * PER_FILE_SHARE)
-        ):
+        if cand.file_id and per_file.get(cand.file_id, 0) >= file_cap(slot):
             return False
         owner = _container_of(cand)
         return not (

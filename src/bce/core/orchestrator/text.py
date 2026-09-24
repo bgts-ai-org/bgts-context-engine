@@ -76,7 +76,12 @@ _TEST_FILE_RE = re.compile(
     r"|conftest\.py"
     r")$",
 )
-_TEST_NAME_RE = re.compile(r"^(test_|test[A-Z]|Test[A-Z]|it_|should_|spec_)")
+#: ``test_x`` / ``should_x`` are tests wherever they live (pytest, rspec, JUnit-snake); the
+#: CamelCase forms are only trusted when no path is known - ``TestBotTriggerPanel`` and
+#: ``testConnection`` are production names, and real ``TestFoo`` / ``testFoo`` tests sit in
+#: test directories or ``*Test.java`` files that the path rules already catch.
+_TEST_NAME_RE = re.compile(r"^(test_|it_|should_|spec_)")
+_TEST_NAME_CAMEL_RE = re.compile(r"^(test[A-Z]|Test[A-Z])")
 
 
 def tokens(text: str) -> list[str]:
@@ -371,6 +376,28 @@ def query_terms(text: str) -> list[str]:
     return out
 
 
+def phrase_terms(text: str) -> list[str]:
+    """Adjacent content-word pairs of the task text (``"access token"``), in first-seen order.
+
+    A pair is a far more precise lexical hint than either word: "token" saturates any pool on
+    an auth-heavy codebase, "access token" names one concept. Only consecutive tokens of the
+    original text form a pair (identifier parts and Turkish equivalents do not), each word must
+    be a content token, and a pair whose words are identical is skipped.
+    """
+    words = [_lower(t) for t in tokens(text)]
+    keep = [w for w in words if len(w) >= MIN_TOKEN_LEN and w not in STOPWORDS]
+    # Pairs are formed over the *filtered* sequence, so "the access token" still yields
+    # "access token" while "token, which" yields nothing.
+    out: list[str] = []
+    for left, right in zip(keep, keep[1:], strict=False):
+        if left == right:
+            continue
+        pair = f"{left} {right}"
+        if pair not in out:
+            out.append(pair)
+    return out
+
+
 def split_identifier(name: str) -> list[str]:
     """snake_case / camelCase / PascalCase / dotted -> lower-cased parts (deterministic)."""
     if not name:
@@ -449,6 +476,144 @@ def explicit_references(text: str) -> list[tuple[str | None, str]]:
     return out
 
 
+_QUOTED_RE = re.compile(r"(?<![A-Za-z0-9_])(['\"])([^'\"\n]{3,80})\1(?![A-Za-z0-9_])")
+_IDENT_ONLY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+#: Backtick spans *with* spaces (``\`a?.b || c\```): a code expression the author pasted.
+_BACKTICK_SPAN_RE = re.compile(r"`([^`\n]{3,160})`")
+#: A whitespace-separated piece of a pasted expression that is code rather than an operator or
+#: a placeholder: starts like an identifier, and contains a member access, call or underscore.
+_CODE_PIECE_RE = re.compile(r"^[A-Za-z_$][\w$?.\[\]()'\"]*$")
+#: Identifier-looking words shorter than this are abbreviations / prose, not a code mention.
+_MENTION_MIN_LEN = 4
+
+_URL_RE = re.compile(r"\b[a-z][a-z0-9+.-]*://\S+", re.IGNORECASE)
+#: ``src/utils/auth.ts``, ``./flask/app.py``, ``pkg\sub\Thing.cs`` - a slash-joined path ending in
+#: a file name with an extension. Bare file names are covered by :data:`_CODE_FILE_RE`.
+_PATH_MENTION_RE = re.compile(
+    r"(?<![\w/\\.-])((?:[A-Za-z]:)?[/\\]?(?:[\w.-]+[/\\])+[\w.-]+\.[A-Za-z][A-Za-z0-9]{0,5})"
+    r"(?![\w/\\])"
+)
+#: A bare ``Layout.tsx`` / ``app.py`` is a file mention only with a source-code extension (any
+#: ``.md`` / ``.json`` / ``.png`` word in prose is not something the graph indexes).
+_CODE_FILE_RE = re.compile(
+    r"(?<![\w/\\.-])([\w-]+\.(?:py|pyi|ts|tsx|js|jsx|mjs|cjs|go|java|kt|kts|scala|cs|fs|rb|rs"
+    r"|php|swift|c|cc|cpp|cxx|h|hh|hpp|m|mm|vue|svelte|dart|lua|ex|exs|erl|hs|clj|sql))"
+    r"(?![\w/\\])"
+)
+_PATH_STRIP_PREFIXES = ("./", ".\\", "/", "\\")
+
+
+def file_mentions(text: str) -> list[str]:
+    """Source-file paths a task text names, as repo-relative suffixes (first-seen order).
+
+    ``src/utils/auth.ts``, ``./flask/app.py``, the ``File "/opt/app/flask/app.py"`` of a Python
+    traceback and a bare ``Layout.tsx`` all count; URLs are removed first so ``github.com/x/y.js``
+    is not a file. Leading ``./`` / ``/`` are dropped and backslashes normalised, so the result
+    is matched as a *suffix* of indexed file ids (``repo:src/utils/auth.ts``) - an absolute
+    traceback path still finds its file. Output documents (``docs/plan.md``) are kept when they
+    carry a directory: whether they are indexed is the repository's call, not the parser's.
+    """
+    cleaned = _URL_RE.sub(" ", text or "")
+    out: list[str] = []
+    seen: set[str] = set()
+    for match in list(_PATH_MENTION_RE.finditer(cleaned)) + list(_CODE_FILE_RE.finditer(cleaned)):
+        path = match.group(1).replace("\\", "/")
+        if len(path) > 2 and path[1] == ":" and path[2] == "/":
+            path = path[2:]  # Windows drive
+        while path.startswith(_PATH_STRIP_PREFIXES):
+            path = path[2:] if path.startswith("./") else path[1:]
+        path = path.strip("./")
+        if not path or path.lower() in seen:
+            continue
+        seen.add(path.lower())
+        out.append(path)
+    return out
+
+
+def mention_terms(text: str) -> list[tuple[str, str]]:
+    """Code fragments of a task text that may appear *verbatim inside symbol bodies*.
+
+    Returns ``(kind, text)`` pairs in first-seen order, de-duplicated:
+
+    * ``("literal", "token")`` for a quoted string (``'token'``, ``"cortex.accessToken"``) - the
+      body is searched for the string *with* quotes, so a literal is only matched as a literal;
+    * ``("code", "error?.response?.data?.message")`` for a backtick span or a dotted / scoped
+      reference (``queryClient.invalidateQueries``) - matched as a plain substring;
+    * ``("ident", "localStorage")`` for an identifier-looking word (camelCase, snake_case,
+      ALL_CAPS, digits) - matched as a whole word.
+
+    This feeds the *usage* anchor source: "every place that reads the raw ``localStorage`` key"
+    is answered by the symbols whose text contains ``localStorage``, whatever they are named.
+    """
+    out: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    def add(kind: str, value: str) -> None:
+        value = value.strip().strip(",;").lstrip(".")  # "...rest" spreads, "…and so on"
+        if kind == "code" and _IDENT_ONLY_RE.match(value):
+            kind = "ident"  # a backticked bare name is a whole-word match, not a substring
+        if not value or (kind, value) in seen:
+            return
+        if kind == "ident" and (len(value) < _MENTION_MIN_LEN or _lower(value) in STOPWORDS):
+            return
+        if kind == "code" and len(value) < _MENTION_MIN_LEN + 1:
+            return  # "e.g", "i.e": prose abbreviations, not code
+        seen.add((kind, value))
+        out.append((kind, value))
+
+    for span in _BACKTICK_SPAN_RE.findall(text or ""):
+        span = span.strip()
+        if " " not in span:
+            add("code", span.strip("()"))
+            continue
+        # A pasted expression: keep the code-looking pieces, drop operators and placeholders.
+        for piece in span.split():
+            piece = piece.strip("()").strip(",;")
+            if _CODE_PIECE_RE.match(piece) and any(ch in piece for ch in "._(["):
+                add("code", piece)
+    for _, literal in _QUOTED_RE.findall(text or ""):
+        add("literal", literal)
+    for dotted in _DOTTED_RE.findall(text or ""):
+        add("code", dotted)
+    for token in tokens(text):
+        if looks_like_identifier(token) and _IDENT_ONLY_RE.match(token):
+            add("ident", token)
+    return out
+
+
+#: A quoted string in *code* that is a key rather than prose: one token of letters, digits and
+#: ``_ . : / -`` (``'monitoring-executions'``, ``"cortex.accessToken"``, ``'/api/runs'``),
+#: 4-64 characters, starting with a letter, underscore or slash. Relative import specifiers
+#: (``'../utils/x'``) start with a dot and are excluded; a sentence has spaces and is excluded.
+_KEY_LITERAL_RE = re.compile(r"""(['"])([A-Za-z_/][\w.:/-]{3,63})\1""")
+#: ...and *namespaced*: a separator, a digit or a camelCase hump. A bare word in quotes
+#: (``'undefined'``, ``'string'``, ``'dark'``, ``'GET'``, ``'runs'``) is a type name, an enum value
+#: or a prop that unrelated symbols share by the dozen; a namespaced key names one thing.
+_STRUCTURED_KEY_RE = re.compile(r"[-_./:0-9]|[a-z][A-Z]")
+
+
+def body_literals(body: str, *, limit: int = 12) -> list[str]:
+    """Namespaced string literals of a symbol's text, in document order, de-duplicated.
+
+    Query keys, storage keys, route paths, event, config and i18n keys couple symbols that the
+    graph does not connect - ``invalidateQueries({queryKey: ['monitoring-executions']})`` in a
+    helper and ``useQuery({queryKey: ['monitoring-executions', page]})`` in a hook - and a change
+    to one reaches the other. The impact anchor source looks up these literals in other bodies
+    (``anchors._impact_anchors``). Bare words (``typeof x === 'undefined'``) are not keys and are
+    skipped. At most ``limit`` distinct literals, the first ones in the text (deterministic).
+    """
+    out: list[str] = []
+    for _, literal in _KEY_LITERAL_RE.findall(body or ""):
+        if literal in out or not any(ch.isalpha() for ch in literal):
+            continue
+        if not _STRUCTURED_KEY_RE.search(literal):
+            continue
+        out.append(literal)
+        if len(out) >= max(int(limit), 1):
+            break
+    return out
+
+
 def explicit_candidates(text: str) -> list[str]:
     """Names of :func:`explicit_references`, de-duplicated in first-seen order."""
     out: list[str] = []
@@ -486,5 +651,7 @@ def is_test_symbol(
         if parts[-1].startswith("test_") or parts[-1].endswith("_test"):
             return True
     if name and _TEST_NAME_RE.match(name):
+        return True
+    if name and not paths and _TEST_NAME_CAMEL_RE.match(name):
         return True
     return False

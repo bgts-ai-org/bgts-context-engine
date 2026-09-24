@@ -7,6 +7,91 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-24
+
+Retrieval hybrid-v4: the whole symbol is searchable, and the task's code fragments, file
+paths and dominant names find the places that *use* them. Measured on 30 natural-language
+tasks against a React/TypeScript front end (`local_bench/cli_k50_eval`, `bce context
+--max-candidates 50`, macro file recall over the files each task had to touch): **82.0 →
+99.6 / 100**, full recall on 29/30 tasks against 20/30, micro recall 72 % → 98 %, no task
+without a hit, MRR 0.67 → 0.76. Of the 31 files the old pipeline missed at K=50, 27 had never entered the
+candidate pool: their evidence lived in parts of the code nothing indexed — a
+`localStorage.getItem('token')` in the middle of a 10 KB panel, the members of a `type`
+union, a toast string sixty lines into a page. Every change below is general (nothing is
+fitted to those tasks) and the head of every channel is unchanged for small answers.
+
+### Added
+
+- **Symbol search text.** Every language provider attaches the symbol's full declaration
+  (capped at 24 000 characters) as `GraphNode.search_text`; it is not a graph property. It
+  feeds the FTS document (`symbol_fts.body`, weight D as identifier words) and the
+  embeddings, so interfaces, constants, classes and long components — which had a 1 200
+  character head or nothing — are findable by what they contain.
+- **Chunked embeddings.** A symbol longer than one window (2 000 characters, 200 overlap,
+  at most 12 windows) is stored as several vectors, each repeating the header (name, kind,
+  path, signature, docstring); search collapses them to the symbol's best chunk. Migration
+  `0011_search_text` adds `embeddings.chunk` and the `(kind, ref_id, chunk)` uniqueness.
+- **TypeScript `type` aliases and `enum`s** are symbols (`type` / `enum`); JSDoc blocks
+  above a declaration (or its `export` / decorator) become the docstring.
+- **Usage anchor source.** Code fragments the task wrote out — a backticked name as a whole
+  word, a quoted string as a literal, a dotted expression as a substring — are looked up
+  inside symbol bodies; strength falls with the match count and generic fragments
+  (`useState`) are dropped. Migration `0012_body_trgm` adds `pg_trgm` GIN indexes on
+  `symbol_fts.body` and `file_id` (2 ms a lookup; skipped with a notice where the extension
+  is unavailable).
+- **Path anchor source.** File paths the task names — `src/utils/auth.ts`, a bare
+  `Layout.tsx`, the `File "/opt/app/flask/app.py"` of a traceback — resolve to indexed files
+  by longest suffix and nominate every symbol in them (`0.85 / files`; more than 4 files is
+  ambiguous and ignored).
+- **Impact anchor source.** Callers and referrers of the five strongest anchors with
+  combined strength ≥ 0.9 get anchor evidence of their own, fan-out aware (`0.7 · root ·
+  √(1 − users/pool)`; hubs nominate nothing). "Every component that calls the admin check"
+  is answered by `isAdmin`'s callers, not by a decayed hop. The same source follows
+  **coupling through data**: the namespaced string literals of a dominant anchor's body —
+  query keys, storage keys, route paths, i18n / config keys — are looked up in other
+  bodies, and the symbols quoting them (the hook that registers the query a helper
+  invalidates) are its users too, with the same fan-out rule against a quarter of the pool.
+  Bare words (`'undefined'`, `'dark'`) are not keys; a literal quoted by a quarter of the
+  pool (`'en-US'`) is a convention and nominates nothing.
+- **Lexical phrase bonus.** Adjacent content-word pairs of the task (`access token`) are
+  looked up conjunctively and reward symbols carrying both words.
+- **Outbound `REFERENCES` expansion** (one hop): the constants, types and fields an
+  anchor's body reads, writes or passes.
+- `VectorStore.trim_chunks`, `GraphRepository.body_mentions`, `symbol_bodies`,
+  `files_by_suffix`, `references_of` / `get_references`; lexical hits carry a `match_tier`
+  (`a` name, `b` name parts, `c` container / path, `d` signature / docstring / body).
+
+### Changed
+
+- **Channel widths follow the answer size.** Lexical pool / anchors, semantic candidates
+  and the usage pool are `max(default, 2K)` (`max(15, K)` lexical anchors) for
+  `max_candidates = K`; a 50-symbol answer no longer draws on a 30-candidate channel.
+- **Per-file cap tapers past slot 10.** The engine's diversity rule keeps `ceil(i · 0.6)`
+  symbols per file for the first ten slots and admits one more per ten slots after that: 10
+  of 50 and 15 of 100 instead of 30 and 60. Model-stream picks stay exempt; the list stays
+  K-monotonic. Long answers cover more places instead of the fourteenth helper of one file.
+- **The FTS document** carries every word of the file path at weight C (not just the stem)
+  and the identifier words of the body at weight D; `ts_rank` uses length normalisation so
+  a 300-line component does not outrank a 3-line helper by word count. **Lexical strength
+  depends on where a term matched**: a hit in the exact name counts 1.0, in its identifier
+  parts 0.9, in container / path words 0.6, only in the signature, docstring or body 0.35 —
+  with whole bodies in the document, a long component matches half the words of any task
+  somewhere, and without the tiers it outranked the helpers named after those words.
+- Splitting the task into clauses and fusing the per-clause semantic rankings was built,
+  measured and dropped: with chunked embeddings the whole-text query already found 89 of
+  127 expected files in its top 100 against the fusion's 87, and the fusion cost the head
+  (semantic hit@1 19 → 14 of 30, MRR 0.75 → 0.58). One query vector per task, as before.
+- **Test detection by name is narrower.** `test_x` / `should_x` are tests wherever they
+  live; the CamelCase `TestFoo` / `testFoo` forms are trusted only when no path is known.
+  `TestBotTriggerPanel` is a production component and was being dropped from every channel.
+
+### Migration
+
+`bce migrate` applies `0011` and `0012`. Rows indexed before `0011` have no body and a single
+vector, so **re-index once** (`bce index` per repository) for the usage source, body search
+and chunked embeddings to see them; nothing is truncated and the old rows keep working
+meanwhile.
+
 ## [0.2.5] - 2026-09-24
 
 ### Changed
@@ -378,7 +463,8 @@ First public release.
 - Docker Compose deployment with PostgreSQL, Apache AGE and pgvector preconfigured.
 - `server.json` manifest describing the stdio server for the official MCP registry.
 
-[Unreleased]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v0.2.5...HEAD
+[Unreleased]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v0.2.5...v0.3.0
 [0.2.5]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v0.2.2...v0.2.3
