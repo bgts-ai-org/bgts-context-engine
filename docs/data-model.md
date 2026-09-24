@@ -93,12 +93,21 @@ Applied in order by `bce migrate`, tracked in `schema_migrations`.
 | `0005_embeddings_dim` | widens embeddings to `vector(1024)`, truncates, rebuilds the index |
 | `0006_fts` | `symbol_fts` with a generated `tsvector` column |
 | `0007_jobs` | the `jobs` queue |
+| `0008_graph_label_indexes` | GIN indexes on the properties of every vertex label |
+| `0009_fts_identifier_parts` | the weighted FTS document (name / identifier parts / container + file stem / signature + docstring) |
+| `0010_file_churn` | `file_churn` — commits per file inside the churn window |
+| `0011_search_text` | `symbol_fts.body` (the symbol's full text) folded into the FTS document, every word of the file *path* at weight C, `embeddings.chunk` and the `(kind, ref_id, chunk)` uniqueness that lets a long symbol be several vectors |
+| `0012_body_trgm` | `pg_trgm` GIN indexes on `symbol_fts.body` and `symbol_fts.file_id`, for the usage and path anchor sources (skipped with a notice where the extension is unavailable) |
 
 Note that `0005` **truncates** `embeddings`. Widening a vector column cannot preserve
 existing rows, so upgrading across that migration means re-indexing to repopulate them.
 Later width changes do not get another numbered SQL file: after the SQL migrations,
 `bce migrate` runs `align_embedding_dim` to re-type the column to `BCE_EMBEDDING_DIM`.
 Stored vectors of another width are discarded only with `--reset-embeddings`.
+
+`0011` does not truncate anything, but rows indexed before it have no `body` and a single
+`chunk 0` vector, so the usage source and body search only see what has been re-indexed
+since. Run `bce index` (or `bce reindex` over the whole history) once after upgrading.
 
 ### repos
 
@@ -133,11 +142,18 @@ told — which is only meaningful because retrieval is reproducible.
 
 ### embeddings
 
-`kind` (`symbol` or `file`), `ref_id`, `repo_id`, `content`, `model`, `embedding
-vector(N)`, `indexed_at_commit`, unique on `(kind, ref_id)`. `N` is `BCE_EMBEDDING_DIM`
+`kind` (`symbol` or `file`), `ref_id`, `repo_id`, `chunk`, `content`, `model`, `embedding
+vector(N)`, `indexed_at_commit`, unique on `(kind, ref_id, chunk)`. `N` is `BCE_EMBEDDING_DIM`
 (1024 for Voyage, 1536 for jina-code-embeddings-1.5b, …). Indexed with HNSW using
 `vector_cosine_ops`; searches use the `<=>` cosine distance operator and order by
-`(distance, ref_id)` so ties break stably.
+`(distance, ref_id, chunk)` so ties break stably.
+
+A symbol longer than one embedding window (2 000 characters, 200 overlap, at most 12
+windows) is stored as several rows, `chunk 0, 1, 2 …`, each carrying the same header (name,
+kind, path, signature, docstring) and one window of the body, so a toast string sixty lines
+into a page component is as findable as its first line. Nearest-neighbour search collapses
+the rows back to one symbol at its best chunk's rank; re-indexing a symbol that got shorter
+trims the chunks it no longer needs.
 
 The `model` column records which encoder produced each row (`<model>-<dim>`). Embeddings
 from different models are not comparable, so this is what makes it possible to detect a
@@ -146,19 +162,25 @@ refuses to drop the stored vectors unless run with `--reset-embeddings`.
 
 ### symbol_fts
 
-`symbol_id` primary key, plus `repo_id`, `name`, `kind`, `signature`, `docstring`,
-`file_id`, `line`, `indexed_at_commit`, and a stored generated column:
+`symbol_id` primary key, plus `repo_id`, `name`, `kind`, `signature`, `docstring`, `body`
+(the symbol's full declaration text, capped at 24 000 characters by the extractor),
+`file_id`, `line`, `indexed_at_commit`, and a stored generated, weighted `tsvector`:
 
-```sql
-document tsvector GENERATED ALWAYS AS (
-  to_tsvector('simple',
-    coalesce(name, '') || ' ' || coalesce(signature, '') || ' ' || coalesce(docstring, ''))
-) STORED
-```
+| Weight | Contents |
+| --- | --- |
+| A | the exact name |
+| B | its camelCase / snake_case parts (`getUserById` → `get user by id`) |
+| C | the container's name parts and every word of the file path (`src components settings sections Repos Section`) |
+| D | signature, docstring and the identifier words of the whole body |
 
 With a GIN index on `document`. The `simple` configuration is used rather than `english`
 on purpose: identifiers are not English words, and stemming `getUserById` helps nobody.
-Queries use prefix matching, ranked by `ts_rank` with `symbol_id` as tiebreak.
+Queries use prefix matching, ranked by `ts_rank` with length normalisation (so a 300-line
+component does not outrank a 3-line helper by sheer word count) and `symbol_id` as tiebreak.
+
+`body` is also indexed with `pg_trgm` (migration `0012`), which is what makes the usage
+anchor source — "which symbols contain `localStorage.getItem('token')`" — an index lookup
+rather than a scan; the same index on `file_id` serves the path source's suffix matches.
 
 This table mirrors the `Symbol` nodes. AGE cannot do full-text search, so lexical anchor
 discovery reads from here.

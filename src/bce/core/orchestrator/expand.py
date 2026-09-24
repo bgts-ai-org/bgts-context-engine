@@ -4,8 +4,10 @@ From each anchor, a fixed, rule-based graph walk produces the candidate set. Thr
 determinism:
 
 1. Fixed template - always the same edge types, direction, and hop limits:
-   CALLS callers 2-hop + callees 1-hop, INHERITS/IMPLEMENTS both directions (full), same-file
-   sibling symbols (strong anchors only, nearest-by-line, capped). (IMPORTS is file-level.)
+   CALLS callers 2-hop + callees 1-hop, REFERENCES both directions 1-hop (who uses the anchor;
+   what the anchor reads / writes / passes), INHERITS/IMPLEMENTS both directions (full),
+   same-file sibling symbols (strong anchors only, nearest-by-line, capped). (IMPORTS is
+   file-level.)
 2. Deterministic ordering - candidates carry a graph_distance; final ordering is left to scoring
    (section 6.4), which is itself deterministic.
 3. Deterministic de-dup + bound - a symbol reached by multiple paths keeps its smallest distance;
@@ -158,6 +160,22 @@ def expand_from_anchors(
                 source_strength=strength * HOP_DECAY,
             )
 
+    # What the anchor itself references (REFERENCES out of it) 1 hop: the constants, types and
+    # fields its body reads, writes or passes. The key constant a storage helper passes to
+    # ``getItem`` is where an inventory task's answer lives; the type a root builds is what a
+    # signature change has to follow. Callees cover only what it *calls*.
+    if _has_reads(repository, "references_of", "get_references"):
+        references = bulk.neighbours(repository, sorted(walked), "references_of", "get_references")
+        for sid, strength in sorted(walked.items()):
+            for ref in references.get(sid, []):
+                record(
+                    ref["symbol_id"],
+                    1,
+                    anchor=False,
+                    provenance=ref.get("provenance"),
+                    source_strength=strength * HOP_DECAY,
+                )
+
     # Type hierarchy (full, both directions), 1 hop from anchors. Implementers are exactly the
     # INHERITS/IMPLEMENTS subtypes, so the subtype channel already covers them.
     ids = sorted(walked)
@@ -226,6 +244,13 @@ def _expand_siblings(repository: GraphRepository, walked: dict[str, float], reco
                     provenance=None,
                     source_strength=strength * HOP_DECAY,
                 )
+
+
+def _has_reads(repository: GraphRepository, bulk_name: str, single_name: str) -> bool:
+    """Whether the repository serves this edge channel at all (unit-test fakes may not)."""
+    return callable(getattr(repository, bulk_name, None)) or callable(
+        getattr(repository, single_name, None)
+    )
 
 
 def _walk(

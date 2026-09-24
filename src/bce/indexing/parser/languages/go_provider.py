@@ -21,7 +21,13 @@ from bce.domain.models import (
     UnresolvedRef,
 )
 from bce.indexing.extractor.routes import add_route
-from bce.indexing.parser._treesitter import body_snippet, load_language, make_parser, node_text
+from bce.indexing.parser._treesitter import (
+    body_snippet,
+    load_language,
+    make_parser,
+    node_text,
+    search_text,
+)
 from bce.indexing.parser.base import LanguageProvider, ParseContext
 from bce.indexing.parser.symbol_id import make_module_id, make_symbol_id
 
@@ -179,25 +185,25 @@ class GoProvider(LanguageProvider):
     def _add_node(
         self, frag, ctx, symbol_id, name, kind, signature, node, package, body=None
     ) -> None:
-        frag.add_node(
-            GraphNode(
-                NodeLabel.SYMBOL,
-                symbol_id,
-                {
-                    "name": name,
-                    "kind": str(kind),
-                    "signature": signature,
-                    # Go visibility is by capitalization (exported vs unexported).
-                    "visibility": "public" if name[:1].isupper() else "private",
-                    "docstring": None,
-                    "body": body_snippet(body, ctx.source),
-                    "namespace": package or "",
-                    "file_id": ctx.file_id,
-                    "line": node.start_point[0] + 1,
-                    "indexed_at_commit": ctx.indexed_at_commit,
-                },
-            )
+        symbol = GraphNode(
+            NodeLabel.SYMBOL,
+            symbol_id,
+            {
+                "name": name,
+                "kind": str(kind),
+                "signature": signature,
+                # Go visibility is by capitalization (exported vs unexported).
+                "visibility": "public" if name[:1].isupper() else "private",
+                "docstring": None,
+                "body": body_snippet(body, ctx.source),
+                "namespace": package or "",
+                "file_id": ctx.file_id,
+                "line": node.start_point[0] + 1,
+                "indexed_at_commit": ctx.indexed_at_commit,
+            },
         )
+        symbol.search_text = search_text(node, ctx.source)
+        frag.add_node(symbol)
         frag.add_edge(GraphEdge(EdgeLabel.DEFINED_IN, symbol_id, ctx.file_id))
 
     def _collect_imports(self, root, ctx, source, frag, bindings) -> None:

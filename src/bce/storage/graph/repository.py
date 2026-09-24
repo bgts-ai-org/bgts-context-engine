@@ -17,6 +17,21 @@ from bce.storage.graph.client import GraphClient
 _REFERENCE_EDGE_TYPES = "['CALLS', 'REFERENCES']"
 
 _FTS_TOKEN_RE = re.compile(r"\w+", re.UNICODE)
+#: ``ts_rank`` normalization: 1 divides the rank by ``1 + log(document length)``. Since the FTS
+#: document carries the whole symbol body (migration 0011), a 400-line component mentioning a
+#: term in passing would otherwise outrank a 5-line helper *named* after it inside every term's
+#: pool; the log damping keeps the name weights (A/B) decisive without ignoring long bodies.
+_TS_RANK_NORMALIZATION = 1
+#: Where in the document a term matched, best tier first: ``a`` the exact name, ``b`` its
+#: identifier parts, ``c`` container / file path words, ``d`` signature, docstring or body.
+#: Anchor finding weighs a body-only match well below a name match (a long component mentions
+#: half the words of any task somewhere); the FTS document itself cannot say which, so the
+#: tier is computed per row with ``ts_filter``.
+_MATCH_TIER_SQL = (
+    "CASE WHEN ts_filter({doc}, '{{a}}') @@ {query} THEN 'a' "
+    "WHEN ts_filter({doc}, '{{b}}') @@ {query} THEN 'b' "
+    "WHEN ts_filter({doc}, '{{c}}') @@ {query} THEN 'c' ELSE 'd' END"
+)
 
 
 def _sortable(value: Any) -> tuple[int, Any]:
@@ -48,6 +63,8 @@ class GraphRepository:
         self.client = client
         # Lazily probed: whether the symbol_fts table exists (migration 0006 applied).
         self._fts_ready: bool | None = None
+        # Lazily probed: whether symbol_fts.body exists (migration 0011 applied).
+        self._fts_body_ready: bool | None = None
         # Lazily probed: whether the file_churn table exists (migration 0010 applied).
         self._churn_ready: bool | None = None
 
@@ -113,31 +130,65 @@ class GraphRepository:
                     out[str(file_id)] = int(commits or 0)
         return out
 
+    def _fts_body_available(self) -> bool:
+        """Whether ``symbol_fts.body`` exists (migration 0011: the whole symbol is searchable)."""
+        if self._fts_body_ready is None:
+            conn = getattr(self.client, "conn", None)
+            self._fts_body_ready = False
+            if conn is not None:
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "SELECT 1 FROM information_schema.columns "
+                            "WHERE table_name = 'symbol_fts' AND column_name = 'body'"
+                        )
+                        self._fts_body_ready = cur.fetchone() is not None
+                except Exception:
+                    self._fts_body_ready = False
+        return self._fts_body_ready
+
     def _upsert_symbol_fts(self, node: GraphNode) -> None:
-        """Mirror a Symbol node into the FTS side table (same transaction, P5)."""
+        """Mirror a Symbol node into the FTS side table (same transaction, P5).
+
+        The ``body`` column takes the node's *search text* (the whole declaration) when the
+        extractor supplied one, else the display snippet, so the lexical channel can match a
+        string literal or an API call deep inside a long function.
+        """
         if not self._fts_available():
             return
         props = node.properties
         file_id = str(props.get("file_id") or "")
         repo_id = file_id.split(":", 1)[0] if ":" in file_id else ""
+        values: list[Any] = [
+            node.node_id,
+            repo_id,
+            str(props.get("name") or ""),
+            props.get("kind"),
+            props.get("signature"),
+            props.get("docstring"),
+            file_id or None,
+            props.get("line"),
+            props.get("indexed_at_commit"),
+        ]
+        columns = (
+            "symbol_id, repo_id, name, kind, signature, docstring, file_id, line, indexed_at_commit"
+        )
+        updates = (
+            "repo_id = EXCLUDED.repo_id, name = EXCLUDED.name, kind = EXCLUDED.kind, "
+            "signature = EXCLUDED.signature, docstring = EXCLUDED.docstring, "
+            "file_id = EXCLUDED.file_id, line = EXCLUDED.line, "
+            "indexed_at_commit = EXCLUDED.indexed_at_commit"
+        )
+        if self._fts_body_available():
+            search_text = getattr(node, "search_text", None)
+            values.append(search_text if search_text is not None else props.get("body"))
+            columns += ", body"
+            updates += ", body = EXCLUDED.body"
+        placeholders = ", ".join(["%s"] * len(values))
         self.client.conn.execute(
-            "INSERT INTO symbol_fts (symbol_id, repo_id, name, kind, signature, docstring, "
-            "file_id, line, indexed_at_commit) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) "
-            "ON CONFLICT (symbol_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, "
-            "name = EXCLUDED.name, kind = EXCLUDED.kind, signature = EXCLUDED.signature, "
-            "docstring = EXCLUDED.docstring, file_id = EXCLUDED.file_id, line = EXCLUDED.line, "
-            "indexed_at_commit = EXCLUDED.indexed_at_commit",
-            (
-                node.node_id,
-                repo_id,
-                str(props.get("name") or ""),
-                props.get("kind"),
-                props.get("signature"),
-                props.get("docstring"),
-                file_id or None,
-                props.get("line"),
-                props.get("indexed_at_commit"),
-            ),
+            f"INSERT INTO symbol_fts ({columns}) VALUES ({placeholders}) "  # noqa: S608
+            f"ON CONFLICT (symbol_id) DO UPDATE SET {updates}",
+            tuple(values),
         )
 
     def upsert_edge(self, edge: GraphEdge) -> None:
@@ -502,6 +553,17 @@ class GraphRepository:
             ["target_id", "symbol_id", "name", "file_id", "line", "ref_kind", "provenance"],
         )
 
+    def references_of(self, symbol_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
+        """``symbol_id -> REFERENCES targets`` (see :meth:`get_references`)."""
+        return self._grouped(
+            "UNWIND $ids AS sid MATCH (s:Symbol {symbol_id: sid})-[r:REFERENCES]->(t:Symbol) "
+            "RETURN s.symbol_id, t.symbol_id, t.name, t.file_id, t.line, r.ref_kind, "
+            "r.provenance",
+            symbol_ids,
+            "ids",
+            ["source_id", "symbol_id", "name", "file_id", "line", "ref_kind", "provenance"],
+        )
+
     def supertypes_of(self, symbol_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
         """``symbol_id -> supertypes`` (see :meth:`get_supertypes`)."""
         return self._grouped(
@@ -588,6 +650,18 @@ class GraphRepository:
             "MATCH (ref:Symbol)-[r:REFERENCES]->(t:Symbol {symbol_id: $sym}) "
             "RETURN ref.symbol_id, ref.name, ref.file_id, ref.line, r.ref_kind, r.provenance "
             "ORDER BY ref.symbol_id"
+        )
+        rows = self.client.cypher(query, {"sym": symbol_id}, columns)
+        return [dict(zip(columns, row, strict=False)) for row in rows]
+
+    def get_references(self, symbol_id: str) -> list[dict[str, Any]]:
+        """Symbols the source has a REFERENCES edge *to*: the constants, types and fields its
+        body reads, writes or passes (the outgoing side of :meth:`get_referrers`)."""
+        columns = ["symbol_id", "name", "file_id", "line", "ref_kind", "provenance"]
+        query = (
+            "MATCH (s:Symbol {symbol_id: $sym})-[r:REFERENCES]->(t:Symbol) "
+            "RETURN t.symbol_id, t.name, t.file_id, t.line, r.ref_kind, r.provenance "
+            "ORDER BY t.symbol_id"
         )
         rows = self.client.cypher(query, {"sym": symbol_id}, columns)
         return [dict(zip(columns, row, strict=False)) for row in rows]
@@ -750,15 +824,17 @@ class GraphRepository:
             return None
         tsquery = " & ".join(f"{t}:*" for t in tokens)
 
-        params: list[Any] = [tsquery, tsquery]
+        params: list[Any] = [tsquery, tsquery, tsquery, tsquery, tsquery]
         where = "document @@ to_tsquery('simple', %s)"
         if repo_ids:
             where += " AND repo_id = ANY(%s)"
             params.append(repo_ids)
         params.append(limit)
+        tier = _MATCH_TIER_SQL.format(doc="document", query="to_tsquery('simple', %s)")
         sql = (
             "SELECT symbol_id, name, kind, file_id, line, indexed_at_commit, "
-            "ts_rank(document, to_tsquery('simple', %s)) AS rank "
+            f"ts_rank(document, to_tsquery('simple', %s), {_TS_RANK_NORMALIZATION}) AS rank, "
+            f"{tier} AS tier "
             f"FROM symbol_fts WHERE {where} "
             "ORDER BY rank DESC, symbol_id ASC LIMIT %s"
         )
@@ -773,6 +849,7 @@ class GraphRepository:
                 "file_id": r[3],
                 "line": r[4],
                 "indexed_at_commit": r[5],
+                "match_tier": r[7],
             }
             for r in rows
         ]
@@ -811,13 +888,15 @@ class GraphRepository:
             where += " AND f.repo_id = ANY(%s)"
             params.append(repo_ids)
         params.append(limit)
+        tier = _MATCH_TIER_SQL.format(doc="f.document", query="to_tsquery('simple', q.tsq)")
         sql = (
             "WITH q AS (SELECT * FROM unnest(%s::text[], %s::text[]) AS t(term, tsq)) "
-            "SELECT term, symbol_id, name, kind, file_id, line, indexed_at_commit FROM ("
+            "SELECT term, symbol_id, name, kind, file_id, line, indexed_at_commit, tier FROM ("
             "  SELECT q.term, f.symbol_id, f.name, f.kind, f.file_id, f.line, "
-            "         f.indexed_at_commit, "
+            f"         f.indexed_at_commit, {tier} AS tier, "
             "         row_number() OVER (PARTITION BY q.term "
-            "             ORDER BY ts_rank(f.document, to_tsquery('simple', q.tsq)) DESC, "
+            "             ORDER BY ts_rank(f.document, to_tsquery('simple', q.tsq), "
+            f"                             {_TS_RANK_NORMALIZATION}) DESC, "
             "                      f.symbol_id ASC) AS rn "
             f"  FROM q JOIN symbol_fts f ON {where}"
             ") ranked WHERE rn <= %s ORDER BY term, rn"
@@ -834,9 +913,125 @@ class GraphRepository:
                     "file_id": row[4],
                     "line": row[5],
                     "indexed_at_commit": row[6],
+                    "match_tier": row[7],
                 }
             )
         return out
+
+    def files_by_suffix(
+        self, suffixes: list[str], *, repo_ids: list[str] | None = None, limit: int = 8
+    ) -> dict[str, list[str]]:
+        """Indexed file ids whose path ends with each suffix (``suffix -> file_ids``).
+
+        ``utils/auth.ts`` matches ``repo:src/utils/auth.ts`` (a path component boundary or the
+        start of the path must precede it, so ``auth.ts`` does not match ``oauth.ts``). Case
+        insensitive - task authors type ``settingstab.tsx`` - and read from ``symbol_fts`` so
+        only files with at least one symbol count. Suffixes matching more than ``limit`` files
+        (``index.ts``) are returned empty: the mention was not specific enough to anchor on.
+        """
+        if not suffixes or not self._fts_available():
+            return {}
+        out: dict[str, list[str]] = {}
+        with self.client.conn.cursor() as cur:
+            for suffix in suffixes:
+                clean = suffix.replace("\\", "/").strip("/")
+                if not clean:
+                    continue
+                escaped = clean.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                where = "(file_id ILIKE %s OR file_id ILIKE %s)"
+                params: list[Any] = [f"%/{escaped}", f"%:{escaped}"]
+                if repo_ids:
+                    where += " AND repo_id = ANY(%s)"
+                    params.append(repo_ids)
+                params.append(int(limit) + 1)
+                cur.execute(
+                    f"SELECT DISTINCT file_id FROM symbol_fts WHERE {where} "  # noqa: S608
+                    "ORDER BY file_id LIMIT %s",
+                    params,
+                )
+                rows = [r[0] for r in cur.fetchall()]
+                out[suffix] = rows if 0 < len(rows) <= limit else []
+        return out
+
+    def body_mentions(
+        self,
+        mentions: list[tuple[str, str]],
+        *,
+        repo_ids: list[str] | None = None,
+        limit: int = 50,
+    ) -> dict[tuple[str, str], tuple[int, list[dict[str, Any]]]]:
+        """Symbols whose *text* contains a code fragment of the task (the usage anchor source).
+
+        ``mentions`` are ``(kind, text)`` pairs from ``text.mention_terms``: an ``ident`` is
+        matched as a whole word (case-sensitive), a ``literal`` as a quoted string in either
+        quote style, ``code`` as a plain substring. Each key maps to ``(total matches, first
+        ``limit`` rows by symbol_id)``: the total tells the caller how generic the fragment is
+        (``useState`` is in every component; ``localStorage`` in a few dozen symbols), the rows
+        are what it anchors on. Needs ``symbol_fts.body`` (migration 0011); ``{}`` before it.
+        """
+        if not mentions or not self._fts_available() or not self._fts_body_available():
+            return {}
+
+        def like(fragment: str) -> str:
+            # ``LIKE`` (not ``position``) so the trigram index of 0012 can serve the lookup.
+            escaped = fragment.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            return f"%{escaped}%"
+
+        out: dict[tuple[str, str], tuple[int, list[dict[str, Any]]]] = {}
+        with self.client.conn.cursor() as cur:
+            for kind, text in mentions:
+                if not text:
+                    continue
+                if kind == "ident":
+                    where = "body ~ %s"
+                    params: list[Any] = [rf"\y{re.escape(text)}\y"]
+                elif kind == "literal":
+                    where = "(body LIKE %s OR body LIKE %s)"
+                    params = [like(f"'{text}'"), like(f'"{text}"')]
+                else:
+                    where = "body LIKE %s"
+                    params = [like(text)]
+                if repo_ids:
+                    where += " AND repo_id = ANY(%s)"
+                    params.append(repo_ids)
+                params.append(int(limit))
+                cur.execute(
+                    "SELECT symbol_id, name, kind, file_id, line, count(*) OVER () AS total "
+                    f"FROM symbol_fts WHERE body IS NOT NULL AND {where} "  # noqa: S608
+                    "ORDER BY symbol_id ASC LIMIT %s",
+                    params,
+                )
+                rows = cur.fetchall()
+                if not rows:
+                    continue
+                out[(kind, text)] = (
+                    int(rows[0][5] or 0),
+                    [
+                        {
+                            "symbol_id": r[0],
+                            "name": r[1],
+                            "kind": r[2],
+                            "file_id": r[3],
+                            "line": r[4],
+                        }
+                        for r in rows
+                    ],
+                )
+        return out
+
+    def symbol_bodies(self, symbol_ids: list[str]) -> dict[str, str]:
+        """``symbol_id -> text`` of the given symbols (the indexed ``symbol_fts.body``; symbols
+        without text, or snapshots before migration 0011, are omitted)."""
+        ids = sorted({sid for sid in symbol_ids if sid})
+        if not ids or not self._fts_available() or not self._fts_body_available():
+            return {}
+        with self.client.conn.cursor() as cur:
+            cur.execute(
+                "SELECT symbol_id, body FROM symbol_fts "
+                "WHERE symbol_id = ANY(%s) AND body IS NOT NULL",
+                [ids],
+            )
+            return {row[0]: row[1] for row in cur.fetchall() if row[1]}
 
     def _lexical_search_contains(
         self, term: str, repo_ids: list[str] | None, limit: int
