@@ -7,6 +7,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-09-24
+
+### Changed
+
+- The English and Turkish READMEs link to the project website
+  ([bgts-ai-org.github.io/bce-microsite](https://bgts-ai-org.github.io/bce-microsite/))
+  from the top navigation.
+
 ## [0.2.4] - 2026-09-22
 
 This release turns the agent benchmark (a Cursor CLI agent on 14 tasks against a
@@ -370,7 +378,8 @@ First public release.
 - Docker Compose deployment with PostgreSQL, Apache AGE and pgvector preconfigured.
 - `server.json` manifest describing the stdio server for the official MCP registry.
 
-[Unreleased]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v0.2.4...HEAD
+[Unreleased]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v0.2.5...HEAD
+[0.2.5]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v0.2.1...v0.2.2
