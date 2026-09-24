@@ -38,6 +38,7 @@ def iter_source_files(
     """
     root_path = Path(root).resolve()
     exts = tuple(e.lower() for e in supported_exts)
+    nested_repo_cache: dict[Path, bool] = {}
     for path in sorted(root_path.rglob("*")):
         if not path.is_file():
             continue
@@ -45,8 +46,29 @@ def iter_source_files(
             continue
         if not path.name.lower().endswith(exts):
             continue
+        if _inside_nested_repo(path.parent, root_path, nested_repo_cache):
+            continue
         rel = path.relative_to(root_path).as_posix()
         yield rel, path
+
+
+def _inside_nested_repo(directory: Path, root_path: Path, cache: dict[Path, bool]) -> bool:
+    """True if ``directory`` or any ancestor below ``root_path`` is its own git checkout.
+
+    A nested checkout (a worktree under ``.claude/worktrees/``, a submodule, a stray clone) has
+    a ``.git`` entry - a directory or a gitlink file - and belongs to a different commit, so its
+    files would duplicate every symbol of the repository being indexed.
+    """
+    if directory == root_path:
+        return False
+    cached = cache.get(directory)
+    if cached is not None:
+        return cached
+    result = (directory / ".git").exists() or _inside_nested_repo(
+        directory.parent, root_path, cache
+    )
+    cache[directory] = result
+    return result
 
 
 def current_commit(root: str | Path) -> str:

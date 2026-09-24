@@ -9,6 +9,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Nested checkouts are no longer indexed.** `bce index` walked into any directory under
+  the repository that is itself a git checkout — a worktree under `.claude/worktrees/`, a
+  submodule, a stray clone — and indexed its files as if they belonged to the repository,
+  so every symbol in the nested tree appeared twice (once at each commit's path). The
+  walker now skips a directory, and everything below it, when it contains a `.git` entry
+  (directory or gitlink file). The repository root's own `.git` is unaffected.
+
+### Fixed
+
 - **Indexing time on large repositories.** Edge upserts matched their endpoints without a
   label (`MATCH (a {gid}), (b {gid})`), which AGE plans as an Append over every label
   table; inside the single indexing transaction, with no fresh planner statistics, that
