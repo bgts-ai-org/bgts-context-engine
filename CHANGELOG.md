@@ -94,6 +94,17 @@ parse error — and so are the changes; nothing is fitted to the benchmark's tas
   transient errors) three times with a growing pause; a query embedding gets two bounded
   attempts so a search can still degrade to lexical quickly; rejected requests are raised
   at once.
+- **Nested checkouts are no longer indexed.** `bce index` walked into any directory under
+  the repository that is itself a git checkout — a worktree under `.claude/worktrees/`, a
+  submodule, a stray clone — and indexed its files as if they belonged to the repository,
+  so every symbol in the nested tree appeared twice (once at each commit's path). When the
+  indexed root is inside a git checkout, the walker now skips a directory, and everything
+  below it, when it contains a `.git` entry (directory or gitlink file); the root's own
+  `.git` is unaffected. A root that is not a git checkout (a plain folder holding several
+  clones) is walked as before, so it does not come back empty. The full index logs how many
+  nested checkouts it skipped and the first few paths. A full index only upserts, so a
+  repository already indexed with a nested checkout keeps the duplicate symbols: drop its
+  index and rebuild it for them to disappear.
 - **Indexing time on large repositories.** Edge upserts matched their endpoints without a
   label (`MATCH (a {gid}), (b {gid})`), which AGE plans as an Append over every label
   table; inside the single indexing transaction, with no fresh planner statistics, that
