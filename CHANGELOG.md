@@ -7,6 +7,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-24
+
 Retrieval hybrid-v4: the whole symbol is searchable, and the task's code fragments, file
 paths and dominant names find the places that *use* them. Measured on 30 natural-language
 tasks against a React/TypeScript front end (`local_bench/cli_k50_eval`, `bce context
@@ -461,7 +463,8 @@ First public release.
 - Docker Compose deployment with PostgreSQL, Apache AGE and pgvector preconfigured.
 - `server.json` manifest describing the stdio server for the official MCP registry.
 
-[Unreleased]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v0.2.5...HEAD
+[Unreleased]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v0.2.5...v0.3.0
 [0.2.5]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v0.2.2...v0.2.3
