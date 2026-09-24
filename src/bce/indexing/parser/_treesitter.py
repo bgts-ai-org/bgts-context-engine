@@ -44,15 +44,79 @@ def node_text(node: Any, source: bytes) -> str:
     return source[node.start_byte : node.end_byte].decode("utf-8", errors="replace")
 
 
-#: Deterministic cap for the ``body`` symbol property (embedding input; keeps node payloads small).
+#: Deterministic cap for the ``body`` symbol property (context assembly; keeps node payloads small).
 BODY_SNIPPET_MAX_CHARS = 1200
+#: Cap for a symbol's *search text* (FTS body + chunked embeddings). Wide enough for a whole page
+#: component or service class; anything longer is a generated file and its tail carries nothing
+#: a task description would name.
+SEARCH_TEXT_MAX_CHARS = 24_000
+#: A doc comment must end within this many lines above the declaration it documents.
+_DOC_COMMENT_MAX_GAP_LINES = 1
 
 
 def body_snippet(node: Any, source: bytes, max_chars: int = BODY_SNIPPET_MAX_CHARS) -> str | None:
-    """Trimmed body text for embedding content (deterministic char-based truncation)."""
+    """Trimmed body text for the node property (deterministic char-based truncation)."""
     if node is None:
         return None
     text = node_text(node, source).strip()
     if not text:
         return None
     return text[:max_chars]
+
+
+def search_text(node: Any, source: bytes, max_chars: int = SEARCH_TEXT_MAX_CHARS) -> str | None:
+    """The whole declaration's text for the search indexes (deterministic truncation).
+
+    Unlike :func:`body_snippet` this spans the *declaration* - name, parameters, type members,
+    initializer - so an interface's fields, a type union's literals and a constant's value are
+    searchable, and a long function body is kept far beyond the display snippet.
+    """
+    if node is None:
+        return None
+    text = node_text(node, source).strip()
+    if not text:
+        return None
+    return text[:max_chars]
+
+
+def leading_doc_comment(
+    node: Any, source: bytes, *, markers: tuple[str, ...] = ("/**",)
+) -> str | None:
+    """The doc comment immediately above ``node`` (``/** ... */`` by default), cleaned.
+
+    Only a comment whose *last* line sits directly above the declaration (at most one blank line
+    between them) counts, so a file header or a comment on an unrelated earlier statement is
+    never attached. Leading ``*`` decoration is stripped; the text is joined with newlines.
+    """
+    if node is None:
+        return None
+    sibling = node.prev_sibling
+    # Skip decorators / modifiers tree-sitter may place between the comment and the declaration.
+    while sibling is not None and sibling.type in ("decorator", "export", "default"):
+        sibling = sibling.prev_sibling
+    if sibling is None or sibling.type != "comment":
+        return None
+    if node.start_point[0] - sibling.end_point[0] > _DOC_COMMENT_MAX_GAP_LINES + 1:
+        return None
+    raw = node_text(sibling, source).strip()
+    if not any(raw.startswith(m) for m in markers):
+        return None
+    return _clean_block_comment(raw)
+
+
+def _clean_block_comment(raw: str) -> str | None:
+    text = raw
+    for opener in ("/**", "/*!", "/*"):
+        if text.startswith(opener):
+            text = text[len(opener) :]
+            break
+    if text.endswith("*/"):
+        text = text[:-2]
+    lines: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("*"):
+            stripped = stripped[1:].strip()
+        lines.append(stripped)
+    cleaned = "\n".join(lines).strip()
+    return cleaned or None

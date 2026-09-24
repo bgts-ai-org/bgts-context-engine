@@ -27,6 +27,10 @@ class GraphNode:
     label: NodeLabel
     node_id: str
     properties: dict[str, Any] = field(default_factory=dict)
+    #: The symbol's full source text for the *search* indexes (FTS body, chunked embeddings).
+    #: Not a graph property: the node keeps the short ``body`` snippet for context assembly, the
+    #: search indexes get everything the extractor saw (capped upstream). ``None`` = use ``body``.
+    search_text: str | None = field(default=None, compare=False)
 
     @property
     def id_property(self) -> str:
@@ -37,6 +41,7 @@ class GraphNode:
 
         ``gid`` mirrors the node id under a single property name across all labels, so edges can be
         matched uniformly (``MATCH (a {gid: $src})``) without knowing each endpoint's label.
+        ``search_text`` is deliberately not part of this: it feeds the side indexes only.
         """
         props = dict(self.properties)
         props[self.id_property] = self.node_id

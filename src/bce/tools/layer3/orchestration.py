@@ -18,7 +18,13 @@ from bce.core.coverage import compute_coverage, coverage_message
 from bce.core.defaults import DEFAULT_MAX_CANDIDATES, DEFAULT_MAX_TOKENS
 from bce.core.i18n import get_translator
 from bce.core.orchestrator import RetrievalOrchestrator, bulk
-from bce.core.orchestrator.anchors import AnchorResult, find_anchors
+from bce.core.orchestrator.anchors import (
+    LEXICAL_ANCHOR_LIMIT,
+    LEXICAL_POOL,
+    USAGE_POOL,
+    AnchorResult,
+    find_anchors,
+)
 from bce.core.orchestrator.profile import RetrievalProfile, active_profile
 from bce.core.orchestrator.text import is_test_symbol
 from bce.storage.graph.repository import GraphRepository
@@ -32,12 +38,37 @@ def _elapsed_ms(start: float) -> float:
 
 
 #: How many nearest non-test symbols the automatic semantic anchor pulls in (D1; opt-out via
-#: auto_semantic). Wider than the answer itself: narrowing reserves slots for the model's best
-#: ranks, and the rest of the pool is what the graph stages get to re-rank.
+#: auto_semantic) for a default-sized answer. Wider than the answer itself: narrowing reserves
+#: slots for the model's best ranks, and the rest of the pool is what the graph stages get to
+#: re-rank. A caller asking for a long answer widens it (:func:`semantic_limit_for`).
 AUTO_SEMANTIC_LIMIT = 30
 #: Over-fetch factor: test functions usually dominate the raw nearest neighbours of a task
-#: description (they literally spell it out), so fetch more and keep the first non-test hits.
+#: description (they literally spell it out), and a long symbol occupies several chunk rows
+#: (migration 0011), so fetch more rows and keep the first distinct non-test symbols.
 _AUTO_SEMANTIC_OVERFETCH = 4
+#: The channel widths scale with the answer: the model's list and the lexical anchor list must
+#: both be at least ``K`` deep, or a K=50 answer is filled from a 30-deep model list plus graph
+#: neighbours of 15 lexical hits and never sees a candidate the model ranked 35th.
+CHANNEL_WIDTH_PER_CANDIDATE = 2
+
+
+def semantic_limit_for(max_candidates: int) -> int:
+    """Depth of the model's ranked list for an answer of ``max_candidates`` symbols."""
+    return max(AUTO_SEMANTIC_LIMIT, CHANNEL_WIDTH_PER_CANDIDATE * max(int(max_candidates), 1))
+
+
+def lexical_limits_for(max_candidates: int) -> tuple[int, int]:
+    """``(rows per term, anchors kept)`` for the lexical channel at this answer size."""
+    k = max(int(max_candidates), 1)
+    return (
+        max(LEXICAL_POOL, CHANNEL_WIDTH_PER_CANDIDATE * k),
+        max(LEXICAL_ANCHOR_LIMIT, k),
+    )
+
+
+def usage_pool_for(max_candidates: int) -> int:
+    """Match count at which a body mention counts as generic, for this answer size."""
+    return max(USAGE_POOL, CHANNEL_WIDTH_PER_CANDIDATE * max(int(max_candidates), 1))
 
 
 def _auto_semantic_or_none(
@@ -46,6 +77,8 @@ def _auto_semantic_or_none(
     task_text: str,
     repo_ids: list[str] | None,
     repository: GraphRepository | None,
+    *,
+    limit: int = AUTO_SEMANTIC_LIMIT,
 ) -> list[str] | None:
     """:func:`_auto_semantic_candidates`, degraded to ``None`` when the embedding server cannot be
     reached. The semantic anchor is one of several signals; losing it lowers coverage/confidence
@@ -53,12 +86,22 @@ def _auto_semantic_or_none(
     answer. Failing the whole tool call instead would leave the agent with nothing, after having
     waited on a stalled network."""
     try:
-        return _auto_semantic_candidates(store, task_text, repo_ids, repository)
+        return _auto_semantic_candidates(store, task_text, repo_ids, repository, limit=limit)
     except Exception as exc:
         logger.warning(
             "%s: semantic anchor skipped, embedding query failed", tool, extra={"detail": str(exc)}
         )
         return None
+
+
+def _dedupe(ids: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for sid in ids:
+        if sid and sid not in seen:
+            seen.add(sid)
+            out.append(sid)
+    return out
 
 
 def _auto_semantic_candidates(
@@ -68,18 +111,32 @@ def _auto_semantic_candidates(
     repository: GraphRepository | None = None,
     *,
     include_tests: bool = False,
+    limit: int = AUTO_SEMANTIC_LIMIT,
 ) -> list[str]:
-    """Nearest non-test symbol_ids for the task text, in (distance, ref_id) order (deterministic
-    given the pinned encoder + snapshot). Used only when the caller did not supply
-    semantic_candidates. Test symbols are skipped (their file/name is checked via the repository
-    when available, else from the symbol id) unless ``include_tests``."""
+    """Nearest non-test symbol_ids for the task text, best first (deterministic given the pinned
+    encoder + snapshot). Used only when the caller did not supply semantic_candidates.
+
+    One query vector for the whole text. Splitting the task into clauses and fusing the per-clause
+    rankings (reciprocal rank, clauses at half weight) was measured on the K=50 evaluation and
+    dropped: with chunked embeddings the whole-text query already found 89 of 127 expected files
+    in its top 100 against the fusion's 87, and the fusion cost the head dearly (semantic hit@1
+    19 -> 14 of 30, MRR 0.75 -> 0.58) because a clause's #1 outranked the whole task's #1.
+
+    Chunk rows of one symbol (migration 0011) collapse to the symbol at its best rank. Test
+    symbols are skipped (their file/name is checked via the repository when available, else from
+    the symbol id) unless ``include_tests``."""
     from bce.indexing.embedder.encoder import build_default_encoder
 
-    vector = build_default_encoder().encode_query(task_text)
-    limit = AUTO_SEMANTIC_LIMIT * (1 if include_tests else _AUTO_SEMANTIC_OVERFETCH)
-    hits = store.search(vector, limit=limit, repo_ids=repo_ids, kind="symbol")
+    encoder = build_default_encoder()
+    vector = encoder.encode_query(task_text)
+    rows = max(int(limit), 1) * (1 if include_tests else _AUTO_SEMANTIC_OVERFETCH)
+    ids = _dedupe(
+        [
+            hit["ref_id"]
+            for hit in store.search(vector, limit=rows, repo_ids=repo_ids, kind="symbol")
+        ]
+    )
 
-    ids = [hit["ref_id"] for hit in hits]
     meta = (
         bulk.symbols_meta(repository, sorted(set(ids)))
         if repository is not None and not include_tests
@@ -92,7 +149,7 @@ def _auto_semantic_candidates(
             if is_test_symbol(sid, sym.get("name"), sym.get("file_id")):
                 continue
         out.append(sid)
-        if len(out) >= AUTO_SEMANTIC_LIMIT:
+        if len(out) >= limit:
             break
     return out
 
@@ -108,7 +165,9 @@ def _build_anchors(
     repo_ids: list[str] | None,
     semantic_candidates: list[str] | None,
     profile: RetrievalProfile | None = None,
+    max_candidates: int = DEFAULT_MAX_CANDIDATES,
 ) -> AnchorResult:
+    lexical_pool, lexical_limit = lexical_limits_for(max_candidates)
     return find_anchors(
         repository,
         task_text=task_text,
@@ -119,6 +178,9 @@ def _build_anchors(
         repo_ids=repo_ids,
         semantic_candidates=semantic_candidates,
         profile=profile,
+        lexical_pool=lexical_pool,
+        lexical_limit=lexical_limit,
+        usage_pool=usage_pool_for(max_candidates),
     )
 
 
@@ -152,7 +214,12 @@ def get_context_for_task(
     if semantic_candidates is None and auto_semantic and store is not None:
         stage = time.perf_counter()
         semantic_candidates = _auto_semantic_or_none(
-            "get_context_for_task", store, task_text, repo_ids, repository
+            "get_context_for_task",
+            store,
+            task_text,
+            repo_ids,
+            repository,
+            limit=semantic_limit_for(max_candidates),
         )
         logger.debug(
             "get_context_for_task: auto semantic anchors",
@@ -170,6 +237,7 @@ def get_context_for_task(
         repo_ids=repo_ids,
         semantic_candidates=semantic_candidates,
         profile=profile,
+        max_candidates=max_candidates,
     )
     logger.debug(
         "get_context_for_task: anchors resolved",
@@ -407,7 +475,12 @@ def suggest_change_sites(
     if semantic_candidates is None and auto_semantic and store is not None:
         stage = time.perf_counter()
         semantic_candidates = _auto_semantic_or_none(
-            "suggest_change_sites", store, task_text, repo_ids, repository
+            "suggest_change_sites",
+            store,
+            task_text,
+            repo_ids,
+            repository,
+            limit=semantic_limit_for(max_candidates),
         )
         timings["semantic_ms"] = _elapsed_ms(stage)
         logger.debug(
@@ -426,6 +499,7 @@ def suggest_change_sites(
         repo_ids=repo_ids,
         semantic_candidates=semantic_candidates,
         profile=profile,
+        max_candidates=max_candidates,
     )
     timings["anchors_ms"] = _elapsed_ms(stage)
     logger.debug(

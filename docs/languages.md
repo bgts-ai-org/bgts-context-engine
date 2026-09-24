@@ -29,12 +29,23 @@ interface concept, so nothing emits `IMPLEMENTS`.
 
 **JavaScript and TypeScript.** Function and generator declarations become `function`; class
 declarations, including `abstract class`, become `class`; `interface` becomes `interface`;
-method definitions and signatures become `method`. A `variable_declarator` whose value is
-an arrow function or function expression becomes `function` — otherwise most modern code
-would index as a pile of constants. Plain declarators become `constant` when lexically
-scoped and `variable` for `var`. `class_heritage` becomes `INHERITS`. Both ES module
-imports and CommonJS `require()` are resolved. TSX is a separate provider because the
-grammar differs.
+`type` aliases become `type` and `enum` declarations `enum` (a `type WorkspaceStatus =
+'SETUP' | 'ACTIVE' | …` union is where a status task's answer lives, and it was not a symbol
+before); method definitions and signatures become `method`. A `variable_declarator` whose
+value is an arrow function or function expression becomes `function` — otherwise most
+modern code would index as a pile of constants. Plain declarators become `constant` when
+lexically scoped and `variable` for `var`. A `/** … */` JSDoc block directly above a
+declaration (or above its `export` / decorator) becomes the symbol's `docstring`.
+`class_heritage` becomes `INHERITS`. Both ES module imports and CommonJS `require()` are
+resolved. TSX is a separate provider because the grammar differs.
+
+**Every symbol carries its text.** Whatever the language, a symbol's `body` used to be a
+1 200-character head of the function body and nothing at all for interfaces, constants or
+classes. Each provider now attaches the *full* declaration — the `type` union's members, the
+constant's initialiser, the class from its first line to its last, capped at 24 000
+characters — as search text. It is not stored as a graph property; it feeds the FTS `body`
+column and the chunked embeddings (see [data model](data-model.md)), so a string sixty lines
+into a component is findable by both lexical and semantic search.
 
 **Java.** Classes and enums become `class`, interfaces become `interface`, methods become
 `method`, constructors become `constructor`. `extends` becomes `INHERITS` and `implements`

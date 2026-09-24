@@ -26,13 +26,23 @@ from bce.domain.models import (
     UnresolvedRef,
 )
 from bce.indexing.extractor.routes import add_route
-from bce.indexing.parser._treesitter import body_snippet, make_parser, node_text
+from bce.indexing.parser._treesitter import (
+    body_snippet,
+    leading_doc_comment,
+    make_parser,
+    node_text,
+    search_text,
+)
 from bce.indexing.parser.base import LanguageProvider, ParseContext
 from bce.indexing.parser.symbol_id import make_module_id, make_symbol_id
 
 _FUNCTION_DECLS = {"function_declaration", "generator_function_declaration"}
 _CLASS_DECLS = {"class_declaration", "abstract_class_declaration"}
 _FUNCTION_VALUES = {"arrow_function", "function", "function_expression"}
+#: TypeScript declarations that name a *shape* rather than code: they carry no calls, but their
+#: text (union literals, members, enum values) is exactly what a task about "the status
+#: vocabulary" or "the run status list" names, so they are symbols with search text like any other.
+_TYPE_DECLS = {"type_alias_declaration": SymbolKind.TYPE, "enum_declaration": SymbolKind.ENUM}
 
 # Strength ordering for ref_kind (higher wins when a symbol is used multiple ways in one body).
 _REF_KIND_RANK = {RefKind.READ: 0, RefKind.PASS: 1, RefKind.WRITE: 2, RefKind.DEFINE: 3}
@@ -168,23 +178,37 @@ class _JsFamilyProvider(LanguageProvider):
     def _collect(
         self, node, ctx, package, source, frag, module_symbols, class_methods, defs, unresolved
     ) -> None:
+        # The doc comment sits above the `export` keyword when there is one.
+        doc = leading_doc_comment(node, source)
         node = self._unwrap_export(node)
         if node.type in _FUNCTION_DECLS:
-            d = self._add_symbol(node, ctx, package, "", source, frag, SymbolKind.FUNCTION, node)
+            d = self._add_symbol(
+                node, ctx, package, "", source, frag, SymbolKind.FUNCTION, node, docstring=doc
+            )
             module_symbols[d.name] = d.symbol_id
             defs.append(d)
         elif node.type in _CLASS_DECLS:
-            d = self._add_symbol(node, ctx, package, "", source, frag, SymbolKind.CLASS, None)
+            d = self._add_symbol(
+                node, ctx, package, "", source, frag, SymbolKind.CLASS, None, docstring=doc
+            )
             module_symbols[d.name] = d.symbol_id
             defs.append(d)
             self._add_heritage(node, source, frag, d.symbol_id, module_symbols, unresolved)
             self._collect_methods(node, ctx, package, source, frag, class_methods, defs, d.name)
         elif node.type == "interface_declaration":
-            d = self._add_symbol(node, ctx, package, "", source, frag, SymbolKind.INTERFACE, None)
+            d = self._add_symbol(
+                node, ctx, package, "", source, frag, SymbolKind.INTERFACE, None, docstring=doc
+            )
             module_symbols[d.name] = d.symbol_id
             defs.append(d)
+        elif node.type in _TYPE_DECLS:
+            d = self._add_symbol(
+                node, ctx, package, "", source, frag, _TYPE_DECLS[node.type], None, docstring=doc
+            )
+            module_symbols.setdefault(d.name, d.symbol_id)
+            defs.append(d)
         elif node.type in ("lexical_declaration", "variable_declaration"):
-            self._collect_variable(node, ctx, package, source, frag, module_symbols, defs)
+            self._collect_variable(node, ctx, package, source, frag, module_symbols, defs, doc)
 
     def _collect_methods(
         self, class_node, ctx, package, source, frag, class_methods, defs, class_name
@@ -196,12 +220,22 @@ class _JsFamilyProvider(LanguageProvider):
         for member in body.named_children:
             if member.type in ("method_definition", "method_signature"):
                 md = self._add_symbol(
-                    member, ctx, package, class_name, source, frag, SymbolKind.METHOD, member
+                    member,
+                    ctx,
+                    package,
+                    class_name,
+                    source,
+                    frag,
+                    SymbolKind.METHOD,
+                    member,
+                    docstring=leading_doc_comment(member, source),
                 )
                 methods[md.name] = md.symbol_id
                 defs.append(md)
 
-    def _collect_variable(self, node, ctx, package, source, frag, module_symbols, defs) -> None:
+    def _collect_variable(
+        self, node, ctx, package, source, frag, module_symbols, defs, docstring=None
+    ) -> None:
         for declarator in node.named_children:
             if declarator.type != "variable_declarator":
                 continue
@@ -221,6 +255,7 @@ class _JsFamilyProvider(LanguageProvider):
                     SymbolKind.FUNCTION,
                     value,
                     name_override=name,
+                    docstring=docstring,
                 )
             else:
                 kind = (
@@ -228,15 +263,47 @@ class _JsFamilyProvider(LanguageProvider):
                     if node.type == "lexical_declaration"
                     else SymbolKind.VARIABLE
                 )
+                # `const X = useMemo(...)`, `const COLORS = {...}`: the initializer *is* the
+                # symbol's content (a call, an object, an array of literals).
                 d = self._add_symbol(
-                    declarator, ctx, package, "", source, frag, kind, None, name_override=name
+                    declarator,
+                    ctx,
+                    package,
+                    "",
+                    source,
+                    frag,
+                    kind,
+                    None,
+                    name_override=name,
+                    docstring=docstring,
+                    value_node=value,
                 )
             module_symbols.setdefault(d.name, d.symbol_id)
             defs.append(d)
 
     def _add_symbol(
-        self, node, ctx, package, namespace, source, frag, kind, body_holder, name_override=None
+        self,
+        node,
+        ctx,
+        package,
+        namespace,
+        source,
+        frag,
+        kind,
+        body_holder,
+        name_override=None,
+        *,
+        docstring=None,
+        value_node=None,
     ) -> _Def:
+        """Add one Symbol node (+ DEFINED_IN).
+
+        ``body_holder`` is the function-like node whose ``parameters`` / ``body`` fields give the
+        signature and the call-bearing body; ``value_node`` is the initializer of a non-function
+        declaration (its text is the display snippet). The node's *search text* is always the
+        whole declaration ``node`` - interface members, type literals, the complete function -
+        so the search indexes see everything, while ``body`` stays a short display snippet.
+        """
         if name_override is not None:
             name = name_override
         else:
@@ -246,6 +313,12 @@ class _JsFamilyProvider(LanguageProvider):
         params = body_holder.child_by_field_name("parameters") if body_holder is not None else None
         signature = node_text(params, source) if params is not None else None
         body = body_holder.child_by_field_name("body") if body_holder is not None else None
+        if body is None and body_holder is None:
+            # Declarations without a function body: the value (constant), the member list
+            # (interface / enum) or the aliased type is what a reader would call the body.
+            body = value_node if value_node is not None else node.child_by_field_name("body")
+            if body is None and node.type == "type_alias_declaration":
+                body = node.child_by_field_name("value")
         symbol_id = make_symbol_id(
             language=self.language,
             package=package,
@@ -254,27 +327,29 @@ class _JsFamilyProvider(LanguageProvider):
             signature=signature,
             kind=str(kind),
         )
-        frag.add_node(
-            GraphNode(
-                NodeLabel.SYMBOL,
-                symbol_id,
-                {
-                    "name": name,
-                    "kind": str(kind),
-                    "signature": signature,
-                    "visibility": "private" if name.startswith(("_", "#")) else "public",
-                    "docstring": None,
-                    "body": body_snippet(body, source),
-                    "namespace": namespace or package or "",
-                    "file_id": ctx.file_id,
-                    "line": node.start_point[0] + 1,
-                    "indexed_at_commit": ctx.indexed_at_commit,
-                },
-            )
+        symbol = GraphNode(
+            NodeLabel.SYMBOL,
+            symbol_id,
+            {
+                "name": name,
+                "kind": str(kind),
+                "signature": signature,
+                "visibility": "private" if name.startswith(("_", "#")) else "public",
+                "docstring": docstring,
+                "body": body_snippet(body, source),
+                "namespace": namespace or package or "",
+                "file_id": ctx.file_id,
+                "line": node.start_point[0] + 1,
+                "indexed_at_commit": ctx.indexed_at_commit,
+            },
         )
+        symbol.search_text = search_text(node, source)
+        frag.add_node(symbol)
         frag.add_edge(GraphEdge(EdgeLabel.DEFINED_IN, symbol_id, ctx.file_id))
         class_name = namespace if kind is SymbolKind.METHOD else None
-        return _Def(symbol_id, name, body, class_name)
+        # Only function-like bodies are walked for calls / references.
+        call_body = body if body_holder is not None else None
+        return _Def(symbol_id, name, call_body, class_name)
 
     def _add_heritage(
         self, class_node, source, frag, class_symbol_id, module_symbols, unresolved

@@ -387,11 +387,15 @@ def test_ui_context_trace_stage_order_and_contents() -> None:
     anchors = by_name["anchors"]["anchors"]
     assert set(anchors[_ANCHOR]) == {"explicit", "lexical"}
     assert anchors[_CALLEE] == ["semantic"]
+    # The task names login_handler unambiguously, so its caller is nominated by the impact
+    # source (hybrid-v4) rather than only reached by expansion.
+    assert anchors[_CALLER] == ["impact"]
 
-    # Expansion reaches the caller at distance 1 and keeps anchors at distance 0.
+    # Expansion keeps every anchor at distance 0; the caller is one of them now.
     expand_nodes = {n["symbol_id"]: n for n in by_name["expand"]["nodes"]}
     assert expand_nodes[_ANCHOR]["distance"] == 0 and expand_nodes[_ANCHOR]["is_anchor"]
-    assert expand_nodes[_CALLER]["distance"] == 1 and not expand_nodes[_CALLER]["is_anchor"]
+    assert expand_nodes[_CALLER]["distance"] == 0 and expand_nodes[_CALLER]["is_anchor"]
+    assert expand_nodes[_CALLER]["anchor_strength"] < expand_nodes[_ANCHOR]["anchor_strength"]
 
     # login_handler appears in the task text -> task signal 1.0; ranked list carries scores.
     score_stage = by_name["score"]
