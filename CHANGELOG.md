@@ -7,6 +7,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Indexing time on large repositories.** Edge upserts matched their endpoints without a
+  label (`MATCH (a {gid}), (b {gid})`), which AGE plans as an Append over every label
+  table; inside the single indexing transaction, with no fresh planner statistics, that
+  plan cost ~30–50 ms per edge on a 20 000-symbol graph (netty: 74 min, guava: 84 min).
+  `GraphRepository.upsert_fragment` now passes the fragment's node labels so each endpoint
+  is one GIN probe (`MATCH (a:Symbol {gid}), (b:File {gid})`, ~2.4 ms, same edge counts);
+  endpoints outside the fragment keep the unlabelled fallback.
+
 ## [0.3.0] - 2026-09-24
 
 Retrieval hybrid-v4: the whole symbol is searchable, and the task's code fragments, file

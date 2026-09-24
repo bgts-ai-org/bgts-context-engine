@@ -191,21 +191,38 @@ class GraphRepository:
             tuple(values),
         )
 
-    def upsert_edge(self, edge: GraphEdge) -> None:
+    def upsert_edge(
+        self,
+        edge: GraphEdge,
+        labels: dict[str, NodeLabel] | None = None,
+    ) -> None:
+        """MERGE one edge.
+
+        ``labels`` (node id -> label, usually the nodes of the same fragment) lets the MATCH name
+        the endpoint labels. An unlabelled ``MATCH (a {gid: ..})`` is an Append over every label
+        table; inside the long indexing transaction (no fresh planner statistics yet) that plan
+        degrades to tens of milliseconds per edge on large graphs, while the labelled lookup is a
+        single GIN probe per endpoint. Unknown endpoints fall back to the unlabelled form.
+        """
         set_sql, params = _set_clause("r", edge.merged_properties())
         params["src"] = edge.src_id
         params["dst"] = edge.dst_id
-        query = f"MATCH (a {{gid: $src}}), (b {{gid: $dst}}) MERGE (a)-[r:{edge.label}]->(b)"
+        src_label = labels.get(edge.src_id) if labels else None
+        dst_label = labels.get(edge.dst_id) if labels else None
+        a = f"a:{src_label}" if src_label else "a"
+        b = f"b:{dst_label}" if dst_label else "b"
+        query = f"MATCH ({a} {{gid: $src}}), ({b} {{gid: $dst}}) MERGE (a)-[r:{edge.label}]->(b)"
         if set_sql:
             query += f" SET {set_sql}"
         self.client.execute(query, params)
 
     def upsert_fragment(self, fragment: GraphFragment) -> None:
         frag = fragment.deduped()
+        labels = {node.node_id: node.label for node in frag.nodes}
         for node in frag.nodes:
             self.upsert_node(node)
         for edge in frag.edges:
-            self.upsert_edge(edge)
+            self.upsert_edge(edge, labels)
 
     def delete_file_subgraph(self, file_id: str) -> None:
         """Remove a file's symbols and the file node (for incremental re-index, Phase 1)."""
