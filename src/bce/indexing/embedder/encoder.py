@@ -126,6 +126,13 @@ def _split_batches(texts: list[str]) -> list[list[str]]:
     return batches
 
 
+#: Retries for one embedding request. A local server drops a request now and then (model reload,
+#: memory pressure), a hosted API closes a connection without a response a few times per hour;
+#: a transient failure should not cost the whole indexing run.
+_HTTP_ATTEMPTS = 3
+_HTTP_RETRY_SECONDS = 2.0
+
+
 class VoyageEncoder(Encoder):
     """Voyage AI code embeddings (``voyage-code-3`` by default).
 
@@ -149,30 +156,63 @@ class VoyageEncoder(Encoder):
                 "install leaves out. Install it with: pip install 'bgts-context-engine[embed]' "
                 "- or set BCE_EMBEDDING_PROVIDER=hashing to embed offline."
             ) from exc
-        self._client = voyageai.Client(api_key=api_key)
+        # The SDK retries rate limits and 5xx with a backoff of its own; a dropped connection
+        # (``APIConnectionError``) is not among them and is handled in :meth:`_embed`.
+        self._client = voyageai.Client(api_key=api_key, max_retries=_HTTP_ATTEMPTS)
+        self._errors = voyageai.error
         self.model = model
         self.dim = dim
         # model_id pins model + dimension together (a change requires a reindex, P2 determinism).
         self.model_id = f"{model}-{dim}"
 
-    def _embed(self, texts: list[str], input_type: str) -> list[list[float]]:
-        """Embed ``texts`` in order, splitting into as many API requests as the limits require."""
+    def _embed(
+        self, texts: list[str], input_type: str, *, attempts: int = _HTTP_ATTEMPTS
+    ) -> list[list[float]]:
+        """Embed ``texts`` in order, splitting into as many API requests as the limits require.
+
+        A request whose connection the API closes without a response (a few per hour on a
+        long indexing run) is retried ``attempts`` times with a growing pause; a rejected
+        request (bad key, too long) is raised at once.
+        """
         vectors: list[list[float]] = []
         for batch in _split_batches(texts):
-            result = self._client.embed(
-                batch,
-                model=self.model,
-                input_type=input_type,
-                output_dimension=self.dim,
-            )
-            vectors.extend(list(vec) for vec in result.embeddings)
+            vectors.extend(list(vec) for vec in self._request(batch, input_type, attempts))
         return vectors
+
+    def _request(self, batch: list[str], input_type: str, attempts: int) -> list[list[float]]:
+        transient = (
+            self._errors.APIConnectionError,
+            self._errors.RateLimitError,
+            self._errors.ServiceUnavailableError,
+            self._errors.ServerError,
+            TimeoutError,
+            ConnectionError,
+        )
+        last: Exception | None = None
+        for attempt in range(1, attempts + 1):
+            try:
+                result = self._client.embed(
+                    batch,
+                    model=self.model,
+                    input_type=input_type,
+                    output_dimension=self.dim,
+                )
+                return result.embeddings
+            except transient as exc:
+                last = exc
+                if attempt < attempts:
+                    time.sleep(_HTTP_RETRY_SECONDS * attempt)
+        assert last is not None
+        raise RuntimeError(
+            f"Voyage embedding request failed after {attempts} attempts: {last}"
+        ) from last
 
     def encode(self, text: str) -> list[float]:
         return self._embed([text], "document")[0]
 
     def encode_query(self, text: str) -> list[float]:
-        return self._embed([text], "query")[0]
+        # two bounded attempts: a search tool call fails fast and can degrade to lexical
+        return self._embed([text], "query", attempts=2)[0]
 
     def encode_many(self, texts: list[str]) -> list[list[float]]:
         if not texts:
@@ -186,11 +226,6 @@ class VoyageEncoder(Encoder):
 #: these exact strings, so a different prefix costs retrieval quality.
 JINA_CODE_QUERY_PREFIX = "Find the most relevant code snippet given the following query:\n"
 JINA_CODE_DOCUMENT_PREFIX = "Candidate code snippet:\n"
-
-#: Retries for one embedding request. A local server drops a request now and then (model reload,
-#: memory pressure); a transient failure should not cost the whole indexing run.
-_HTTP_ATTEMPTS = 3
-_HTTP_RETRY_SECONDS = 2.0
 
 
 def _post_json(url: str, body: dict[str, Any], headers: dict[str, str], timeout: float) -> Any:

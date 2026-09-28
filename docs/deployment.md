@@ -139,6 +139,26 @@ Workers run as threads inside the API process, `BCE_JOB_WORKERS` of them, pollin
 the default of 1 makes indexing strictly sequential, which is usually what you want: two
 concurrent indexes of the same repository contend on the same subgraphs.
 
+Give the database memory. An index run is one long transaction of small statements —
+a `MERGE` per node and edge, an `INSERT` per embedding — and each embedding insert touches
+dozens of random pages of the HNSW index, which for a 70 000-symbol repository is over a
+gigabyte. With PostgreSQL's default `shared_buffers = 128MB` those inserts evict the graph's
+GIN and B-tree pages between every statement, and running several repositories at once
+multiplies the effect (four concurrent indexes wrote 167 GB to disk in an afternoon). Start
+the container with `postgres -c shared_buffers=2GB` (or a quarter of the machine's memory)
+and index large repositories one at a time. The planner settings an index run needs
+(`plan_cache_mode = force_custom_plan` on every connection, nested-loop-only joins for the
+duration of the run — the label tables are never analyzed inside the indexing transaction,
+see the changelog) are set by the engine itself; nothing server-side is required.
+
+Leave the container alone while it indexes. In the compose setup PostgreSQL is PID 1 of
+the container, so any helper started with `docker exec` that is orphaned and exits with a
+status other than 0 or 1 is reaped by the postmaster as a *crashed server process*: the
+postmaster then kills every backend and runs crash recovery, and the index run — one
+transaction — is rolled back after however many hours it had been going. Inspect progress
+from the host (the port is published) rather than with shell pipelines inside the
+container, or give the container an init process (`init: true` in the compose service).
+
 ## Configuration
 
 Every setting is an environment variable prefixed `BCE_`, also read from `.env`.

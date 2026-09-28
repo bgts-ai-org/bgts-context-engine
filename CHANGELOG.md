@@ -7,15 +7,92 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+Java and C# were the weak languages of the 12-repository benchmark
+(`local_bench/multi_repo_bench`: 87.9 and 90.4 file recall at K=50 against 94–98 for the
+others). The causes were general — test symbols filling the lexical pools of test-heavy
+repositories, nested types never indexed, whole C# files hidden behind `#if` or lost to a
+parse error — and so are the changes; nothing is fitted to the benchmark's tasks.
+
+### Added
+
+- **Test symbols are excluded in the query.** Migration `0013_fts_is_test` adds
+  `symbol_fts.is_test`, written at upsert from the path / name rules
+  (`bce.domain.testness.is_test_symbol`, moved out of the orchestrator so storage can share
+  it). `lexical_search`, `lexical_search_many` and `body_mentions` take `exclude_tests` and
+  add `AND NOT is_test`, so a term's pool of rows is filled with production symbols. Before,
+  the rows were filtered after the fetch: in Guava and EF Core (60 % of symbols are tests)
+  the pool of 25–50 came back mostly tests, the production symbols never entered it and
+  every term looked saturated. Snapshots without the column behave as before.
+- **Java: nested types, enum bodies, records, annotation types, static fields.** Types
+  declared inside other types are symbols with their container chain
+  (`LocalCache.Segment.lookup`), methods in an enum body after the constants are indexed,
+  `record` / `@interface` declarations are types, `static` fields and interface constants
+  become `constant` / `field` symbols, and `Inner.helper()` calls resolve inside the file.
+  Guava had 5 100 of its 13 000 methods in nested types, Netty 3 300; none was indexed.
+- **C#: `#if` regions, nested types, enums, delegates, fields, parse recovery.** Type
+  declarations under `preproc_if` / `preproc_else` (a whole file behind `#if !UNIX`: 280
+  types in PowerShell) and members declared per branch are indexed; nested types carry their
+  container chain; `enum` → `enum`, `delegate` → `type`, `const` / `static` fields →
+  `constant` / `field`; `Type.Method()` calls on a type in the file resolve. A file whose
+  parse has errors is re-parsed after a byte-for-byte repair of the constructs the grammar
+  rejects (a `#if` splitting one statement, `async` as an identifier, null-conditional
+  assignment, collection expressions, `$@"""{x}"""`), keeping the tree only when it has
+  fewer errors; positions stay valid against the original source. EF Core: 64 → 9 files
+  without symbols (all `AssemblyInfo` / `TypeForwards`), 66 → 6 files with parse errors,
+  +3 700 symbols; PowerShell: 49 → 5 and 34 → 10, +8 900 symbols.
+
+### Changed
+
+- **URLs contribute no query terms**, and contractions (`don`, `doesn`, `isn`, …) are
+  stop-words. A PR link used to add `https github com org repo pull` to every task.
+- The word-pair (phrase) bonus stays flat. Three scaled forms — by the words' rarity, by
+  the pair's rarity, by the match tier — were measured on the 12-repository benchmark: no
+  gain at K=50 anywhere and a reshuffle at K=20 that moved single tasks in every language
+  (net −4 file hits on prometheus, ±1 elsewhere, ±1 on guava). The code now says why.
+
 ### Fixed
 
+- **A dropped Voyage connection no longer fails the indexing run.** The `voyageai` client
+  retries rate limits and 5xx responses itself but raises `APIConnectionError` at once when
+  the API closes a connection without a response — a few times per hour on a long run, and
+  fatal 20 minutes into indexing netty. `VoyageEncoder` now retries those (and the SDK's
+  transient errors) three times with a growing pause; a query embedding gets two bounded
+  attempts so a search can still degrade to lexical quickly; rejected requests are raised
+  at once.
 - **Indexing time on large repositories.** Edge upserts matched their endpoints without a
   label (`MATCH (a {gid}), (b {gid})`), which AGE plans as an Append over every label
   table; inside the single indexing transaction, with no fresh planner statistics, that
   plan cost ~30–50 ms per edge on a 20 000-symbol graph (netty: 74 min, guava: 84 min).
   `GraphRepository.upsert_fragment` now passes the fragment's node labels so each endpoint
-  is one GIN probe (`MATCH (a:Symbol {gid}), (b:File {gid})`, ~2.4 ms, same edge counts);
-  endpoints outside the fragment keep the unlabelled fallback.
+  is one GIN probe (`MATCH (a:Symbol {gid}), (b:File {gid})`, ~2.4 ms, same edge counts).
+  Cross-file edges come from the linker as edge-only fragments, so their endpoints were
+  never in that map and every one of them (the bulk of a Java graph: 100–300 ms each on
+  guava) still took the unlabelled path; the endpoint labels are now derived from the edge
+  type when the fragment does not name them (`CALLS`/`REFERENCES`/`INHERITS`/`IMPLEMENTS`
+  are Symbol → Symbol, `ROUTES_TO` Route → Symbol, `EXPLAINS` DesignNote → Symbol, an
+  `IMPORTS` endpoint is the File/Module complement of the known one). Node and edge counts
+  per label are unchanged (verified on a full re-index of flask).
+- **Indexing time, second cause: generic plans.** Even with labelled lookups every `MERGE`
+  kept slowing as the graph grew — 5 → 17 ms per statement between 2 000 and 6 000
+  symbols, 35–220 ms at guava's size — while an ad-hoc `EXPLAIN ANALYZE` of the same
+  statement ran in 1 ms. psycopg prepares a statement server-side after five executions and
+  PostgreSQL then settles on a *generic* plan from the row estimates of that moment: chosen
+  while the fresh graph held a hundred vertices, never re-planned inside the indexing
+  transaction. Connections now run with `plan_cache_mode = force_custom_plan`, so every
+  statement is planned with its actual parameters (flat ~2 ms; 6 000 symbols in 49 s
+  instead of 170 s, and the gap widens with size).
+- **Indexing time, third cause: the edge MERGE sorted the whole edge table.** With custom
+  plans the planner still had no statistics for the label tables (filled inside the one
+  indexing transaction, never analyzed) and AGE's `@>` operator has a constant selectivity,
+  so it believed the two endpoint lookups of an edge `MERGE` return hundreds of rows and
+  planned the existence check as a merge join: a sequential scan *and sort of the whole
+  edge table* for every edge. On netty that was 64 000 sort spills — 372 GB of temporary
+  files — and 50–700 ms per statement by the end. `Indexer` now runs with
+  `enable_mergejoin = off` / `enable_hashjoin = off` for the duration of an index run
+  (session-scoped, restored afterwards; read paths untouched): the check becomes one probe of
+  the `start_id` index, flat at a few milliseconds whatever the graph size, and the run
+  writes no temporary files at all (12 000 synthetic symbols: 0 spill files versus one per
+  edge; per-statement time no longer grows with the edge count).
 
 ## [0.3.0] - 2026-09-24
 

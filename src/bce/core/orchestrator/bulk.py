@@ -104,14 +104,56 @@ def lexical_hits(
     *,
     repo_ids: list[str] | None,
     limit: int,
+    exclude_tests: bool = False,
 ) -> dict[str, list[dict[str, Any]]]:
-    """``term -> best ``limit`` keyword matches``, one query for all terms when supported."""
+    """``term -> best ``limit`` keyword matches``, one query for all terms when supported.
+
+    ``exclude_tests`` asks the repository to fill the ``limit`` rows with production symbols
+    (migration 0013); repositories that do not know the flag are called without it and the
+    caller keeps filtering the rows itself.
+    """
     if not terms:
         return {}
+    extra = {"exclude_tests": True} if exclude_tests else {}
     bulk = _bulk(repository, "lexical_search_many")
     if bulk is not None:
         try:
-            return bulk(terms, repo_ids=repo_ids, limit=limit)
+            return _call_with_optional(bulk, extra, terms, repo_ids=repo_ids, limit=limit)
         except NotImplementedError:
             pass
-    return {term: repository.lexical_search(term, repo_ids=repo_ids, limit=limit) for term in terms}
+    return {
+        term: _call_with_optional(
+            repository.lexical_search, extra, term, repo_ids=repo_ids, limit=limit
+        )
+        for term in terms
+    }
+
+
+def body_mentions(
+    repository: GraphRepository,
+    mentions: list[tuple[str, str]],
+    *,
+    repo_ids: list[str] | None,
+    limit: int,
+    exclude_tests: bool = False,
+) -> dict[tuple[str, str], tuple[int, list[dict[str, Any]]]]:
+    """``(kind, text) -> (total, rows)`` body lookups (usage / impact sources); ``{}`` when the
+    repository has no body search. See :func:`lexical_hits` for ``exclude_tests``."""
+    lookup = _bulk(repository, "body_mentions")
+    if lookup is None or not mentions:
+        return {}
+    extra = {"exclude_tests": True} if exclude_tests else {}
+    return _call_with_optional(lookup, extra, mentions, repo_ids=repo_ids, limit=limit)
+
+
+def _call_with_optional(method: Any, extra: dict[str, Any], *args: Any, **kwargs: Any) -> Any:
+    """Call ``method`` with ``extra`` keyword arguments, dropping them for signatures that do
+    not accept them (older repositories, unit-test fakes)."""
+    if not extra:
+        return method(*args, **kwargs)
+    try:
+        return method(*args, **kwargs, **extra)
+    except TypeError as exc:
+        if not any(key in str(exc) for key in extra):
+            raise
+        return method(*args, **kwargs)

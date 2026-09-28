@@ -10,8 +10,11 @@ the graph upserter together, and stamps every node with the commit the index was
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -88,6 +91,34 @@ class Indexer:
             conn = getattr(getattr(repository, "client", None), "conn", None)
             if conn is not None:
                 self.embedder = Embedder(VectorStore(conn), defer=True)
+
+    @contextmanager
+    def _point_lookup_plans(self) -> Iterator[None]:
+        """Keep the planner on nested loops for the duration of an index run.
+
+        Every write statement is a point lookup: the endpoints of an edge ``MERGE`` are matched by
+        ``gid`` through the GIN index, and the edge itself through the ``start_id`` / ``end_id``
+        indexes. But the label tables are filled inside this one transaction and never analyzed,
+        and AGE's ``@>`` operator has a constant selectivity, so the planner believes the two
+        endpoint lookups return hundreds of rows and prefers a merge join for the existence check:
+        a sequential scan *and sort of the whole edge table* per edge (netty: 64 000 edge
+        statements, 372 GB of sort spill files, 50-700 ms each). With merge and hash joins
+        disabled it takes the index path, which is flat at 1-2 ms whatever the graph size. The
+        setting is per session, so the read paths and other connections are unaffected; the
+        connection is restored afterwards. No-op without a database connection (fakes).
+        """
+        conn = getattr(getattr(self.repository, "client", None), "conn", None)
+        if conn is None:
+            yield
+            return
+        conn.execute("SET enable_mergejoin = off")
+        conn.execute("SET enable_hashjoin = off")
+        try:
+            yield
+        finally:
+            with contextlib.suppress(Exception):
+                conn.execute("RESET enable_mergejoin")
+                conn.execute("RESET enable_hashjoin")
 
     def _flush_embeddings(self) -> None:
         """Write buffered embeddings (deferred embedders only; fakes without ``flush`` are fine)."""
@@ -169,6 +200,20 @@ class Indexer:
         commit: str,
         remote_url: str | None = None,
         branch: str | None = None,
+    ) -> IndexSummary:
+        with self._point_lookup_plans():
+            return self._index_root_locked(
+                root=root, name=name, commit=commit, remote_url=remote_url, branch=branch
+            )
+
+    def _index_root_locked(
+        self,
+        *,
+        root: Path,
+        name: str,
+        commit: str,
+        remote_url: str | None,
+        branch: str | None,
     ) -> IndexSummary:
         repo_id = make_repo_id(name)
         default_branch = branch or "main"
@@ -318,6 +363,14 @@ class Indexer:
             raise ValueError(
                 f"No baseline commit for repo '{name}'; run a full index first or pass since_commit."
             )
+        with self._point_lookup_plans():
+            return self._index_incremental_locked(
+                root=root, name=name, repo_id=repo_id, base=base, to_commit=to_commit
+            )
+
+    def _index_incremental_locked(
+        self, *, root: Path, name: str, repo_id: str, base: str, to_commit: str
+    ) -> IncrementalSummary:
         target = current_commit(root) if to_commit == "HEAD" else to_commit
         started = time.perf_counter()
         logger.info(

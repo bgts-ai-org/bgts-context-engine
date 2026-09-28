@@ -87,7 +87,11 @@ lexical strength is the share of the task's terms it matches, weighted by term r
 term that fills its pool of 25 rows is common and counts for 0.35 of a precise one. A symbol
 matched by "period" and "comparison" therefore outranks one matched only by "authorization".
 Coverage is scaled so that matching about a third of a long task's terms is already strong
-evidence; symbols below strength 0.15 are dropped.
+evidence; symbols below strength 0.15 are dropped. The word-pair bonus is flat: a pair that
+is not itself saturated adds one precise term's weight, whatever its words' rarity or where
+it matched (scaled forms were measured across the 12-repository benchmark and only
+reshuffled tasks at K=20). URLs in the task text contribute no terms at all (`github`,
+`com`, `pull`, a port number), and contractions (`don`, `doesn`, `isn`) are stop-words.
 
 **Strength combines with a noisy-OR.** `strength = 1 − ∏(1 − sᵢ)` over the sources that
 nominated the symbol. A lexical 0.5 plus a semantic 0.6 gives 0.8; an explicit name gives 1.0
@@ -118,8 +122,13 @@ date formatters names nothing while a query key quoted by three registrations na
 it, so the raw nearest neighbours of "authorization check and proper error responses" are
 ten test functions. Symbols in `tests/`, `test_*.py`, `*_test.go`, `*.test.ts`, `*Test.java`
 and the like are skipped by the lexical, semantic, usage and impact sources (the semantic
-channel over-fetches four times and keeps the first non-test hits). `explicit`, `path` and
-`history` still admit them — the caller named them on purpose — and `include_tests=True`
+channel over-fetches four times and keeps the first non-test hits). The lexical and usage
+sources exclude them *in the query*: the indexer stores the verdict as `symbol_fts.is_test`
+and the searches add `AND NOT is_test`, so the pool of rows a term may return is filled with
+production symbols. Filtering the rows afterwards, as before, let a repository whose symbols
+are 60 % tests (Guava, EF Core) hand back a pool of test methods, which both hid the
+production symbols and made every term look saturated. `explicit`, `path` and `history`
+still admit them — the caller named them on purpose — and `include_tests=True`
 turns the filter off. The *name* rules are narrower than they were: `test_x` / `should_x`
 are tests wherever they live, but the CamelCase `TestFoo` / `testFoo` forms are trusted only
 when no path is known — `TestBotTriggerPanel` is a production component, and real
