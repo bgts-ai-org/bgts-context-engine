@@ -93,6 +93,11 @@ parse error — and so are the changes; nothing is fitted to the benchmark's tas
   the `start_id` index, flat at a few milliseconds whatever the graph size, and the run
   writes no temporary files at all (12 000 synthetic symbols: 0 spill files versus one per
   edge; per-statement time no longer grows with the edge count).
+- **`CONTRIBUTING.md` described a branch flow the CI does not enforce.** It said `main`
+  takes merges from `development` directly. `.github/workflows/branch-flow-check.yml` has
+  always required `development → releases → main`, so a pull request opened straight
+  against `main` fails `Branch Flow Check` regardless of what the contributor read. The
+  doc now states the enforced flow.
 
 ## [0.3.0] - 2026-09-24
 

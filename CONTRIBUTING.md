@@ -76,8 +76,11 @@ Types in use: `feat`, `fix`, `refactor`, `perf`, `docs`, `test`, `build`, `ci`, 
 Write the body as prose explaining why the change is needed, not a restatement of the
 diff. Keep each commit self-contained and green on its own.
 
-Branch off `development` and target it with your pull request. `main` only ever receives
-merges from `development`, and `releases` receives them when a version is published.
+Branch off `development` and target it with your pull request. `development` merges into
+`releases` when a version is published, and `releases` merges into `main` once that release
+is out — `main` never receives a pull request from anything other than `releases`, and
+`releases` never receives one from anything other than `development`. This is enforced by
+`.github/workflows/branch-flow-check.yml`, not just convention.
 
 ## Adding a language
 
