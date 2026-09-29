@@ -13,7 +13,7 @@ import sys
 import time
 from typing import Any
 
-from bce.core.defaults import DEFAULT_MAX_CANDIDATES, DEFAULT_MAX_TOKENS, DEFAULT_SNIPPET_LINES
+from bce.core.defaults import DEFAULT_MAX_TOKENS, DEFAULT_SNIPPET_LINES
 
 HEADING = "## Code context for this task (bgts-context-engine code graph, computed once)"
 
@@ -59,9 +59,21 @@ def render_context_markdown(
         "Files: " + ", ".join(f"`{p}`" + (f" ({n})" if n > 1 else "") for p, n in files.items()),
         "",
     ]
+    if any(it.get("tier") == "stub" for it in items):
+        head += [
+            "Entries marked `stub` name a probably related file without its code; open one only if "
+            "the other entries do not cover the task.",
+            "",
+        ]
     blocks: list[str] = []
     for it in items:
         path = rel(it)
+        if it.get("tier") == "stub":
+            summary = str(it.get("content") or "")
+            if summary.startswith(path + " - "):
+                summary = summary[len(path) + 3 :]
+            blocks.append(f"- `{path}` stub: {summary}")
+            continue
         loc = f"{path}:{it.get('line')}" if it.get("line") else path or str(it.get("symbol_id"))
         lines = [
             f"- `{loc}` {it.get('kind') or 'symbol'} `{it.get('name') or ''}` d{it.get('graph_distance')}"
@@ -98,7 +110,7 @@ def precontext_for_task(
     task_text: str,
     *,
     repo_ids: list[str] | None = None,
-    max_candidates: int = DEFAULT_MAX_CANDIDATES,
+    max_candidates: int | None = None,
     max_tokens: int = DEFAULT_MAX_TOKENS,
     snippet_lines: int = DEFAULT_SNIPPET_LINES,
     max_chars: int | None = None,

@@ -129,7 +129,8 @@ def test_default_encoder_selects_voyage_when_ready(monkeypatch):
     monkeypatch.setattr(
         config,
         "get_settings",
-        lambda: config.Settings(embedding_provider="voyage", voyage_api_key="k"),
+        # _env_file=None: the developer's .env (another model / dim) must not leak into the test.
+        lambda: config.Settings(_env_file=None, embedding_provider="voyage", voyage_api_key="k"),
     )
 
     captured = {}

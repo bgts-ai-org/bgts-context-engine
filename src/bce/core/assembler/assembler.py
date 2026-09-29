@@ -85,10 +85,29 @@ def _render(item: dict[str, Any], level: DetailLevel) -> tuple[str, int]:
         content = body
     elif level in (DetailLevel.FULL, DetailLevel.SIGNATURE):
         content = "\n".join(p for p in (f"{name}{sig}", doc) if p)
+    elif item.get("summary"):
+        # A pre-rendered one-liner (the selector's file stub) replaces the default reference.
+        content = str(item["summary"])
     else:
         loc = f"{item.get('file_id') or ''}:{item.get('line') or ''}"
         content = f"{name} @ {loc}".strip()
     return content, _estimate_tokens(content or name)
+
+
+def _requested_level(item: dict[str, Any]) -> DetailLevel | None:
+    """A ``detail_level`` the producer asked for (the selector demotes stub files to a reference
+    line); anything unknown falls back to the distance rule."""
+    value = item.get("detail_level")
+    if value is None:
+        return None
+    try:
+        return DetailLevel(str(value))
+    except ValueError:
+        return None
+
+
+#: Largest share of the budget held back for stub lines (12 stubs x ~40 tokens ~ a third of 1500).
+_STUB_RESERVE_SHARE = 0.4
 
 
 def assemble(
@@ -101,19 +120,28 @@ def assemble(
 
     Returns ``{items, used_tokens, budget, included, skipped}``. Items are consumed top-down; an item
     that would overflow the budget is skipped (later, cheaper items may still fit).
+
+    Stub items (``tier == "stub"``, the selector's one-line file listings) come after the full
+    items, so a budget filled by bodies would drop every one of them; their cost is reserved up
+    front (capped at :data:`_STUB_RESERVE_SHARE` of the budget) and only they may spend it.
     """
     assembled: list[dict[str, Any]] = []
     used = 0
     skipped = 0
+    reserve = min(
+        sum(_render(it, DetailLevel.REFERENCE)[1] for it in items if it.get("tier") == "stub"),
+        int(max_tokens * _STUB_RESERVE_SHARE),
+    )
 
     for item in items:
+        limit = max_tokens if item.get("tier") == "stub" else max_tokens - reserve
         distance = _distance_of(item)
-        level = _detail_for_distance(distance)
+        level = _requested_level(item) or _detail_for_distance(distance)
         content, cost = _render(item, level)
-        if used + cost > max_tokens:
+        if used + cost > limit:
             # Try a cheaper reference-only rendering before giving up (recall > precision, P4).
             content, cost = _render(item, DetailLevel.REFERENCE)
-            if used + cost > max_tokens:
+            if used + cost > limit:
                 skipped += 1
                 continue
             level = DetailLevel.REFERENCE
@@ -130,7 +158,16 @@ def assemble(
         # Where the symbol lives. Without these an agent has to search the tree for the file
         # behind a symbol_id (the module path does not say .ts vs .tsx, nor the line), which costs
         # it a tool call per item; the cost of carrying them is a few bytes.
-        for key in ("name", "kind", "file_id", "line"):
+        # ``tier`` / ``*_relevance`` are the selector's verdicts (bce.core.selector), when it ran.
+        for key in (
+            "name",
+            "kind",
+            "file_id",
+            "line",
+            "tier",
+            "file_relevance",
+            "symbol_relevance",
+        ):
             if item.get(key) is not None:
                 entry[key] = item[key]
         assembled.append(entry)

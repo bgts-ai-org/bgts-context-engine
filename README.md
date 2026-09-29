@@ -40,10 +40,16 @@ references, type hierarchies, HTTP routes, cross-language bridges — and answer
 by walking it. Embeddings are used in one place only: finding entry points when the task
 text names nothing recognisable. They never affect ranking.
 
-**The same task text, against the same commit, returns the same context pack.** No model in
+**The same task text, against the same commit, returns the same ranking.** No model in
 the retrieval path, no clock, no randomness. When an agent makes a bad change you can
 replay exactly what it was told, find the stage that surfaced the wrong symbol, and fix
 that stage.
+
+On top of that ranking sits one optional, clearly marked probabilistic step: a *context
+selector* that asks a decision model which of the ranked files the task actually edits and
+hands the agent those in full, the likely-related ones as one line each, and nothing else.
+On 600 real changes it cut the context by 79 % for one point of recall. It is off without an
+OpenRouter key, and `--no-select` gives back the byte-exact pack.
 
 The engine is published so people can run it. Organisations that want the same thing
 inside their own perimeter — help with indexing, deployment, scoring tuned to their
@@ -216,6 +222,11 @@ genuinely relevant symbols fit in 1500 tokens — short enough for an agent to c
 turn. Every item also names its `file_id` and `line`, so the agent opens the file instead of
 searching for the symbol.
 
+With the context selector on, items also carry a **`tier`**: `full` for the two or three
+files the task most likely edits, `stub` — a single `path - N candidate symbols: …` line —
+for files that are probably related, and `coverage.selector` says what was cut and why
+([docs/retrieval.md](docs/retrieval.md#context-selection-optional)).
+
 ## How it works
 
 ```
@@ -229,6 +240,8 @@ task text
    │                distance, leaf penalty, edge provenance
    ├─ scope         drop repositories this caller may not see
    ├─ narrowing     keep the top N
+   ├─ selection     optional: a decision model tiers the N files into
+   │                full / one-line stub / dropped
    ├─ assembly      fit the token budget, cheaper detail further out
    └─ coverage      report how much of this is trustworthy
 ```
@@ -248,6 +261,9 @@ The full formula, every weight, and the confidence thresholds are in
   `IMPORTS`, HTTP `ROUTES_TO` handlers, and `WHY:` comments bound to what they explain.
 - **Deterministic by construction.** Sorted traversal, stable tiebreaks, versioned scoring
   weights. `bce bench` verifies it by running each case repeatedly and comparing output.
+- **A fifth of the tokens, optionally.** The context selector keeps the files a task edits
+  and lists the rest in one line each: 8 310 → 1 714 tokens per answer on 600 real changes,
+  file recall 94.4 → 93.4, fail-open to the plain ranking.
 - **Six languages.** Python, JavaScript and TypeScript built in; Java, C# and Go behind the
   `langs` extra. [Adding one](docs/languages.md#adding-a-language) touches two files.
 - **Cross-language call edges.** React Native and Expo bridges connect

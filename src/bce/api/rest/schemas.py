@@ -11,7 +11,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from bce.core.defaults import DEFAULT_MAX_CANDIDATES, DEFAULT_MAX_TOKENS
+from bce.core.defaults import DEFAULT_MAX_CANDIDATES, DEFAULT_MAX_TOKENS, SELECTED_MAX_CANDIDATES
 
 
 class IndexRequest(BaseModel):
@@ -69,8 +69,14 @@ class ContextForTaskRequest(BaseModel):
     max_tokens: int = Field(
         default=DEFAULT_MAX_TOKENS, ge=1, le=200000, description="Token budget for assembly."
     )
-    max_candidates: int = Field(
-        default=DEFAULT_MAX_CANDIDATES, ge=1, le=100, description="Narrow to at most N candidates."
+    max_candidates: int | None = Field(
+        default=None,
+        ge=1,
+        le=100,
+        description=(
+            f"Narrow to at most N candidates. Unset: {SELECTED_MAX_CANDIDATES} when the context "
+            f"selector runs (get-context-for-task), {DEFAULT_MAX_CANDIDATES} otherwise."
+        ),
     )
     commit: str | None = Field(default=None, description="Pinned commit sha (stage 0).")
     repo_ids: list[str] | None = Field(

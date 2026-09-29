@@ -261,6 +261,36 @@ the model's own hits 83 % → 92 % with the guard). The overrides exist for fitt
 not change stored data, so a profile change never needs a re-index — only a re-run of the
 query side. The active profile is written into every `bce bench-prs` report.
 
+### Context selector
+
+After ranking, `get_context_for_task` can tier its K candidates with Jev, TypeSafe's decision
+model, through the OpenRouter Decisions API: files the task most likely edits in full, likely
+related files as one line each, the rest dropped. On the 12-repository benchmark at K=50 this
+cut the tokens handed to the agent by 79 % for one point of file recall
+([docs/retrieval.md](retrieval.md#context-selection-optional)).
+
+| Variable | Default | |
+| --- | --- | --- |
+| `BCE_SELECTOR` | `auto` | `auto`: on when an OpenRouter key is set, off otherwise; `jev`: on, and a missing key is logged; `off` |
+| `OPENROUTER_API_KEY` | empty | also read as `BCE_OPENROUTER_API_KEY`. No TypeSafe account needed; usage is billed to the OpenRouter account |
+| `BCE_SELECTOR_MODEL` | `typesafe/jev-1.13` | pinned: the thresholds below were fitted on this release, so a new one is a re-fit, not a drop-in |
+| `BCE_SELECTOR_URL` | `https://openrouter.ai/api/alpha/decisions` | |
+| `BCE_SELECTOR_TIMEOUT` | `3.0` | seconds per request; also the worst-case latency added. On timeout the answer is the raw ranking |
+| `BCE_SELECTOR_FULL_THRESHOLD` | `0.5` | p(file is edited) at or above which a file keeps its symbols |
+| `BCE_SELECTOR_STUB_THRESHOLD` | `0.05` | at or above which a file is listed as one stub line |
+| `BCE_SELECTOR_MAX_FILES` | `12` | files listed in total (full + stub) |
+| `BCE_SELECTOR_SYMBOL_MIN_SCORE` | `1.0` | symbols of a full file scored below this (0 unrelated … 3 must change) are dropped |
+
+Cost and latency, measured over 600 queries at K=50: two parallel requests of ~6 k and ~11 k
+input tokens, ~575 ms added, ~$0.0007 per query (output tokens are free). The task text and
+the excerpts of the candidate symbols (240 characters each) leave the perimeter for
+OpenRouter and TypeSafe, which is the one place the engine sends source code to a third
+party at query time; keep `BCE_SELECTOR=off` where that is not acceptable.
+
+The stage is fail-open: an HTTP error, a timeout or a malformed answer is logged and the
+ranked candidates are assembled as they are, with `coverage.selector.status` saying so.
+`bce bench` and `suggest_change_sites` never run it.
+
 ### API
 
 | Variable | Default | |
@@ -326,6 +356,11 @@ scoped principal cannot see forbidden repositories.
 
 Run it before and after any change to scoring, expansion or anchor discovery. It is the
 only thing that will tell you whether a retrieval change was actually an improvement.
+
+`bce bench` measures the ranking and does not run the context selector. The selector is
+measured end to end by `local_bench/multi_repo_bench/run_bench.py` (12 repositories, 600
+tasks; `--no-select` for the engine alone), whose reports add the tokens and files handed to
+the agent, and offline against cached answers by `select_bench.py` in the same folder.
 
 ### The case file
 

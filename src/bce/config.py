@@ -15,7 +15,7 @@ import os
 from functools import lru_cache
 from typing import Any
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 #: Environment variable holding an explicit ``.env`` path; set by ``bce --env-file``.
@@ -28,6 +28,8 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        # ``openrouter_api_key`` has an explicit alias; keep the field name usable in ``Settings(...)``.
+        populate_by_name=True,
     )
 
     # --- PostgreSQL (single DB: AGE + pgvector + SQL + RLS) ---
@@ -115,6 +117,32 @@ class Settings(BaseSettings):
     retrieval_semantic_guard_ranks: int | None = None
     retrieval_semantic_reserve_share: float | None = None
     retrieval_semantic_rank_scale: float | None = None
+
+    # --- Context selector (post-ranking tiering of the K candidates, see bce.core.selector) ---
+    # "auto" (default) runs the Jev selector when an OpenRouter key is configured and skips it
+    # otherwise; "jev" requires it (a missing key is logged and the answer is returned unselected);
+    # "off" disables it. The selector never changes *which* candidates the engine ranked - it only
+    # tiers them (full / stub / dropped) so an agent reads the right 2-3 files instead of 20.
+    selector: str = "auto"
+    # OpenRouter API key; also read from the un-prefixed ``OPENROUTER_API_KEY``.
+    openrouter_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("BCE_OPENROUTER_API_KEY", "OPENROUTER_API_KEY"),
+    )
+    # Pinned decision model (thresholds below were fitted on this release; a bump is a re-fit).
+    selector_model: str = "typesafe/jev-1.13"
+    selector_url: str = "https://openrouter.ai/api/alpha/decisions"
+    # Seconds for one Jev request (measured p90 ≈ 0.55 s); on timeout the answer is returned
+    # unselected, so this is also the worst-case latency the selector adds.
+    selector_timeout: float = 3.0
+    # File-level policy: p(file is edited) >= full_threshold -> full content; >= stub_threshold ->
+    # one reference line; below -> dropped. At most ``max_files`` files are listed; the engine's
+    # first file is always kept at full detail.
+    selector_full_threshold: float = 0.5
+    selector_stub_threshold: float = 0.05
+    selector_max_files: int = 12
+    # Symbols inside a full file scored below this (0 unrelated .. 3 must change) are dropped.
+    selector_symbol_min_score: float = 1.0
 
     # --- Logging (JSON to stdout; optional rotating file sink) ---
     log_level: str = "INFO"

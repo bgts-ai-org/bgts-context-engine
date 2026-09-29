@@ -29,6 +29,17 @@ Everything probabilistic sits outside: the agent that consumes the pack, and the
 embedding provider that can nominate anchors. Both influence *which* subgraph is examined.
 Neither influences how it is ranked or rendered.
 
+One optional stage crosses the line on purpose, and only after it: the context selector
+(`bce.core.selector`). The deterministic core ranks K candidates; the selector asks a
+decision model (Jev, over OpenRouter) which of those files the task edits and tiers the
+answer into full, stub and dropped. It cannot add a candidate — it only drops, demotes and
+reorders files among the ones the engine ranked — it fails open to that ranking, and it
+reports itself in `coverage.selector`. It is on
+when an OpenRouter key is configured (`BCE_SELECTOR=auto`); `BCE_SELECTOR=off` or `bce
+context --no-select` gives back the byte-exact pack. The trade — a pack a fifth of the size
+for about one point of recall, with tiering that is not bit-exact — is measured in
+[docs/retrieval.md](retrieval.md#context-selection-optional).
+
 This is worth the constraint because it makes the engine debuggable. When an agent makes a
 bad change, you can replay the exact context it was given, see which stage introduced the
 wrong symbol, and fix that stage. With a probabilistic retriever, the same investigation

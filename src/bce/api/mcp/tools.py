@@ -26,7 +26,7 @@ from typing import Any
 import psycopg
 
 from bce.core.auth.scope import Principal, ScopeFilter
-from bce.core.defaults import DEFAULT_MAX_CANDIDATES, DEFAULT_MAX_TOKENS
+from bce.core.defaults import DEFAULT_MAX_CANDIDATES, DEFAULT_MAX_TOKENS, SELECTED_MAX_CANDIDATES
 from bce.core.i18n import get_translator
 from bce.jobs.store import enqueue_job, get_job, list_jobs
 from bce.storage.graph.client import GraphClient
@@ -70,8 +70,11 @@ TOOL_SPECS: dict[str, dict[str, Any]] = {
                 },
                 "max_candidates": {
                     **_INT,
-                    "default": DEFAULT_MAX_CANDIDATES,
-                    "description": "How many symbols to return (K).",
+                    "description": (
+                        f"How many ranked symbols to consider (K). Omit it: the server uses "
+                        f"{SELECTED_MAX_CANDIDATES} when its context selector cuts the answer "
+                        f"down, {DEFAULT_MAX_CANDIDATES} otherwise."
+                    ),
                 },
                 "commit": _STR,
                 "repo_ids": _STR_LIST,

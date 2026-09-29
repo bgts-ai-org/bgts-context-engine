@@ -15,6 +15,34 @@ parse error — and so are the changes; nothing is fitted to the benchmark's tas
 
 ### Added
 
+- **Context selector: the K ranked candidates are tiered before assembly.** A K=50 answer
+  found 94.4 % of the files a change touches but spread them over ~20 files, ~18 of them
+  noise, so an agent either read everything or guessed. `get_context_for_task` now runs an
+  optional stage after narrowing (`bce.core.selector`): two parallel requests to Jev
+  (TypeSafe's decision model, `typesafe/jev-1.13` via the OpenRouter Decisions API) ask, per
+  distinct file, *does the task edit this file?* (`noul` → p) and, per symbol, a 0–3
+  relevance score. Files with p ≥ 0.5 plus the engine's first file keep their symbols at
+  normal detail (symbols scored < 1 dropped); files with p ≥ 0.05 become one `reference`
+  line (`tier: "stub"`, path + symbol names), at most 12 files listed; the rest is dropped.
+  Items carry `tier`, `file_relevance` and `symbol_relevance`; `coverage.selector` reports
+  status, tier counts, latency and cost. The stage never adds a candidate and fails open: an
+  error or timeout returns the ranked answer unchanged with `status: "error"`.
+  On the 12-repository benchmark (600 tasks, K=50, `local_bench/multi_repo_bench`, tag v3
+  against v2): tokens handed to the agent 8 310 → 1 714 (−79 %), distinct files 20.5 → 10.9
+  (2.3 full + 8.5 stub), file recall 94.4 → 93.4, first 20 symbols 91.0 → 92.5, hit@1
+  450 → 493, MRR 0.826 → 0.858; +575 ms per query, $0.42 for the 600 tasks. The policy was
+  chosen on the same corpus against a Voyage `rerank-2.5` cross-encoder, a score-gap
+  heuristic and three other Jev question shapes (`select_bench.py`). Jev is not
+  bit-deterministic: probabilities jitter by ~0.01 between identical calls; in three repeated
+  runs the flips sat at the stub boundary on files the change never touched and recall moved
+  by ≤ 0.6 points. Configured with `BCE_SELECTOR` (`auto` — on when `OPENROUTER_API_KEY` is
+  set — `jev`, `off`) and `BCE_SELECTOR_*`; `bce context --no-select` returns the raw ranking.
+  With the selector on, `max_candidates` left unset means K=50 (`SELECTED_MAX_CANDIDATES`),
+  otherwise 20; REST, MCP, `bce context` and `bce precontext` no longer send a K of their own.
+  The assembler reserves the stubs' cost (≤ 40 % of the budget) and the full tier is emitted
+  round-robin across files, so at the default 1500 tokens neither the stubs nor a second or
+  third full file are cut by the first file's bodies. `bce precontext` renders stubs as
+  `` `path` stub: N candidate symbol(s): … ``.
 - **Test symbols are excluded in the query.** Migration `0013_fts_is_test` adds
   `symbol_fts.is_test`, written at upsert from the path / name rules
   (`bce.domain.testness.is_test_symbol`, moved out of the orchestrator so storage can share
@@ -43,6 +71,13 @@ parse error — and so are the changes; nothing is fitted to the benchmark's tas
 
 ### Changed
 
+- The assembler honours a `detail_level` set on an item (the selector demotes stub files to
+  `reference`) and renders an item's `summary` as its reference line; unknown levels fall
+  back to the distance rule.
+- `local_bench/multi_repo_bench/run_bench.py`: `--no-select`, `--max-tokens` (default
+  unbounded; 1500 measures what an agent receives); reports gain *Token* and
+  *Dosya* columns, per-task tier counts (⚠ when an expected file arrived only as a stub) and
+  selector statistics; `compare` shows token / file / symbol / latency deltas.
 - **URLs contribute no query terms**, and contractions (`don`, `doesn`, `isn`, …) are
   stop-words. A PR link used to add `https github com org repo pull` to every task.
 - The word-pair (phrase) bonus stays flat. Three scaled forms — by the words' rarity, by

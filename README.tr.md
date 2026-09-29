@@ -41,10 +41,16 @@ hiyerarşileri, HTTP route'ları, diller arası köprüler — ve soruları bu g
 yanıtlar. Embedding yalnızca tek bir yerde kullanılır: görev metni tanıdık hiçbir şey
 adlandırmadığında giriş noktalarını bulmak için. Sıralamayı asla etkilemez.
 
-**Aynı görev metni, aynı commit üzerinde, aynı bağlam paketini döner.** Getirme yolunda
+**Aynı görev metni, aynı commit üzerinde, aynı sıralamayı döner.** Getirme yolunda
 model yok, saat yok, rastgelelik yok. Bir ajan hatalı bir değişiklik yaptığında, ona tam
 olarak ne söylendiğini yeniden oynatabilir, yanlış sembolü yüzeye çıkaran aşamayı bulabilir
 ve o aşamayı düzeltebilirsiniz.
+
+Bu sıralamanın üstünde isteğe bağlı, açıkça işaretlenmiş tek bir olasılıksal adım var:
+sıralanan dosyalardan görevin gerçekten hangilerini değiştirdiğini bir karar modeline soran
+*bağlam seçici*. Ajana bu dosyaları tam, muhtemelen ilgili olanları birer satır olarak verir,
+gerisini atar. 600 gerçek değişiklikte bağlamı %79 küçülttü, recall'dan bir puan verdi.
+OpenRouter anahtarı yoksa kapalıdır; `--no-select` bayt bayt aynı paketi geri verir.
 
 Motor, insanların çalıştırabilmesi için yayımlanır. Aynı şeyi kendi çevrelerinde isteyen
 kurumlar — indeksleme, kurulum, depolarınıza göre ayarlanmış skorlama veya etrafındaki
@@ -219,6 +225,11 @@ komşuları imza olarak, dış halka `name @ dosya:satır` biçiminde gelir. Ger
 yirmi sembolün 1500 token'a sığması bu sayede olur — bir ajanın her turda taşıyabileceği
 kadar kısa. Her öge `file_id` ve `line` da taşır; ajan sembolü aramak yerine dosyayı açar.
 
+Bağlam seçici açıkken ögeler bir de **`tier`** taşır: görevin en muhtemel değiştireceği iki
+üç dosya için `full`, muhtemelen ilgili dosyalar için tek satırlık `stub`
+(`yol - N aday sembol: …`); `coverage.selector` neyin neden kesildiğini söyler
+([docs/retrieval.md](docs/retrieval.md#context-selection-optional)).
+
 ## Nasıl çalışır
 
 ```
@@ -232,6 +243,8 @@ görev metni
    │                yaprak cezası ve kenar kaynağı üzerinden ağırlıklı toplam
    ├─ kapsam        çağıranın göremeyeceği depoları düşür
    ├─ daraltma      en iyi N tanesini tut
+   ├─ seçim         isteğe bağlı: bir karar modeli N dosyayı
+   │                tam / tek satır stub / atıldı olarak katmanlar
    ├─ birleştirme   token bütçesine sığdır, uzaklaştıkça daha ucuz detay
    └─ kapsama       sonucun ne kadarının güvenilir olduğunu raporla
 ```
@@ -253,6 +266,9 @@ Formülün tamamı, her ağırlık ve güven eşikleri
 - **Yapısı gereği deterministik.** Sıralı gezinme, kararlı eşitlik bozma, sürümlenmiş
   skorlama ağırlıkları. `bce bench` her vakayı tekrar tekrar koşup çıktıyı karşılaştırarak
   bunu doğrular.
+- **İsteğe bağlı olarak token'ın beşte biri.** Bağlam seçici görevin değiştirdiği dosyaları
+  tutar, gerisini birer satırla listeler: 600 gerçek değişiklikte cevap başına 8.310 → 1.714
+  token, dosya recall'u 94.4 → 93.4; hata olursa düz sıralamaya düşer.
 - **Altı dil.** Python, JavaScript ve TypeScript yerleşik; Java, C# ve Go `langs` ekiyle.
   [Yeni bir dil eklemek](docs/languages.md#adding-a-language) iki dosyaya dokunur.
 - **Diller arası çağrı kenarları.** React Native ve Expo köprüleri, TypeScript'teki

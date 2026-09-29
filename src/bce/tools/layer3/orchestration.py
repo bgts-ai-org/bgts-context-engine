@@ -4,6 +4,11 @@ These compose the deterministic core (orchestrator + scoring + coverage + assemb
 into task-level answers. They never call an LLM (P1); the only probabilistic input is the semantic
 anchor, which is optional and pre-computed (P2). Every result carries a coverage object (section 8)
 so the consumer can proceed / widen / ask a human.
+
+One optional stage sits *after* ranking in :func:`get_context_for_task`: the context selector
+(:mod:`bce.core.selector`) asks a decision model which of the K ranked files the task edits and
+tiers the answer (full / stub / dropped). It never adds a candidate, is fail-open, reports itself in
+``coverage.selector`` and is switched with ``BCE_SELECTOR``.
 """
 
 from __future__ import annotations
@@ -15,7 +20,7 @@ from typing import Any
 from bce.core.assembler import assemble
 from bce.core.auth.scope import ScopeFilter
 from bce.core.coverage import compute_coverage, coverage_message
-from bce.core.defaults import DEFAULT_MAX_CANDIDATES, DEFAULT_MAX_TOKENS
+from bce.core.defaults import DEFAULT_MAX_CANDIDATES, DEFAULT_MAX_TOKENS, SELECTED_MAX_CANDIDATES
 from bce.core.i18n import get_translator
 from bce.core.orchestrator import RetrievalOrchestrator, bulk
 from bce.core.orchestrator.anchors import (
@@ -27,6 +32,7 @@ from bce.core.orchestrator.anchors import (
 )
 from bce.core.orchestrator.profile import RetrievalProfile, active_profile
 from bce.core.orchestrator.text import is_test_symbol
+from bce.core.selector import selector_from_settings
 from bce.storage.graph.repository import GraphRepository
 from bce.storage.vector.store import VectorStore
 
@@ -189,7 +195,7 @@ def get_context_for_task(
     *,
     task_text: str,
     max_tokens: int = DEFAULT_MAX_TOKENS,
-    max_candidates: int = DEFAULT_MAX_CANDIDATES,
+    max_candidates: int | None = None,
     commit: str | None = None,
     repo_ids: list[str] | None = None,
     explicit_symbols: list[str] | None = None,
@@ -202,13 +208,21 @@ def get_context_for_task(
     scope: ScopeFilter | None = None,
     task_id: str | None = None,
     locale: str | None = None,
+    select: bool = True,
 ) -> dict[str, Any]:
-    """End-to-end: task -> anchors -> expand -> score -> filter -> assemble + coverage (section 6)."""
+    """End-to-end: task -> anchors -> expand -> score -> filter -> [select] -> assemble + coverage
+    (section 6). ``select=False`` skips the context selector regardless of configuration.
+
+    ``max_candidates=None`` picks K for the caller: :data:`SELECTED_MAX_CANDIDATES` when the
+    selector will run, :data:`DEFAULT_MAX_CANDIDATES` otherwise."""
     tr = get_translator()
     loc = tr.resolve(locale)
     t0 = time.perf_counter()
     # Engine constants fitted for the configured embedding model (voyage / jina / default).
     profile = active_profile()
+    selector = selector_from_settings() if select else None
+    if max_candidates is None:
+        max_candidates = SELECTED_MAX_CANDIDATES if selector is not None else DEFAULT_MAX_CANDIDATES
 
     # D1: automatic semantic anchor when the caller did not pre-compute one (opt-out: auto_semantic).
     if semantic_candidates is None and auto_semantic and store is not None:
@@ -270,8 +284,24 @@ def get_context_for_task(
 
     stage = time.perf_counter()
     items = _enrich_items(repository, result.candidates, with_body=True)
+
+    # Optional: tier the ranked candidates (full / stub / dropped) with the decision-model selector.
+    # ``select`` is False for callers that want the raw ranking (benchmarks of the engine alone).
+    selection: dict[str, Any] | None = None
+    if selector is not None:
+        items, selection = selector.select(items, task_text=task_text)
+        logger.debug(
+            "get_context_for_task: selector",
+            extra={
+                k: selection.get(k)
+                for k in ("status", "files_full", "files_stub", "files_dropped", "ms")
+            },
+        )
+
     package = assemble(items, max_tokens=max_tokens)
     coverage = compute_coverage(result, repository)
+    if selection is not None:
+        coverage["selector"] = selection
     logger.debug(
         "get_context_for_task: assembled",
         extra={

@@ -9,7 +9,7 @@ import pytest
 
 from bce.api.mcp.tools import TOOL_SPECS
 from bce.api.rest.schemas import AssembleContextRequest, ContextForTaskRequest
-from bce.core.defaults import DEFAULT_MAX_CANDIDATES, DEFAULT_MAX_TOKENS
+from bce.core.defaults import DEFAULT_MAX_CANDIDATES, DEFAULT_MAX_TOKENS, SELECTED_MAX_CANDIDATES
 from bce.integrations import agents, precontext
 from bce.integrations.agents import (
     CLAUDE_BEGIN,
@@ -34,11 +34,14 @@ def test_defaults_are_the_benchmarked_values():
 
 
 def test_rest_and_mcp_read_the_shared_defaults():
+    # K is left unset on every surface: get_context_for_task picks 50 with the selector, 20 without.
     req = ContextForTaskRequest(task_text="x")
-    assert (req.max_candidates, req.max_tokens) == (DEFAULT_MAX_CANDIDATES, DEFAULT_MAX_TOKENS)
+    assert (req.max_candidates, req.max_tokens) == (None, DEFAULT_MAX_TOKENS)
     assert AssembleContextRequest(symbol_ids=["a"]).max_tokens == DEFAULT_MAX_TOKENS
     props = TOOL_SPECS["get_context_for_task"]["schema"]["properties"]
-    assert props["max_candidates"]["default"] == DEFAULT_MAX_CANDIDATES
+    assert "default" not in props["max_candidates"]
+    assert str(SELECTED_MAX_CANDIDATES) in props["max_candidates"]["description"]
+    assert str(DEFAULT_MAX_CANDIDATES) in props["max_candidates"]["description"]
     assert props["max_tokens"]["default"] == DEFAULT_MAX_TOKENS
 
 
@@ -48,7 +51,7 @@ def test_cli_context_defaults_follow_the_constants():
     from bce.cli import context
 
     params = inspect.signature(context).parameters
-    assert params["max_candidates"].default.default == DEFAULT_MAX_CANDIDATES
+    assert params["max_candidates"].default.default is None
     assert params["max_tokens"].default.default == DEFAULT_MAX_TOKENS
 
 

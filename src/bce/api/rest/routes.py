@@ -29,6 +29,7 @@ from bce.api.rest.schemas import (
     ToolResponse,
 )
 from bce.core.auth.scope import ScopeFilter
+from bce.core.defaults import DEFAULT_MAX_CANDIDATES
 from bce.core.i18n import get_translator
 from bce.indexing.gitsync import GitCredentials, GitError
 from bce.indexing.indexer import Indexer
@@ -218,7 +219,7 @@ def suggest_change_sites_route(
     return suggest_change_sites(
         repository,
         task_text=body.task_text,
-        max_candidates=body.max_candidates,
+        max_candidates=body.max_candidates or DEFAULT_MAX_CANDIDATES,
         commit=body.commit,
         repo_ids=body.repo_ids,
         explicit_symbols=body.explicit_symbols,

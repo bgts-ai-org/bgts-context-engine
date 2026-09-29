@@ -29,7 +29,7 @@ from pathlib import Path
 
 import typer
 
-from bce.core.defaults import DEFAULT_MAX_CANDIDATES, DEFAULT_MAX_TOKENS
+from bce.core.defaults import DEFAULT_MAX_CANDIDATES, DEFAULT_MAX_TOKENS, SELECTED_MAX_CANDIDATES
 
 app = typer.Typer(add_completion=False, help="BGTS Context Engine CLI")
 
@@ -393,13 +393,21 @@ def context(
     max_tokens: int = typer.Option(
         DEFAULT_MAX_TOKENS, "--max-tokens", help="Token budget for assembly"
     ),
-    max_candidates: int = typer.Option(
-        DEFAULT_MAX_CANDIDATES, "--max-candidates", help="Narrow to at most N candidates (K)"
+    max_candidates: int | None = typer.Option(
+        None,
+        "--max-candidates",
+        help=f"Narrow to at most N candidates (K). Default: {SELECTED_MAX_CANDIDATES} with the "
+        f"context selector, {DEFAULT_MAX_CANDIDATES} without",
     ),
     commit: str | None = typer.Option(None, "--commit", help="Pinned commit sha (stage 0)"),
     locale: str | None = typer.Option(None, "--locale", help="Message locale (en/tr)"),
+    select: bool = typer.Option(
+        True,
+        "--select/--no-select",
+        help="Run the context selector (BCE_SELECTOR) on the ranked candidates; --no-select returns the raw ranking",
+    ),
 ) -> None:
-    """Layer 3: assemble a deterministic context package + coverage for a task."""
+    """Layer 3: assemble a context package + coverage for a task (ranked, then tiered by the selector)."""
     from bce.storage.graph.client import GraphClient
     from bce.storage.graph.repository import GraphRepository
     from bce.storage.relational.db import connection
@@ -416,6 +424,7 @@ def context(
             commit=commit,
             store=VectorStore(conn),
             locale=locale,
+            select=select,
         )
     if result["message"]:
         typer.echo(result["message"])
@@ -432,7 +441,11 @@ def precontext(
     repo_id: list[str] = typer.Option(
         [], "--repo-id", help="Restrict to these repository ids (repeatable)"
     ),
-    max_candidates: int = typer.Option(DEFAULT_MAX_CANDIDATES, "--max-candidates", help="K"),
+    max_candidates: int | None = typer.Option(
+        None,
+        "--max-candidates",
+        help=f"K (default {SELECTED_MAX_CANDIDATES} with the context selector, {DEFAULT_MAX_CANDIDATES} without)",
+    ),
     max_tokens: int = typer.Option(DEFAULT_MAX_TOKENS, "--max-tokens", help="Token budget"),
 ) -> None:
     """The compact "Code context for this task" block an agent starts with (markdown).

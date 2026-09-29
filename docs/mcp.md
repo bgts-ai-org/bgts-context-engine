@@ -135,6 +135,8 @@ The variables that matter for MCP:
 | `BCE_EMBEDDING_API_KEY` | `openai` only; leave empty for a local server that does not check one |
 | `BCE_MCP_ALLOW_WRITE` | `false` by default; `true` adds the two indexing tools |
 | `BCE_MCP_TOOLS` | comma-separated names to advertise (default: all). Agents fetch a tool's schema before first use and chain small calls when many tools are offered, so a narrow catalog such as `get_context_for_task,find_references` costs fewer model turns. Unknown names fail at startup. |
+| `OPENROUTER_API_KEY` | turns on the context selector for `get_context_for_task` (`BCE_SELECTOR=auto`); unset, the tool returns the raw ranking. See [docs/deployment.md](deployment.md#context-selector) |
+| `BCE_SELECTOR` | `auto` (default), `jev` or `off` |
 
 The encoder is built once at startup rather than on the first search. It pulls in numpy, and
 loading that lazily inside a tool call can stall for minutes on Windows; paying it during
@@ -212,7 +214,7 @@ This is the tool an agent should reach for first. Full options:
 | --- | --- | --- |
 | `task_text` | required | the task in prose |
 | `task_id` | `null` | for audit correlation and history lookup |
-| `max_candidates` | `20` | how many symbols to return (K). 20 is where recall@K flattened in the retrieval benchmarks for both fitted profiles |
+| `max_candidates` | `50` with the selector, `20` without | how many ranked symbols to consider (K). Leave it unset: with the context selector on the server ranks 50 and cuts them down; without it, 20 is where recall@K flattened in the retrieval benchmarks for both fitted profiles |
 | `max_tokens` | `1500` | budget for the assembled context. Kept short because an agent re-sends it on every turn; raise it for longer snippets |
 | `commit` | `null` | pin the answer to a commit |
 | `repo_ids` | `null` | restrict to these repositories |
@@ -231,6 +233,13 @@ level. If your agent already parsed a traceback, forward it.
 `commit` matters for reproducibility: pin it and the response tells you, through
 `commit_mismatch`, whether the index actually covers that commit.
 
+When the server has the context selector on, the K ranked candidates are tiered before
+assembly: the files the task most likely edits keep their symbols, likely-related files
+become one `stub` line each, the rest is dropped
+([docs/retrieval.md](retrieval.md#context-selection-optional)). It is server configuration,
+not a request field, and it is why `max_candidates` defaults to 50 when it is on: the selector
+was fitted on a K=50 net.
+
 Layer-3 tools apply the repository scope filter when a user id is supplied
 programmatically. The stdio server does not supply one.
 
@@ -239,7 +248,7 @@ programmatically. The stdio server does not supply one.
 ```json
 {
   "tool": "get_context_for_task",
-  "payload": { "...": "deterministic, language-neutral" },
+  "payload": { "...": "language-neutral; deterministic unless the context selector ran" },
   "message": "Assembled 8 symbols (2913 tokens), confidence: high.",
   "locale": "en"
 }
@@ -257,10 +266,16 @@ A `get_context_for_task` payload contains:
   has `symbol_id`, `repo_id`, `detail_level`, `graph_distance`, `score`, `tokens`,
   `content` and, where the graph knows them, `name`, `kind`, `file_id` and `line` (so an
   agent opens the file directly instead of searching for the symbol). A non-zero `skipped` means relevant symbols were dropped for budget; raise
-  `max_tokens` or lower `max_candidates`.
+  `max_tokens` or lower `max_candidates`. When the selector ran, items also carry `tier`
+  (`full`: read these first; `stub`: one line `path - N candidate symbol(s): …`, open the file
+  only if the full tier does not cover the task), `file_relevance` (the model's probability
+  that the task edits the file) and, on full items, `symbol_relevance` (0 unrelated … 3 must
+  change).
 - **`coverage`** — the trust report, ending in `confidence` of `high`, `medium` or `low`.
   See [docs/retrieval.md](retrieval.md#7-coverage-and-confidence). Treat `low` as a signal
-  to ask a clarifying question rather than to start editing.
+  to ask a clarifying question rather than to start editing. `coverage.selector` is present
+  when the selector ran: `status` (`ok`, `partial`, `error` — the items are then the raw
+  ranking), tier counts, `ms` and `cost_usd`.
 
 ## REST endpoints
 
@@ -326,7 +341,7 @@ whatever sits in front of the engine must authenticate the user and overwrite th
 | `bce reindex --repo P --name N [--since C] [--to HEAD]` | incremental re-index from git diff |
 | `bce resolve-symbol --name N [--repo R]` | Layer 1 from the shell |
 | `bce find-references --symbol-id S` | Layer 1 from the shell |
-| `bce context --task T [--max-tokens 1500] [--max-candidates 20]` | Layer 3 from the shell |
+| `bce context --task T [--max-tokens 1500] [--max-candidates K] [--no-select]` | Layer 3 from the shell; K defaults to 50 with the context selector, 20 without; `--no-select` skips the selector and returns the raw ranking |
 | `bce precontext --task T [--repo-id R]` | the compact context block an agent prompt carries; without `--task` it is a Claude Code `UserPromptSubmit` hook |
 | `bce cursor-init [--project DIR] [--repo-id R] [--env-file PATH]` | write `.cursor/mcp.json` + the agent rule into a project |
 | `bce claude-init [--project DIR] [--repo-id R] [--env-file PATH] [--no-hook]` | write `.mcp.json`, a `CLAUDE.md` section and the pre-context hook |
