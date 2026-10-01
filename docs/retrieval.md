@@ -8,8 +8,8 @@ that could depend on iteration order sorts first. That is what makes it reproduc
 same task text, against the same commit, with the same weights and the same retrieval
 profile, produces the same ranked candidates byte for byte. One optional stage after the
 ranking — the [context selector](#context-selection-optional) — asks a decision model which
-of those candidates the task edits; with it switched off (`BCE_SELECTOR=off`, `bce context
---no-select`) the whole context pack is byte-for-byte reproducible.
+of those candidates the task edits; with it switched off (`BCE_SELECTOR=off`, the default, or
+`bce context --no-select`) the whole context pack is byte-for-byte reproducible.
 
 ## The pipeline
 
@@ -407,10 +407,15 @@ second and third file of a multi-file change sit anywhere in the top 50. Handing
 all 50 symbols spends the token budget the engine exists to save.
 
 The selector (`src/bce/core/selector/`) runs after narrowing, on the K ranked candidates,
-and sends two requests in parallel to Jev — TypeSafe's System One decision model,
-`typesafe/jev-1.13`, through the OpenRouter Decisions API. A decision model returns a typed
-answer with a probability for each question instead of generated text, so there is nothing
-to parse and no output tokens to pay for.
+and sends two requests in parallel to a System One decision model: Jev (TypeSafe,
+`typesafe/jev-1.13`, through the OpenRouter Decisions API), or one of the open-weight
+[decider-2b](https://huggingface.co/Mapika/decider-2b) /
+[decider-4b](https://huggingface.co/Mapika/decider-4b) behind a self-hosted server
+(`BCE_SELECTOR`; choosing and running them: [selector.md](selector.md)). A decision model
+returns a typed answer with a probability for each question instead of generated text, so
+there is nothing to parse and no output tokens to pay for. The policy and the measurements
+below are Jev's; the deciders run under the same thresholds and are compared in
+[selector.md](selector.md#supported-models).
 
 | Request | State | One question per | Type | Answer |
 | --- | --- | --- | --- | --- |
@@ -453,9 +458,10 @@ engine's rank exposed in the state, tiered, plus symbol pruning from the score r
 the best recall per token; its thresholds were then checked on all 597 tasks.
 
 **Failure behaviour.** The stage never adds a candidate. If the file request fails or times
-out (`BCE_SELECTOR_TIMEOUT`, default 3 s) the ranked items are assembled unchanged and
-`coverage.selector.status` is `"error"`; if only the symbol request fails, files are tiered
-without symbol pruning (`"partial"`). Without an OpenRouter key the stage is skipped.
+out (`BCE_SELECTOR_TIMEOUT`, default 3 s for Jev, 10 s for a decider) the ranked items are
+assembled unchanged and `coverage.selector.status` is `"error"`; if only the symbol request
+fails, files are tiered without symbol pruning (`"partial"`). With `BCE_SELECTOR=off` (the
+default), or `jev` without an API key, the stage is skipped.
 
 ## 6. Assembly
 
@@ -574,7 +580,8 @@ was the same in 96–98 % of tasks and the full-tier set in ~90 %; the stub boun
 moved by one or two files in 20–40 % of tasks, and none of the 29 files that flipped was one
 the change touched. Recall across the three runs moved by at most 0.6 points. The model is
 pinned (`BCE_SELECTOR_MODEL`), because the thresholds were fitted on that release. The
-ranking the selector reads is unaffected, and `BCE_SELECTOR=off` restores a byte-exact pack.
+repeat-run test was not done for the deciders. The ranking the selector reads is unaffected,
+and `BCE_SELECTOR=off` restores a byte-exact pack.
 
 Everything from anchor selection up to the selector — expansion, features, scoring,
 narrowing — and assembly are deterministic by construction. `bce bench` measures this directly: it runs each case
@@ -589,7 +596,7 @@ The knobs a caller controls per request are `max_candidates`, `max_tokens`, `com
 improve results: an explicit symbol name turns a guess into a certainty.
 
 The selector is server configuration, not a per-request option: `BCE_SELECTOR` and the
-`BCE_SELECTOR_*` thresholds ([docs/deployment.md](deployment.md#context-selector)). It was
+`BCE_SELECTOR_*` thresholds ([docs/selector.md](selector.md#variables)). It was
 fitted on K=50 answers; with a short K there is less to cut and it mostly reorders.
 
 The scoring weights are not runtime configuration. They are a versioned constant, because

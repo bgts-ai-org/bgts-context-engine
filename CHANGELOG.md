@@ -35,14 +35,28 @@ parse error — and so are the changes; nothing is fitted to the benchmark's tas
   heuristic and three other Jev question shapes (`select_bench.py`). Jev is not
   bit-deterministic: probabilities jitter by ~0.01 between identical calls; in three repeated
   runs the flips sat at the stub boundary on files the change never touched and recall moved
-  by ≤ 0.6 points. Configured with `BCE_SELECTOR` (`auto` — on when `OPENROUTER_API_KEY` is
-  set — `jev`, `off`) and `BCE_SELECTOR_*`; `bce context --no-select` returns the raw ranking.
+  by ≤ 0.6 points. Configured with `BCE_SELECTOR` (`off` by default, `jev`, `decider-2b`,
+  `decider-4b`) and `BCE_SELECTOR_*`; `bce context --no-select` returns the raw ranking.
   With the selector on, `max_candidates` left unset means K=50 (`SELECTED_MAX_CANDIDATES`),
   otherwise 20; REST, MCP, `bce context` and `bce precontext` no longer send a K of their own.
   The assembler reserves the stubs' cost (≤ 40 % of the budget) and the full tier is emitted
   round-robin across files, so at the default 1500 tokens neither the stubs nor a second or
   third full file are cut by the first file's bodies. `bce precontext` renders stubs as
   `` `path` stub: N candidate symbol(s): … ``.
+- **Open-weight selector models: `BCE_SELECTOR=decider-2b` / `decider-4b`.** The selector
+  also talks to [Mapika/decider-2b](https://huggingface.co/Mapika/decider-2b) and
+  [Mapika/decider-4b](https://huggingface.co/Mapika/decider-4b) behind a self-hosted
+  `decider.serve` (same System One wire format as Jev), so the request never leaves the
+  perimeter and has no per-query bill. Each value carries its defaults (model, URL
+  `http://127.0.0.1:8000/v1/systemone`, timeout 10 s, no API key; Jev keeps OpenRouter,
+  `typesafe/jev-1.13` and 3 s). `BCE_SELECTOR_API_KEY` is a bearer token for TypeSafe's own
+  API (`https://api.typesafe.ai/v1/systemone`) or a proxy in front of a decider; an OpenRouter
+  key is never sent to a decider. On the 12-repository benchmark under Jev's thresholds:
+  file recall @50 93.3 (Jev) / 92.1 (decider-4b) / 89.8 (decider-2b), 1 121 / 1 193 / 1 355
+  tokens, selector latency 0.59 / 2.67 / 1.66 s. `coverage.selector` adds `method` and
+  `served_model`; a decider server that loaded other weights than `BCE_SELECTOR` names is
+  logged once. `bce serve` prints and `bce serve-mcp` logs the active selector at startup.
+  Setup in [docs/selector.md](docs/selector.md).
 - **Test symbols are excluded in the query.** Migration `0013_fts_is_test` adds
   `symbol_fts.is_test`, written at upsert from the path / name rules
   (`bce.domain.testness.is_test_symbol`, moved out of the orchestrator so storage can share

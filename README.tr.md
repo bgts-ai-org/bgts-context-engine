@@ -14,7 +14,7 @@ veren sekiz sembolü sıralanmış, bütçelenmiş ve yeniden üretilebilir şek
 [![MCP](https://img.shields.io/badge/MCP-uyumlu-000000.svg)](docs/mcp.md)
 [![Yıldızlar](https://img.shields.io/github/stars/bgts-ai-org/bgts-context-engine?style=flat&logo=github)](https://github.com/bgts-ai-org/bgts-context-engine/stargazers)
 
-[Hızlı başlangıç](#hızlı-başlangıç) · [Ajanınızdan kullanma](#ajanınızdan-kullanma) · [Nasıl çalışır](#nasıl-çalışır) · [Desteklenen modeller](#desteklenen-modeller) · [Dokümantasyon](#dokümantasyon) · [Site](https://bgts-ai-org.github.io/bce-microsite/) · [English](README.md)
+[Hızlı başlangıç](#hızlı-başlangıç) · [Ajanınızdan kullanma](#ajanınızdan-kullanma) · [Nasıl çalışır](#nasıl-çalışır) · [Desteklenen modeller](#desteklenen-modeller) · [Seçici modeller](docs/selector.md) · [Dokümantasyon](#dokümantasyon) · [Site](https://bgts-ai-org.github.io/bce-microsite/) · [English](README.md)
 
 </div>
 
@@ -50,7 +50,8 @@ Bu sıralamanın üstünde isteğe bağlı, açıkça işaretlenmiş tek bir ola
 sıralanan dosyalardan görevin gerçekten hangilerini değiştirdiğini bir karar modeline soran
 *bağlam seçici*. Ajana bu dosyaları tam, muhtemelen ilgili olanları birer satır olarak verir,
 gerisini atar. 600 gerçek değişiklikte bağlamı %79 küçülttü, recall'dan bir puan verdi.
-OpenRouter anahtarı yoksa kapalıdır; `--no-select` bayt bayt aynı paketi geri verir.
+`BCE_SELECTOR` bir model adı (barındırılan Jev ya da kendi GPU'nuzda decider-2b /
+decider-4b) verilene kadar kapalıdır; `--no-select` bayt bayt aynı paketi geri verir.
 
 Motor, insanların çalıştırabilmesi için yayımlanır. Aynı şeyi kendi çevrelerinde isteyen
 kurumlar — indeksleme, kurulum, depolarınıza göre ayarlanmış skorlama veya etrafındaki
@@ -228,7 +229,8 @@ kadar kısa. Her öge `file_id` ve `line` da taşır; ajan sembolü aramak yerin
 Bağlam seçici açıkken ögeler bir de **`tier`** taşır: görevin en muhtemel değiştireceği iki
 üç dosya için `full`, muhtemelen ilgili dosyalar için tek satırlık `stub`
 (`yol - N aday sembol: …`); `coverage.selector` neyin neden kesildiğini söyler
-([docs/retrieval.md](docs/retrieval.md#context-selection-optional)).
+([docs/retrieval.md](docs/retrieval.md#context-selection-optional); modeller ve kurulum
+[docs/selector.md](docs/selector.md) içinde).
 
 ## Nasıl çalışır
 
@@ -317,6 +319,23 @@ sunucu (vLLM, TEI, Ollama). Model veya boyutu değiştirmek yeniden indekslemedi
 - [`Nomic Embed Code`](https://huggingface.co/nomic-ai/nomic-embed-code) — açık kaynaklı
   7B kod getiricisi.
 
+### Seçici modeller
+
+İsteğe bağlı [bağlam seçici](#ne-döner), sıralanmış cevabın üzerinde bu karar modellerinden
+birini çalıştırır. `BCE_SELECTOR`'ı modelin adına ayarlayın; ayarlanmazsa (`off`) motor
+K=20'de düz sıralamayı döner.
+
+| `BCE_SELECTOR` | Model | Nerede çalışır | Dosya recall @50 · token* |
+| --- | --- | --- | --- |
+| `jev` | [Jev 1.13](https://openrouter.ai/typesafe/jev-1.13) (`typesafe/jev-1.13`, TypeSafe) | barındırılan: [OpenRouter](https://openrouter.ai/docs/guides/community/jev) ya da [TypeSafe API'si](https://www.typesafeai.org/guides/jev-api-quickstart) | 93.3 · 1.121 |
+| `decider-2b` | [Mapika/decider-2b](https://huggingface.co/Mapika/decider-2b) (açık ağırlık, Apache-2.0) | kendi GPU'nuz (16 GB+), `decider.serve` ile | 89.8 · 1.355 |
+| `decider-4b` | [Mapika/decider-4b](https://huggingface.co/Mapika/decider-4b) (açık ağırlık, Apache-2.0) | kendi GPU'nuz (32 GB), `decider.serve` ile | 92.1 · 1.193 |
+
+\* 12 depoda 600 gerçek değişiklik, K=50; seçicisiz 94.4 recall ve 8.310 token'a karşı. Jev
+`OPENROUTER_API_KEY` ister ve görev metniyle kod alıntılarını üçüncü tarafa gönderir;
+decider'lar her şeyi çevrenizin içinde tutar ve anahtar istemez.
+**Kurulum, decider sunucusunun kurulumu ve RunPod notları: [docs/selector.md](docs/selector.md).**
+
 ## Nereye oturur
 
 |  | Embedding RAG | Language server | BGTS Context Engine |
@@ -384,6 +403,7 @@ Tümü İngilizcedir.
 | --- | --- |
 | [Architecture](docs/architecture.md) | deterministik hat, üç katman, indeksleme |
 | [Retrieval](docs/retrieval.md) | çapalar, genişletme, her skorlama ağırlığı, güven |
+| [Selector models](docs/selector.md) | Jev, decider-2b ve decider-4b: seçim, kurulum, bağlam seçici yapılandırması |
 | [Data model](docs/data-model.md) | düğüm etiketleri, kenar tipleri, tablolar, sembol kimliği |
 | [MCP and API](docs/mcp.md) | her araç ve uç nokta, MCP yapılandırması, CLI |
 | [Languages](docs/languages.md) | her parser'ın çıkardıkları ve yeni dil ekleme |

@@ -404,7 +404,8 @@ def context(
     select: bool = typer.Option(
         True,
         "--select/--no-select",
-        help="Run the context selector (BCE_SELECTOR) on the ranked candidates; --no-select returns the raw ranking",
+        help="Run the configured context selector (BCE_SELECTOR: jev, decider-2b, decider-4b; "
+        "off by default) on the ranked candidates; --no-select returns the raw ranking",
     ),
 ) -> None:
     """Layer 3: assemble a context package + coverage for a task (ranked, then tiered by the selector)."""
@@ -801,6 +802,9 @@ def serve(
         typer.echo(f"Web UI:    http://{host}:{port}/ui/")
     elif ui:
         typer.echo("Web UI:    not bundled in this installation (see web/README.md to run it)")
+    from bce.core.selector import describe_selector
+
+    typer.echo(f"Selector:  {describe_selector()}")
 
     factory = "bce.api.rest.app:app" if ui else "bce.api.rest.app:create_api_only_app"
     uvicorn.run(factory, host=host, port=port, reload=reload, factory=not ui)

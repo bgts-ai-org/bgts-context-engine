@@ -1,6 +1,8 @@
-"""Jev client: TypeSafe's System One decision model over the OpenRouter Decisions API.
+"""System One client: one decision request to Jev or to a decider server.
 
-One request carries a ``state`` (arbitrary JSON the model reads) and a set of typed ``questions``
+TypeSafe's Jev (over the OpenRouter Decisions API or TypeSafe's own ``/v1/systemone``) and the
+open-weight decider models (``decider.serve``, ``POST /v1/systemone``) share one wire format. One
+request carries a ``state`` (arbitrary JSON the model reads) and a set of typed ``questions``
 about it; the answer is one typed value per question with a probability - no generated text:
 
 - ``noul``   -> ``{"noul": p}``                         probability the statement holds
@@ -17,7 +19,7 @@ import json
 import urllib.error
 import urllib.request
 from collections.abc import Callable
-from typing import Any
+from typing import Any, NamedTuple
 
 #: ``transport(url, body, headers, timeout) -> parsed JSON``.
 Transport = Callable[[str, bytes, dict[str, str], float], dict[str, Any]]
@@ -25,6 +27,13 @@ Transport = Callable[[str, bytes, dict[str, str], float], dict[str, Any]]
 
 class JevError(RuntimeError):
     """The decision request failed (network, HTTP status, or a malformed answer)."""
+
+
+class Decision(NamedTuple):
+    answers: dict[str, Any]
+    usage: dict[str, Any]
+    #: The model name the server reports having answered with (``""`` when it reports none).
+    served_model: str
 
 
 def _urllib_transport(
@@ -59,21 +68,19 @@ class JevClient:
         self.timeout = timeout
         self._transport = transport or _urllib_transport
 
-    def decide(
-        self, state: dict[str, Any], questions: dict[str, Any]
-    ) -> tuple[dict[str, Any], dict[str, Any]]:
-        """``(answers, usage)``; answers are keyed like ``questions``. Raises :class:`JevError`."""
+    def decide(self, state: dict[str, Any], questions: dict[str, Any]) -> Decision:
+        """Answers keyed like ``questions``, usage and the served model. Raises :class:`JevError`."""
         body = json.dumps(
             {"model": self.model, "state": state, "questions": questions}, ensure_ascii=False
         ).encode("utf-8")
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-            "X-Title": "bce context selector",
-        }
+        headers = {"Content-Type": "application/json", "X-Title": "bce context selector"}
+        # A self-hosted decider server takes no key; sending an empty bearer would only confuse
+        # a proxy in front of it.
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
         data = self._transport(self.url, body, headers, self.timeout)
         answers = data.get("answers") if isinstance(data, dict) else None
         if not isinstance(answers, dict):
             raise JevError("response carries no answers")
         usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
-        return answers, usage
+        return Decision(answers, usage, str(data.get("model") or ""))

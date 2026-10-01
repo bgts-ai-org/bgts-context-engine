@@ -16,7 +16,7 @@ that actually answer it — ranked, budgeted, and reproducible.
 [![MCP](https://img.shields.io/badge/MCP-compatible-000000.svg)](docs/mcp.md)
 [![Stars](https://img.shields.io/github/stars/bgts-ai-org/bgts-context-engine?style=flat&logo=github)](https://github.com/bgts-ai-org/bgts-context-engine/stargazers)
 
-[Quick start](#quick-start) · [Use it from your agent](#use-it-from-your-agent) · [How it works](#how-it-works) · [Supported models](#supported-models) · [Documentation](#documentation) · [Website](https://bgts-ai-org.github.io/bce-microsite/) · [Türkçe](README.tr.md)
+[Quick start](#quick-start) · [Use it from your agent](#use-it-from-your-agent) · [How it works](#how-it-works) · [Supported models](#supported-models) · [Selector models](docs/selector.md) · [Documentation](#documentation) · [Website](https://bgts-ai-org.github.io/bce-microsite/) · [Türkçe](README.tr.md)
 
 </div>
 
@@ -48,8 +48,9 @@ that stage.
 On top of that ranking sits one optional, clearly marked probabilistic step: a *context
 selector* that asks a decision model which of the ranked files the task actually edits and
 hands the agent those in full, the likely-related ones as one line each, and nothing else.
-On 600 real changes it cut the context by 79 % for one point of recall. It is off without an
-OpenRouter key, and `--no-select` gives back the byte-exact pack.
+On 600 real changes it cut the context by 79 % for one point of recall. It is off until
+`BCE_SELECTOR` names a model — hosted Jev, or decider-2b / decider-4b on your own GPU — and
+`--no-select` gives back the byte-exact pack.
 
 The engine is published so people can run it. Organisations that want the same thing
 inside their own perimeter — help with indexing, deployment, scoring tuned to their
@@ -225,7 +226,8 @@ searching for the symbol.
 With the context selector on, items also carry a **`tier`**: `full` for the two or three
 files the task most likely edits, `stub` — a single `path - N candidate symbols: …` line —
 for files that are probably related, and `coverage.selector` says what was cut and why
-([docs/retrieval.md](docs/retrieval.md#context-selection-optional)).
+([docs/retrieval.md](docs/retrieval.md#context-selection-optional); models and setup in
+[docs/selector.md](docs/selector.md)).
 
 ## How it works
 
@@ -311,6 +313,23 @@ Voyage is a hosted API — `pip install "bgts-context-engine[embed]"` and
 - [`Nomic Embed Code`](https://huggingface.co/nomic-ai/nomic-embed-code) — an open 7B
   code retriever.
 
+### Selector models
+
+The optional [context selector](#what-comes-back) runs one of these decision models over the
+ranked answer. Set `BCE_SELECTOR` to its name; unset (`off`), the engine returns the plain
+ranking at K=20.
+
+| `BCE_SELECTOR` | Model | Runs on | File recall @50 · tokens* |
+| --- | --- | --- | --- |
+| `jev` | [Jev 1.13](https://openrouter.ai/typesafe/jev-1.13) (`typesafe/jev-1.13`, TypeSafe) | hosted: [OpenRouter](https://openrouter.ai/docs/guides/community/jev) or [TypeSafe's API](https://www.typesafeai.org/guides/jev-api-quickstart) | 93.3 · 1 121 |
+| `decider-2b` | [Mapika/decider-2b](https://huggingface.co/Mapika/decider-2b) (open weights, Apache-2.0) | your GPU (16 GB+), via `decider.serve` | 89.8 · 1 355 |
+| `decider-4b` | [Mapika/decider-4b](https://huggingface.co/Mapika/decider-4b) (open weights, Apache-2.0) | your GPU (32 GB), via `decider.serve` | 92.1 · 1 193 |
+
+\* 600 real changes over 12 repositories, K=50, against 94.4 recall and 8 310 tokens without
+a selector. Jev needs `OPENROUTER_API_KEY` and sends task text and code excerpts to a third
+party; the deciders keep everything inside your perimeter and need no key.
+**Setup, the decider server install and RunPod notes: [docs/selector.md](docs/selector.md).**
+
 ## Where it fits
 
 |  | Embedding RAG | Language server | BGTS Context Engine |
@@ -375,6 +394,7 @@ actually ask for reorders this list.
 | --- | --- |
 | [Architecture](docs/architecture.md) | the deterministic line, the three layers, indexing |
 | [Retrieval](docs/retrieval.md) | anchors, expansion, every scoring weight, confidence |
+| [Selector models](docs/selector.md) | Jev, decider-2b and decider-4b: choosing, installing, configuring the context selector |
 | [Data model](docs/data-model.md) | node labels, edge types, tables, symbol identity |
 | [MCP and API](docs/mcp.md) | every tool and endpoint, MCP configuration, the CLI |
 | [Languages](docs/languages.md) | what each parser extracts, and how to add one |

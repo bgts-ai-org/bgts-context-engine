@@ -31,12 +31,12 @@ Neither influences how it is ranked or rendered.
 
 One optional stage crosses the line on purpose, and only after it: the context selector
 (`bce.core.selector`). The deterministic core ranks K candidates; the selector asks a
-decision model (Jev, over OpenRouter) which of those files the task edits and tiers the
-answer into full, stub and dropped. It cannot add a candidate — it only drops, demotes and
-reorders files among the ones the engine ranked — it fails open to that ranking, and it
-reports itself in `coverage.selector`. It is on
-when an OpenRouter key is configured (`BCE_SELECTOR=auto`); `BCE_SELECTOR=off` or `bce
-context --no-select` gives back the byte-exact pack. The trade — a pack a fifth of the size
+decision model (Jev over OpenRouter, or an open-weight decider-2b / decider-4b on your own
+GPU) which of those files the task edits and tiers the answer into full, stub and dropped. It
+cannot add a candidate — it only drops, demotes and reorders files among the ones the engine
+ranked — it fails open to that ranking, and it reports itself in `coverage.selector`. It is
+off unless `BCE_SELECTOR` names a model ([docs/selector.md](selector.md)); off, or with `bce
+context --no-select`, the pack is byte-exact. The trade — a pack a fifth of the size
 for about one point of recall, with tiering that is not bit-exact — is measured in
 [docs/retrieval.md](retrieval.md#context-selection-optional).
 

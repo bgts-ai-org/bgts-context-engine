@@ -119,22 +119,29 @@ class Settings(BaseSettings):
     retrieval_semantic_rank_scale: float | None = None
 
     # --- Context selector (post-ranking tiering of the K candidates, see bce.core.selector) ---
-    # "auto" (default) runs the Jev selector when an OpenRouter key is configured and skips it
-    # otherwise; "jev" requires it (a missing key is logged and the answer is returned unselected);
-    # "off" disables it. The selector never changes *which* candidates the engine ranked - it only
-    # tiers them (full / stub / dropped) so an agent reads the right 2-3 files instead of 20.
-    selector: str = "auto"
-    # OpenRouter API key; also read from the un-prefixed ``OPENROUTER_API_KEY``.
+    # The decision model that tiers the ranked answer: "off" (default: raw ranking), "jev"
+    # (TypeSafe's hosted model, via OpenRouter or TypeSafe's own API), "decider-2b" or "decider-4b"
+    # (open-weight models behind a self-hosted ``decider.serve``). The selector never changes
+    # *which* candidates the engine ranked - it only tiers them (full / stub / dropped) so an
+    # agent reads the right 2-3 files instead of 20.
+    selector: str = "off"
+    # OpenRouter API key; also read from the un-prefixed ``OPENROUTER_API_KEY``. Jev's key when
+    # ``selector_api_key`` is empty.
     openrouter_api_key: str = Field(
         default="",
         validation_alias=AliasChoices("BCE_OPENROUTER_API_KEY", "OPENROUTER_API_KEY"),
     )
-    # Pinned decision model (thresholds below were fitted on this release; a bump is a re-fit).
-    selector_model: str = "typesafe/jev-1.13"
-    selector_url: str = "https://openrouter.ai/api/alpha/decisions"
-    # Seconds for one Jev request (measured p90 ≈ 0.55 s); on timeout the answer is returned
-    # unselected, so this is also the worst-case latency the selector adds.
-    selector_timeout: float = 3.0
+    # Bearer token for the selector endpoint: a TypeSafe key when Jev is called on TypeSafe's own
+    # API, or the proxy's token in front of a decider server. A plain decider server needs none.
+    selector_api_key: str = ""
+    # Empty = the chosen selector's default (bce.core.selector.PRESETS): Jev on OpenRouter as
+    # ``typesafe/jev-1.13``, a decider server on ``http://127.0.0.1:8000/v1/systemone``.
+    selector_model: str = ""
+    selector_url: str = ""
+    # Seconds for one decision request; on timeout the answer is returned unselected, so this is
+    # also the worst-case latency the selector adds. Unset: 3 for Jev (p99 ~1 s), 10 for a decider
+    # (p99 ~5 s for decider-4b on one 32 GB GPU).
+    selector_timeout: float | None = None
     # File-level policy: p(file is edited) >= full_threshold -> full content; >= stub_threshold ->
     # one reference line; below -> dropped. At most ``max_files`` files are listed; the engine's
     # first file is always kept at full detail.

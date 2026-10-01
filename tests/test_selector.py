@@ -206,26 +206,114 @@ def test_client_rejects_response_without_answers():
         client.decide({}, {})
 
 
+def _settings(**kw) -> Settings:
+    return Settings(_env_file=None, **kw)
+
+
 def test_selector_from_settings_modes(monkeypatch):
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     monkeypatch.delenv("BCE_OPENROUTER_API_KEY", raising=False)
-    assert (
-        selector_from_settings(Settings(_env_file=None, selector="off", openrouter_api_key="k"))
-        is None
-    )
-    assert (
-        selector_from_settings(Settings(_env_file=None, selector="auto")) is None
-    )  # no key -> off
-    assert (
-        selector_from_settings(Settings(_env_file=None, selector="jev")) is None
-    )  # no key -> warn + off
+    monkeypatch.delenv("BCE_SELECTOR", raising=False)
+    # off by default, even with a key configured: the selector is chosen explicitly
+    assert selector_from_settings(_settings(openrouter_api_key="k")) is None
+    assert selector_from_settings(_settings(selector="off", openrouter_api_key="k")) is None
+    assert selector_from_settings(_settings(selector="jev")) is None  # no key -> warn + off
+    assert selector_from_settings(_settings(selector="bogus", openrouter_api_key="k")) is None
     sel = selector_from_settings(
-        Settings(_env_file=None, selector="auto", openrouter_api_key="k", selector_max_files=7)
+        _settings(selector="jev", openrouter_api_key="k", selector_max_files=7)
     )
-    assert sel is not None and sel.cfg.max_files == 7 and sel.client.model == "typesafe/jev-1.13"
+    assert sel is not None and sel.cfg.max_files == 7 and sel.method == "jev"
+    c = sel.client
+    assert (c.model, c.url, c.timeout, c.api_key) == (
+        "typesafe/jev-1.13",
+        "https://openrouter.ai/api/alpha/decisions",
+        3.0,
+        "k",
+    )
+    # Jev on TypeSafe's own API: its key and URL win over the OpenRouter defaults
+    sel = selector_from_settings(
+        _settings(
+            selector="jev",
+            openrouter_api_key="or",
+            selector_api_key="ts",
+            selector_url="https://api.typesafe.ai/v1/systemone",
+            selector_model="jev-latest",
+        )
+    )
+    assert (sel.client.api_key, sel.client.model) == ("ts", "jev-latest")
     # the un-prefixed key name is accepted
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
     assert Settings(_env_file=None).openrouter_api_key == "sk-or-test"
+
+
+@pytest.mark.parametrize("mode", ["decider-2b", "decider-4b", "DECIDER_4B"])
+def test_selector_from_settings_decider_needs_no_key(monkeypatch, mode):
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("BCE_OPENROUTER_API_KEY", raising=False)
+    sel = selector_from_settings(_settings(selector=mode, openrouter_api_key="or"))
+    name = mode.lower().replace("_", "-")
+    assert sel is not None and sel.method == name and sel.expect_served == name
+    c = sel.client
+    # an OpenRouter key is never forwarded to a self-hosted server
+    assert (c.model, c.url, c.timeout, c.api_key) == (
+        name,
+        "http://127.0.0.1:8000/v1/systemone",
+        10.0,
+        "",
+    )
+    sel = selector_from_settings(
+        _settings(
+            selector=mode,
+            selector_url="http://gpu:11049/v1/systemone",
+            selector_timeout=30,
+            selector_api_key="proxy",
+        )
+    )
+    assert (sel.client.url, sel.client.timeout, sel.client.api_key) == (
+        "http://gpu:11049/v1/systemone",
+        30.0,
+        "proxy",
+    )
+
+
+def test_client_sends_bearer_only_with_a_key():
+    seen = []
+
+    def transport(url, body, headers, timeout):
+        seen.append(headers)
+        return {"answers": {}, "model": "decider-4b-v2.1"}
+
+    for key in ("", "k"):
+        d = JevClient(api_key=key, model="m", url="http://x", timeout=1.0, transport=transport)
+        assert d.decide({}, {}).served_model == "decider-4b-v2.1"
+    assert "Authorization" not in seen[0] and seen[1]["Authorization"] == "Bearer k"
+
+
+def test_selector_reports_served_model_and_warns_on_mismatch(monkeypatch):
+    from bce.core.selector import selector as selector_mod
+
+    warnings: list[tuple] = []
+    monkeypatch.setattr(selector_mod.logger, "warning", lambda *a, **k: warnings.append(a))
+    monkeypatch.setattr(selector_mod, "_MISMATCH_LOGGED", set())
+
+    def transport(url, body, headers, timeout):
+        first = next(iter(json.loads(body)["questions"]))
+        ans = {f"f{i}": {"noul": 0.9} for i in range(4)} if first.startswith("f") else {}
+        return {"answers": ans, "model": "decider-4b-v2.1"}
+
+    client = JevClient(
+        api_key="", model="decider-2b", url="http://x", timeout=1.0, transport=transport
+    )
+    _, info = Selector(client, method="decider-2b", expect_served="decider-2b").select(
+        ITEMS, task_text="t"
+    )
+    Selector(client, method="decider-2b", expect_served="decider-2b").select(ITEMS, task_text="t")
+    assert info["method"] == "decider-2b" and info["model"] == "decider-2b"
+    assert info["served_model"] == "decider-4b-v2.1" and "cost_usd" not in info
+    # once per process although every request builds its own selector
+    assert [w for w in warnings if "decider-4b-v2.1" in w] == [warnings[0]] and len(warnings) == 1
+    Selector(client, method="decider-4b", expect_served="decider-4b").select(ITEMS, task_text="t")
+    assert len(warnings) == 1
 
 
 def test_assembler_reserves_budget_for_stubs():

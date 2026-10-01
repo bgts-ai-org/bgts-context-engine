@@ -6,13 +6,15 @@ so the agent either reads everything (no token saving) or guesses. The engine's 
 enough to cut: the first file is right in 75 % of tasks, but the 2nd-3rd files of a multi-file
 change sit anywhere in the top 50.
 
-Approach. After ranking, ask a decision model (Jev) two batches of typed questions in parallel:
+Approach. After ranking, ask a decision model (Jev, or an open-weight decider-2b / decider-4b
+served on-prem; see :data:`bce.core.selector.PRESETS`) two batches of typed questions in parallel:
 
 - per distinct file, a ``noul``: *is this one of the files the task edits?* -> ``p(file)``
 - per symbol, a ``score`` on a 4-level scale (unrelated / background / must read / must change)
 
-and apply a fixed policy on the probabilities (fitted on the same 597 changes, ``local_bench/
-multi_repo_bench/select_bench.py``, policy ``tier 0.5/0.05|12 +sym>=1.0``):
+and apply a fixed policy on the probabilities (fitted for Jev on the same 597 changes,
+``local_bench/multi_repo_bench/select_bench.py``, policy ``tier 0.5/0.05|12 +sym>=1.0``; the
+deciders run under the same thresholds):
 
 - ``full``  files: the engine's first file, plus every file with ``p >= full_threshold``. Their
   symbols are kept at the assembler's normal detail, except symbols scored below
@@ -54,6 +56,7 @@ SYMBOL_LEVELS = (
 _EXCERPT_CHARS = 240
 _SYMBOLS_PER_FILE = 12
 _STUB_NAMES = 6
+_MISMATCH_LOGGED: set[tuple[str, str]] = set()
 
 
 @dataclass(frozen=True)
@@ -319,9 +322,33 @@ def apply_policy(
 
 
 class Selector:
-    def __init__(self, client: JevClient, cfg: SelectorConfig | None = None) -> None:
+    def __init__(
+        self,
+        client: JevClient,
+        cfg: SelectorConfig | None = None,
+        *,
+        method: str = "jev",
+        expect_served: str | None = None,
+    ) -> None:
         self.client = client
         self.cfg = cfg or SelectorConfig()
+        self.method = method
+        # A decider server answers with whatever weights it loaded and ignores the requested
+        # model, so a server started with decider-4b silently serves a "decider-2b" config.
+        self.expect_served = expect_served
+
+    def _check_served(self, served: str) -> None:
+        if not self.expect_served or self.expect_served.lower() in served.lower():
+            return
+        key = (self.method, served)
+        if key not in _MISMATCH_LOGGED:  # selectors are built per request: warn once per process
+            _MISMATCH_LOGGED.add(key)
+            logger.warning(
+                "selector: BCE_SELECTOR=%s but the server answered with %r; check which model "
+                "the decider server loaded (DECIDER_MODEL)",
+                self.method,
+                served,
+            )
 
     def select(
         self, items: list[dict[str, Any]], *, task_text: str
@@ -329,7 +356,7 @@ class Selector:
         """Tiered items + a ``coverage.selector`` block. Fail-open: on any error the input items are
         returned unchanged with ``status: "error"``."""
         t0 = time.perf_counter()
-        info: dict[str, Any] = {"method": "jev", "model": self.client.model, "status": "ok"}
+        info: dict[str, Any] = {"method": self.method, "model": self.client.model, "status": "ok"}
         if not items:
             info.update(status="skipped", reason="no candidates")
             return items, info
@@ -350,7 +377,7 @@ class Selector:
                 symbol_questions(items),
             )
             try:
-                file_answers, file_usage = f_files.result()
+                file_answers, file_usage, served = f_files.result()
             except JevError as exc:
                 logger.warning(
                     "selector: file decision failed, answer left unselected",
@@ -360,7 +387,7 @@ class Selector:
                 return items, info
             symbol_score: dict[str, float] | None
             try:
-                sym_answers, sym_usage = f_syms.result()
+                sym_answers, sym_usage, _ = f_syms.result()
                 symbol_score = parse_symbol_answers(sym_answers, items)
             except JevError as exc:
                 logger.warning(
@@ -370,6 +397,9 @@ class Selector:
                 symbol_score, sym_usage = None, {}
                 info.update(status="partial", reason=str(exc)[:200])
 
+        if served:
+            info["served_model"] = served
+            self._check_served(served)
         file_p = parse_file_answers(file_answers, groups)
         out, stats = apply_policy(items, groups, file_p, symbol_score, self.cfg)
         info.update(stats)

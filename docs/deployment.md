@@ -263,29 +263,30 @@ query side. The active profile is written into every `bce bench-prs` report.
 
 ### Context selector
 
-After ranking, `get_context_for_task` can tier its K candidates with Jev, TypeSafe's decision
-model, through the OpenRouter Decisions API: files the task most likely edits in full, likely
-related files as one line each, the rest dropped. On the 12-repository benchmark at K=50 this
-cut the tokens handed to the agent by 79 % for one point of file recall
-([docs/retrieval.md](retrieval.md#context-selection-optional)).
+After ranking, `get_context_for_task` can tier its K candidates with a decision model: files
+the task most likely edits in full, likely related files as one line each, the rest dropped.
+On the 12-repository benchmark at K=50, Jev cut the tokens handed to the agent by 79 % for
+one point of file recall ([docs/retrieval.md](retrieval.md#context-selection-optional)). It is off unless
+`BCE_SELECTOR` names a model; off, the answer is the plain ranking at K=20.
 
-| Variable | Default | |
+| `BCE_SELECTOR` | Model | Needs |
 | --- | --- | --- |
-| `BCE_SELECTOR` | `auto` | `auto`: on when an OpenRouter key is set, off otherwise; `jev`: on, and a missing key is logged; `off` |
-| `OPENROUTER_API_KEY` | empty | also read as `BCE_OPENROUTER_API_KEY`. No TypeSafe account needed; usage is billed to the OpenRouter account |
-| `BCE_SELECTOR_MODEL` | `typesafe/jev-1.13` | pinned: the thresholds below were fitted on this release, so a new one is a re-fit, not a drop-in |
-| `BCE_SELECTOR_URL` | `https://openrouter.ai/api/alpha/decisions` | |
-| `BCE_SELECTOR_TIMEOUT` | `3.0` | seconds per request; also the worst-case latency added. On timeout the answer is the raw ranking |
-| `BCE_SELECTOR_FULL_THRESHOLD` | `0.5` | p(file is edited) at or above which a file keeps its symbols |
-| `BCE_SELECTOR_STUB_THRESHOLD` | `0.05` | at or above which a file is listed as one stub line |
-| `BCE_SELECTOR_MAX_FILES` | `12` | files listed in total (full + stub) |
-| `BCE_SELECTOR_SYMBOL_MIN_SCORE` | `1.0` | symbols of a full file scored below this (0 unrelated … 3 must change) are dropped |
+| `off` (default) | none | — |
+| `jev` | [Jev 1.13](https://openrouter.ai/typesafe/jev-1.13), hosted | `OPENROUTER_API_KEY`, or a TypeSafe key in `BCE_SELECTOR_API_KEY` with `BCE_SELECTOR_URL=https://api.typesafe.ai/v1/systemone` |
+| `decider-2b` | [Mapika/decider-2b](https://huggingface.co/Mapika/decider-2b), open weights | a `decider.serve` server on your GPU; `BCE_SELECTOR_URL` |
+| `decider-4b` | [Mapika/decider-4b](https://huggingface.co/Mapika/decider-4b), open weights | the same, with the 4b weights loaded |
+
+Installing the decider server (GPU sizing, `pip install "decider-ai[serve]"`, the server
+settings this workload needs, RunPod), the measured comparison of the three models, every
+`BCE_SELECTOR_*` variable and troubleshooting are in [docs/selector.md](selector.md).
 
 Cost and latency, measured over 600 queries at K=50: two parallel requests of ~6 k and ~11 k
-input tokens, ~575 ms added, ~$0.0007 per query (output tokens are free). The task text and
-the excerpts of the candidate symbols (240 characters each) leave the perimeter for
-OpenRouter and TypeSafe, which is the one place the engine sends source code to a third
-party at query time; keep `BCE_SELECTOR=off` where that is not acceptable.
+input tokens. Jev adds ~0.6 s and ~$0.0007 per query (output tokens are free); decider-2b
+~1.7 s and decider-4b ~2.7 s on one 32 GB RunPod GPU, with no per-query bill. With `jev` the
+task text and the excerpts of the candidate symbols (240 characters each) leave the perimeter
+for OpenRouter and TypeSafe, which is the one place the engine sends source code to a third
+party at query time; a self-hosted decider keeps them inside, and `BCE_SELECTOR=off` sends
+nothing.
 
 The stage is fail-open: an HTTP error, a timeout or a malformed answer is logged and the
 ranked candidates are assembled as they are, with `coverage.selector.status` saying so.

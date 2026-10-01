@@ -112,6 +112,9 @@ async def run_stdio(name: str = "bgts-context-engine") -> None:  # pragma: no co
 
     server = build_server(name)
     _warm_encoder()
+    from bce.core.selector import describe_selector
+
+    logging.getLogger("bce.api.mcp").info("context selector: %s", describe_selector())
     pool = None
     if get_settings().mcp_allow_write:
         from bce.jobs.worker import JobWorkerPool

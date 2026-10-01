@@ -135,8 +135,9 @@ The variables that matter for MCP:
 | `BCE_EMBEDDING_API_KEY` | `openai` only; leave empty for a local server that does not check one |
 | `BCE_MCP_ALLOW_WRITE` | `false` by default; `true` adds the two indexing tools |
 | `BCE_MCP_TOOLS` | comma-separated names to advertise (default: all). Agents fetch a tool's schema before first use and chain small calls when many tools are offered, so a narrow catalog such as `get_context_for_task,find_references` costs fewer model turns. Unknown names fail at startup. |
-| `OPENROUTER_API_KEY` | turns on the context selector for `get_context_for_task` (`BCE_SELECTOR=auto`); unset, the tool returns the raw ranking. See [docs/deployment.md](deployment.md#context-selector) |
-| `BCE_SELECTOR` | `auto` (default), `jev` or `off` |
+| `BCE_SELECTOR` | context selector for `get_context_for_task`: `off` (default, the raw ranking), `jev`, `decider-2b` or `decider-4b`. See [docs/selector.md](selector.md) |
+| `OPENROUTER_API_KEY` | Jev's key when `BCE_SELECTOR=jev` |
+| `BCE_SELECTOR_URL` | the decider server (`http://<host>:<port>/v1/systemone`), or TypeSafe's own API for Jev |
 
 The encoder is built once at startup rather than on the first search. It pulls in numpy, and
 loading that lazily inside a tool call can stall for minutes on Windows; paying it during
@@ -236,9 +237,10 @@ level. If your agent already parsed a traceback, forward it.
 When the server has the context selector on, the K ranked candidates are tiered before
 assembly: the files the task most likely edits keep their symbols, likely-related files
 become one `stub` line each, the rest is dropped
-([docs/retrieval.md](retrieval.md#context-selection-optional)). It is server configuration,
-not a request field, and it is why `max_candidates` defaults to 50 when it is on: the selector
-was fitted on a K=50 net.
+([docs/retrieval.md](retrieval.md#context-selection-optional)). It is server configuration
+(`BCE_SELECTOR`, [docs/selector.md](selector.md)), not a request field, and it is why
+`max_candidates` defaults to 50 when it is on: the selector was fitted on a K=50 net. The MCP
+server logs the active selector to stderr at startup (`context selector: …`).
 
 Layer-3 tools apply the repository scope filter when a user id is supplied
 programmatically. The stdio server does not supply one.
@@ -274,8 +276,9 @@ A `get_context_for_task` payload contains:
 - **`coverage`** — the trust report, ending in `confidence` of `high`, `medium` or `low`.
   See [docs/retrieval.md](retrieval.md#7-coverage-and-confidence). Treat `low` as a signal
   to ask a clarifying question rather than to start editing. `coverage.selector` is present
-  when the selector ran: `status` (`ok`, `partial`, `error` — the items are then the raw
-  ranking), tier counts, `ms` and `cost_usd`.
+  when the selector ran: `method` (`jev`, `decider-2b`, `decider-4b`), `served_model`,
+  `status` (`ok`, `partial`, `error` — the items are then the raw ranking), tier counts, `ms`
+  and, for Jev, `cost_usd`.
 
 ## REST endpoints
 
