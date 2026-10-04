@@ -101,6 +101,12 @@ parse error — and so are the changes; nothing is fitted to the benchmark's tas
 
 ### Fixed
 
+- **Deleting a file's subgraph also deletes its routes and design notes.** Route and
+  DesignNote nodes reference their file through a `file_id` property rather than an edge,
+  and `delete_file_subgraph` removed only symbols and the file node, so `reindex` left the
+  routes and notes of every deleted file behind as orphans. Both are now deleted by
+  `file_id`. A route declared identically in two files is a single node, which is removed
+  with the file that last wrote it and comes back when the other file is extracted again.
 - **A dropped Voyage connection no longer fails the indexing run.** The `voyageai` client
   retries rate limits and 5xx responses itself but raises `APIConnectionError` at once when
   the API closes a connection without a response — a few times per hour on a long run, and
