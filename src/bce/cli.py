@@ -112,11 +112,17 @@ def migrate(
         typer.echo(f"Re-typed embeddings.embedding to vector({dim}).")
 
 
+_EXCLUDE_HELP = (
+    "Gitignore pattern of files to skip (repeatable; added to BCE_INDEX_EXCLUDE and .bceignore)"
+)
+
+
 @app.command()
 def index(
     repo: Path = typer.Option(..., "--repo", help="Path to a local repository to index"),
     name: str = typer.Option(..., "--name", help="Logical repository name"),
     commit: str | None = typer.Option(None, "--commit", help="Override commit sha"),
+    exclude: list[str] = typer.Option([], "--exclude", help=_EXCLUDE_HELP),
     locale: str | None = typer.Option(None, "--locale", help="Message locale (en/tr)"),
 ) -> None:
     """Full-index a local repository into the code graph."""
@@ -128,7 +134,9 @@ def index(
 
     with connection() as conn:
         repository = GraphRepository(GraphClient(conn))
-        summary = Indexer(repository).index_local_repo(path=repo, name=name, commit=commit)
+        summary = Indexer(repository, exclude=exclude).index_local_repo(
+            path=repo, name=name, commit=commit
+        )
         conn.commit()
 
     tr = get_translator()
@@ -151,6 +159,7 @@ def index(
             "edges": summary.edges,
             "nodes_added": summary.nodes_added,
             "edges_added": summary.edges_added,
+            "excluded": summary.excluded,
             "commit": summary.commit,
         }
     )
@@ -228,6 +237,7 @@ def index_remote_cmd(
     username: str | None = typer.Option(
         None, "--username", help="Username for app password (else env BCE_BITBUCKET_USERNAME)"
     ),
+    exclude: list[str] = typer.Option([], "--exclude", help=_EXCLUDE_HELP),
     locale: str | None = typer.Option(None, "--locale", help="Message locale (en/tr)"),
 ) -> None:
     """Clone a remote repository (e.g. Bitbucket Cloud) and full-index it."""
@@ -250,7 +260,7 @@ def index_remote_cmd(
     try:
         with connection() as conn:
             repository = GraphRepository(GraphClient(conn))
-            summary = Indexer(repository).index_remote_repo(
+            summary = Indexer(repository, exclude=exclude).index_remote_repo(
                 url=url, name=name, branch=branch, credentials=creds
             )
             conn.commit()
@@ -284,6 +294,7 @@ def index_remote_cmd(
             "edges": summary.edges,
             "nodes_added": summary.nodes_added,
             "edges_added": summary.edges_added,
+            "excluded": summary.excluded,
             "commit": summary.commit,
         }
     )
@@ -301,6 +312,7 @@ def reindex(
         None, "--since", help="Baseline commit (default: repo's last_indexed_commit)"
     ),
     to: str = typer.Option("HEAD", "--to", help="Target commit/ref (default: HEAD)"),
+    exclude: list[str] = typer.Option([], "--exclude", help=_EXCLUDE_HELP),
     locale: str | None = typer.Option(None, "--locale", help="Message locale (en/tr)"),
 ) -> None:
     """Incrementally re-index only the files changed since the last index (git-diff)."""
@@ -315,7 +327,7 @@ def reindex(
     try:
         with connection() as conn:
             repository = GraphRepository(GraphClient(conn))
-            summary = Indexer(repository).index_incremental(
+            summary = Indexer(repository, exclude=exclude).index_incremental(
                 path=repo, name=name, since_commit=since, to_commit=to
             )
             conn.commit()
@@ -341,6 +353,7 @@ def reindex(
             "added": summary.added,
             "modified": summary.modified,
             "deleted": summary.deleted,
+            "excluded": summary.excluded,
             "nodes": summary.nodes,
             "edges": summary.edges,
             "nodes_added": summary.nodes_added,

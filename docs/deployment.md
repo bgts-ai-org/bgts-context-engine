@@ -96,6 +96,46 @@ The token is injected into the remote URL for the duration of a single git invoc
 `origin` is reset afterwards, so it never lands in `.git/config`. It is masked out of error
 messages. Clones are cached under `BCE_REPO_CACHE_DIR` and refreshed with `git fetch`.
 
+### Excluding files
+
+Minified bundles and vendored builds parse into thousands of meaningless symbols whose
+snippets are one enormous line; left in the index they crowd real code out of a context
+pack and blow its token budget. `index`, `index-remote` and `reindex` skip a file when:
+
+1. its path matches one of the built-in patterns `*.min.js`, `*.min.mjs`, `*.min.cjs`,
+   `*.bundle.js`;
+2. its path matches a pattern in `.bceignore` at the repository root;
+3. its path matches `BCE_INDEX_EXCLUDE` (comma- or newline-separated) or a `--exclude`
+   option (repeatable);
+4. no pattern matched it and its content looks minified: at least 1 KiB with a mean line
+   length above `BCE_INDEX_MINIFIED_LINE_LENGTH` bytes (300; `0` turns this off).
+
+Patterns use gitignore syntax and are evaluated as one list in the order above, last match
+winning: `*` stays within a directory, `**` spans directories, a leading or inner `/`
+anchors to the repository root, a trailing `/` matches directories only, `!` re-includes.
+A negated pattern also overrides the content check, so `.bceignore` can bring back
+anything the defaults or the heuristic drop. As in git, a file inside an excluded
+directory cannot be re-included by itself; negate the directory instead. Only the root
+`.bceignore` is read; nested ones are not.
+
+```gitignore
+# .bceignore
+public/vendor/
+src/generated/**/*.ts
+# Re-include one bundle the defaults would skip:
+!public/app.bundle.js
+```
+
+Comments go on their own line; as in `.gitignore`, a `#` after a pattern is part of it.
+
+`.bceignore` is versioned with the code, so the file set stays a function of the commit.
+A full index drops any excluded file an earlier run had indexed, and `reindex` applies a
+changed `.bceignore` to unchanged files as well (comparing against the file at the
+baseline commit). `BCE_INDEX_EXCLUDE`, `--exclude` and the threshold are configuration
+rather than code: changing them is a reindex boundary, so run a full `bce index`
+afterwards. The summary printed by each command reports the number of skipped files as
+`excluded`.
+
 ## Run
 
 ```bash
@@ -182,6 +222,8 @@ Every setting is an environment variable prefixed `BCE_`, also read from `.env`.
 | `BCE_BITBUCKET_USERNAME` | empty | only for app-password auth |
 | `BCE_BITBUCKET_TOKEN` | empty | access token or app password |
 | `BCE_GIT_SSL_VERIFY` | `true` | disables TLS verification when false; corporate proxies only |
+| `BCE_INDEX_EXCLUDE` | empty | extra gitignore patterns to skip, comma-separated (see [Excluding files](#excluding-files)) |
+| `BCE_INDEX_MINIFIED_LINE_LENGTH` | `300` | mean line length above which a file counts as minified; `0` disables |
 
 ### Embeddings
 

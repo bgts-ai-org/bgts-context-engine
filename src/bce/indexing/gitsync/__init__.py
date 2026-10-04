@@ -7,10 +7,20 @@ Provides a local full-index walk plus remote clone/fetch for Bitbucket Cloud rep
 """
 
 from bce.indexing.gitsync.bitbucket import BitbucketRepoRef, parse_bitbucket_url
+from bce.indexing.gitsync.exclude import (
+    DEFAULT_EXCLUDES,
+    DEFAULT_MINIFIED_LINE_LENGTH,
+    IGNORE_FILE,
+    ExcludeRules,
+    build_rules,
+    load_rules,
+    looks_minified,
+)
 from bce.indexing.gitsync.local import (
     FileChange,
     changed_files,
     current_commit,
+    file_at_commit,
     iter_source_files,
 )
 from bce.indexing.gitsync.remote import (
@@ -26,6 +36,14 @@ __all__ = [
     "current_commit",
     "changed_files",
     "FileChange",
+    "file_at_commit",
+    "ExcludeRules",
+    "build_rules",
+    "load_rules",
+    "looks_minified",
+    "DEFAULT_EXCLUDES",
+    "DEFAULT_MINIFIED_LINE_LENGTH",
+    "IGNORE_FILE",
     "parse_bitbucket_url",
     "BitbucketRepoRef",
     "sync_repo",

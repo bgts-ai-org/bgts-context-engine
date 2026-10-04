@@ -13,7 +13,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,10 +22,16 @@ from bce.domain.models import GraphFragment
 from bce.indexing.embedder import Embedder
 from bce.indexing.extractor import Extractor
 from bce.indexing.gitsync import (
+    IGNORE_FILE,
+    ExcludeRules,
+    FileChange,
     GitCredentials,
+    build_rules,
     changed_files,
     current_commit,
+    file_at_commit,
     iter_source_files,
+    load_rules,
     parse_bitbucket_url,
     sync_repo,
 )
@@ -52,6 +58,7 @@ class IndexSummary:
     edges_added: int = 0
     remote_url: str | None = None
     branch: str | None = None
+    excluded: int = 0
 
 
 @dataclass(slots=True)
@@ -66,6 +73,7 @@ class IncrementalSummary:
     edges: int
     nodes_added: int = 0
     edges_added: int = 0
+    excluded: int = 0
 
 
 class Indexer:
@@ -76,13 +84,27 @@ class Indexer:
         embedder: Embedder | None = None,
         embed: bool = True,
         use_scip: bool = True,
+        exclude: Sequence[str] = (),
+        minified_line_length: int | None = None,
     ) -> None:
+        from bce.config import get_settings
+
         self.repository = repository
         self.extractor = extractor or Extractor()
         # When enabled, per-repo SCIP resolution (if an indexer binary exists) elevates edge
         # provenance to 'scip'; absent a binary this is a no-op (feature 3).
         self.use_scip = use_scip
         self.upserter = Upserter(repository)
+        # File exclusion: the built-in defaults and each repo's ``.bceignore`` are added per run
+        # (see ``bce.indexing.gitsync.exclude``); these are the configured extras, environment
+        # (``BCE_INDEX_EXCLUDE``) first so an explicit ``exclude`` can override it.
+        settings = get_settings()
+        self.exclude_patterns: tuple[str, ...] = (*settings.index_exclude_patterns, *exclude)
+        self.minified_line_length = (
+            settings.index_minified_line_length
+            if minified_line_length is None
+            else minified_line_length
+        )
         # Embeddings are written into the same connection (P5). Disabled if ``embed=False`` or when
         # no connection is available (e.g. unit tests with a fake repository). Deferred: encoded in
         # cross-file batches and flushed after each pass (see ``Embedder``), still one transaction.
@@ -119,6 +141,14 @@ class Indexer:
             with contextlib.suppress(Exception):
                 conn.execute("RESET enable_mergejoin")
                 conn.execute("RESET enable_hashjoin")
+
+    def _rules(self, root: Path) -> ExcludeRules:
+        """Exclusion rules for a run over the working tree at ``root`` (its ``.bceignore``)."""
+        return load_rules(root, self.exclude_patterns, self.minified_line_length)
+
+    def _rules_from(self, ignore_text: str | None) -> ExcludeRules:
+        """The same rules with ``ignore_text`` as the ``.bceignore`` contents (another commit)."""
+        return build_rules(ignore_text, self.exclude_patterns, self.minified_line_length)
 
     def _flush_embeddings(self) -> None:
         """Write buffered embeddings (deferred embedders only; fakes without ``flush`` are fine)."""
@@ -228,14 +258,19 @@ class Indexer:
         self._record_repo_row(repo_id, name, commit, remote_url, default_branch)
 
         self._apply_scip_resolution(root)
+        rules = self._rules(root)
 
         # Pass 1: per-file extraction + upsert. Fragments are kept for the repo-wide link pass.
         files = 0
         fragments: list[GraphFragment] = []
         indexed_paths: list[str] = []
+        excluded_paths: list[str] = []
         exts = self.extractor.registry.supported_extensions()
         for rel, abs_path in iter_source_files(root, exts):
-            source = abs_path.read_bytes()
+            source = _read_unless_excluded(rules, rel, abs_path)
+            if source is None:
+                excluded_paths.append(rel)
+                continue
             fragment = self.extractor.extract_file(
                 repo_id=repo_id, path=rel, source=source, indexed_at_commit=commit
             )
@@ -247,16 +282,24 @@ class Indexer:
             if self.embedder is not None:
                 self.embedder.embed_fragment(fragment, repo_id=repo_id, indexed_at_commit=commit)
             files += 1
+        dropped = self._drop_excluded_leftovers(repo_id, excluded_paths)
         self._flush_embeddings()
         self._record_churn(root, repo_id, commit, set(indexed_paths))
+        excluded = len(excluded_paths)
 
         logger.info(
             "extraction pass finished",
-            extra={"repo_id": repo_id, "files": files, "commit": commit},
+            extra={
+                "repo_id": repo_id,
+                "files": files,
+                "excluded": excluded,
+                "excluded_dropped": dropped,
+                "commit": commit,
+            },
         )
 
         # Pass 2: cross-file linking, optional SCIP edge synthesis, heuristic bridges.
-        self._link_and_upsert(root, fragments)
+        self._link_and_upsert(root, fragments, rules)
 
         nodes, edges = self.repository.counts()
         logger.info(
@@ -282,9 +325,31 @@ class Indexer:
             edges_added=edges - edges_before,
             remote_url=remote_url,
             branch=branch,
+            excluded=excluded,
         )
 
-    def _link_and_upsert(self, root: Path, fragments: list[GraphFragment]) -> None:
+    def _drop_excluded_leftovers(self, repo_id: str, excluded_paths: list[str]) -> int:
+        """Drop excluded files that an earlier run indexed (a full index upserts, never deletes).
+
+        The candidates are narrowed to the files that own nodes in the graph (one lookup, see
+        ``GraphRepository.indexed_file_ids``), so a large excluded tree costs nothing once it is
+        gone; a repository without that lookup (fakes) drops every excluded path, a no-op for files
+        that were never indexed. Returns the number of files dropped.
+        """
+        if not excluded_paths:
+            return 0
+        candidates = [(rel, make_file_id(repo_id, rel)) for rel in excluded_paths]
+        lookup = getattr(self.repository, "indexed_file_ids", None)
+        if callable(lookup) and getattr(getattr(self.repository, "client", None), "conn", None):
+            known = lookup(repo_id)
+            candidates = [(rel, fid) for rel, fid in candidates if fid in known]
+        for _, file_id in candidates:
+            self._drop_file(file_id)
+        return len(candidates)
+
+    def _link_and_upsert(
+        self, root: Path, fragments: list[GraphFragment], rules: ExcludeRules
+    ) -> None:
         """Repo-wide pass 2: resolve cross-file refs, synthesize SCIP + bridge edges, upsert."""
         if not fragments:
             return
@@ -295,22 +360,26 @@ class Indexer:
             synthesized = synthesize_scip_edges(self.extractor.scip_resolution, fragments)
             if len(synthesized):
                 self.upserter.upsert_file_fragment(synthesized)
-        bridges = self._extract_bridges(root, fragments)
+        bridges = self._extract_bridges(root, fragments, rules)
         if len(bridges):
             self.upserter.upsert_file_fragment(bridges)
 
-    def _extract_bridges(self, root: Path, fragments: list[GraphFragment]) -> GraphFragment:
+    def _extract_bridges(
+        self, root: Path, fragments: list[GraphFragment], rules: ExcludeRules
+    ) -> GraphFragment:
         """Cross-language heuristic bridges (RN/Expo/Swift-ObjC), resolved over this run's symbols."""
         from bce.domain.enums import NodeLabel
         from bce.indexing.extractor.bridges import BridgeFile, SymbolRef, extract_bridges
 
         bridge_files: list[BridgeFile] = []
-        for rel, abs_path in iter_source_files(root, _BRIDGE_EXTS):
+        for rel, abs_path in iter_source_files(root, _BRIDGE_EXTS, exclude=rules):
             try:
-                text = abs_path.read_text(encoding="utf-8", errors="ignore")
+                source = _read_unless_excluded(rules, rel, abs_path)
             except OSError:
                 continue
-            bridge_files.append(BridgeFile(path=rel, text=text))
+            if source is None:
+                continue
+            bridge_files.append(BridgeFile(path=rel, text=source.decode("utf-8", errors="ignore")))
         if not bridge_files:
             return GraphFragment()
 
@@ -380,11 +449,14 @@ class Indexer:
         nodes_before, edges_before = self.repository.counts()
 
         self._apply_scip_resolution(root)
+        rules = self._rules(root)
 
         changes = changed_files(root, base, to_commit)
+        if any(change.path == IGNORE_FILE for change in changes):
+            changes = self._with_ignore_flips(root, base, rules, changes)
         exts = set(self.extractor.registry.supported_extensions())
 
-        added = modified = deleted = 0
+        added = modified = deleted = excluded = 0
         changed_paths: set[str] = set()
         changed_fragments: dict[str, GraphFragment] = {}
         for change in changes:
@@ -402,7 +474,11 @@ class Indexer:
                 # Present in diff as add/modify but missing on disk: treat as deletion.
                 deleted += 1
                 continue
-            source = abs_path.read_bytes()
+            source = _read_unless_excluded(rules, change.path, abs_path)
+            if source is None:
+                # Excluded now; its old subgraph (if it was ever indexed) was dropped above.
+                excluded += 1
+                continue
             fragment = self.extractor.extract_file(
                 repo_id=repo_id, path=change.path, source=source, indexed_at_commit=target
             )
@@ -419,8 +495,10 @@ class Indexer:
         self._flush_embeddings()
 
         if changed_paths:
-            fragments = self._collect_fragments_for_relink(root, repo_id, target, changed_fragments)
-            self._link_and_upsert(root, fragments)
+            fragments = self._collect_fragments_for_relink(
+                root, repo_id, target, changed_fragments, rules
+            )
+            self._link_and_upsert(root, fragments, rules)
         self._record_churn(root, repo_id, target, None)
 
         self._update_indexed_commit(repo_id, target)
@@ -432,6 +510,7 @@ class Indexer:
                 "added": added,
                 "modified": modified,
                 "deleted": deleted,
+                "excluded": excluded,
                 "nodes": nodes,
                 "edges": edges,
                 "to_commit": target,
@@ -449,7 +528,36 @@ class Indexer:
             edges=edges,
             nodes_added=nodes - nodes_before,
             edges_added=edges - edges_before,
+            excluded=excluded,
         )
+
+    def _with_ignore_flips(
+        self, root: Path, base: str, rules: ExcludeRules, changes: list[FileChange]
+    ) -> list[FileChange]:
+        """Add the unchanged files whose exclusion a ``.bceignore`` edit flipped to ``changes``.
+
+        Re-included files come back as ``added``; newly excluded ones as ``modified``, which the
+        caller drops from the index and then skips under the new rules. The decision before the
+        edit uses ``.bceignore`` as it was at ``base``. Returned sorted (path, status) like
+        :func:`changed_files`, so the re-index order stays reproducible.
+        """
+        before = self._rules_from(file_at_commit(root, base, IGNORE_FILE))
+        in_diff = {change.path for change in changes}
+        flips: list[FileChange] = []
+        exts = self.extractor.registry.supported_extensions()
+        for rel, abs_path in iter_source_files(root, exts):
+            if rel in in_diff or before.match(rel) is rules.match(rel):
+                continue
+            source = abs_path.read_bytes()
+            was, now = before.excluded(rel, source), rules.excluded(rel, source)
+            if was != now:
+                flips.append(FileChange(status="added" if was else "modified", path=rel))
+        if flips:
+            logger.info(
+                "bceignore changed",
+                extra={"reincluded": sum(f.status == "added" for f in flips), "flips": len(flips)},
+            )
+        return sorted([*changes, *flips], key=lambda c: (c.path, c.status))
 
     def _collect_fragments_for_relink(
         self,
@@ -457,6 +565,7 @@ class Indexer:
         repo_id: str,
         commit: str,
         changed_fragments: dict[str, GraphFragment],
+        rules: ExcludeRules,
     ) -> list[GraphFragment]:
         """Fragments for every source file (in-memory only; unchanged files are not re-upserted).
 
@@ -465,11 +574,13 @@ class Indexer:
         """
         fragments: list[GraphFragment] = []
         exts = self.extractor.registry.supported_extensions()
-        for rel, abs_path in iter_source_files(root, exts):
+        for rel, abs_path in iter_source_files(root, exts, exclude=rules):
             if rel in changed_fragments:
                 fragments.append(changed_fragments[rel])
                 continue
-            source = abs_path.read_bytes()
+            source = _read_unless_excluded(rules, rel, abs_path)
+            if source is None:
+                continue
             fragment = self.extractor.extract_file(
                 repo_id=repo_id, path=rel, source=source, indexed_at_commit=commit
             )
@@ -557,3 +668,14 @@ class Indexer:
             (repo_id, name, default_branch, remote_url, commit),
         )
         conn.commit()
+
+
+def _read_unless_excluded(rules: ExcludeRules, rel: str, abs_path: Path) -> bytes | None:
+    """The file's bytes, or ``None`` when ``rules`` exclude it (by path, or as minified content).
+
+    Path-excluded files are not read at all, which keeps multi-megabyte bundles off the hot path.
+    """
+    if rules.path_excluded(rel):
+        return None
+    source = abs_path.read_bytes()
+    return None if rules.excluded(rel, source) else source

@@ -11,6 +11,8 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
+from bce.indexing.gitsync.exclude import ExcludeRules
+
 _SKIP_DIRS = {
     ".git",
     ".hg",
@@ -30,11 +32,16 @@ _SKIP_DIRS = {
 
 
 def iter_source_files(
-    root: str | Path, supported_exts: tuple[str, ...]
+    root: str | Path,
+    supported_exts: tuple[str, ...],
+    *,
+    exclude: ExcludeRules | None = None,
 ) -> Iterator[tuple[str, Path]]:
     """Yield ``(relative_posix_path, absolute_path)`` for files with a supported extension.
 
     Iteration order is sorted for determinism. ``supported_exts`` come from the language registry.
+    ``exclude`` drops paths its patterns exclude; the content (minification) check is left to the
+    caller, which reads the bytes anyway.
     """
     root_path = Path(root).resolve()
     exts = tuple(e.lower() for e in supported_exts)
@@ -46,6 +53,8 @@ def iter_source_files(
         if not path.name.lower().endswith(exts):
             continue
         rel = path.relative_to(root_path).as_posix()
+        if exclude is not None and exclude.path_excluded(rel):
+            continue
         yield rel, path
 
 
@@ -61,6 +70,22 @@ def current_commit(root: str | Path) -> str:
         return out.stdout.strip() or "WORKDIR"
     except (subprocess.CalledProcessError, FileNotFoundError, OSError):
         return "WORKDIR"
+
+
+def file_at_commit(root: str | Path, commit: str, path: str) -> str | None:
+    """Text of ``path`` at ``commit`` (``git show``), or ``None`` if it did not exist there."""
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(root), "show", f"{commit}:{path}"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+        return None
+    return out.stdout
 
 
 @dataclass(slots=True)

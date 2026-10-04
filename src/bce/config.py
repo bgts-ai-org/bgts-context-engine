@@ -2,7 +2,8 @@
 
 Settings are read from environment variables (prefix ``BCE_``) or an optional ``.env`` file.
 Nothing here affects the deterministic payload; it only configures infrastructure (database
-connection, default locale, graph name, embedding model identifier).
+connection, default locale, graph name, embedding model identifier). The exception is the
+indexing exclusion settings, which decide which files an index is built from.
 
 The ``.env`` path is resolved relative to the process working directory, which is not the project
 directory when an editor spawns ``bce serve-mcp``. ``BCE_ENV_FILE`` (or ``bce --env-file``) points at
@@ -52,6 +53,15 @@ class Settings(BaseSettings):
     bitbucket_token: str = ""
     # Disable TLS verification for git operations (only for corporate MITM proxies; off by default).
     git_ssl_verify: bool = True
+
+    # --- Indexing file exclusion (see docs/languages.md, "Excluding files") ---
+    # Extra gitignore patterns skipped by every index run (comma- or newline-separated), applied
+    # after the built-in ``*.min.js`` defaults and the repo's ``.bceignore``. Part of what an index
+    # is built from: changing it is a reindex boundary (run a full ``bce index``).
+    index_exclude: str = ""
+    # Files whose mean line length exceeds this many bytes are treated as minified and skipped,
+    # unless a negated pattern re-includes them. 0 disables the heuristic.
+    index_minified_line_length: int = 300
 
     # --- i18n (presentation layer only; never affects payload) ---
     default_locale: str = "en"
@@ -177,6 +187,12 @@ class Settings(BaseSettings):
     def mcp_tool_allowlist(self) -> frozenset[str] | None:
         names = frozenset(n.strip() for n in self.mcp_tools.split(",") if n.strip())
         return names or None
+
+    @property
+    def index_exclude_patterns(self) -> tuple[str, ...]:
+        from bce.indexing.gitsync.exclude import parse_patterns
+
+        return parse_patterns(self.index_exclude)
 
     @property
     def dsn(self) -> str:

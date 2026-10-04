@@ -868,6 +868,28 @@ class GraphRepository:
         rows = self.client.cypher(query, {"fid": file_id}, columns)
         return [dict(zip(columns, row, strict=False)) for row in rows]
 
+    def indexed_file_ids(self, repo_id: str) -> set[str]:
+        """``file_id`` of every file that owns a node in the graph for ``repo_id``.
+
+        File nodes cover files without symbols; routes and design notes are included because
+        they can outlive their file node (an index written before ``delete_file_subgraph`` removed
+        them), and must still be found to be cleaned up.
+        """
+        prefix = f"{repo_id}:"
+        found: set[str] = set()
+        for row in self.client.cypher(
+            "MATCH (f:File {repo_id: $rid}) RETURN f.file_id", {"rid": repo_id}, ["file_id"]
+        ):
+            found.add(str(row[0]))
+        for label in (NodeLabel.ROUTE, NodeLabel.DESIGN_NOTE):
+            for row in self.client.cypher(
+                f"MATCH (n:{label}) WHERE n.file_id STARTS WITH $prefix RETURN DISTINCT n.file_id",
+                {"prefix": prefix},
+                ["file_id"],
+            ):
+                found.add(str(row[0]))
+        return found
+
     def symbol_degree(self, symbol_id: str) -> int:
         """Total in+out edge degree for a symbol (structural centrality proxy, spec section 6.4).
 

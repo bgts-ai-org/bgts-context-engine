@@ -82,6 +82,19 @@ parse error — and so are the changes; nothing is fitted to the benchmark's tas
   fewer errors; positions stay valid against the original source. EF Core: 64 → 9 files
   without symbols (all `AssemblyInfo` / `TypeForwards`), 66 → 6 files with parse errors,
   +3 700 symbols; PowerShell: 49 → 5 and 34 → 10, +8 900 symbols.
+- **Indexing skips minified and vendored files.** A git-tracked `public/pdf.worker.min.mjs`
+  (1 MB, nearly all of it on two lines) put 3 672 symbols such as `isEmpty`, `update` and
+  a constant `on` whose snippet was a huge array, plus 255 bogus routes (`GET "O"`, `GET
+  "ViewState"`), into a dashboard's index, where they crowded out the real code and the
+  token budget of `precontext`. `index`, `index-remote` and `reindex` now skip `*.min.js`
+  / `*.min.mjs` / `*.min.cjs` / `*.bundle.js`, paths matched by a repo-root `.bceignore`
+  (gitignore syntax), `BCE_INDEX_EXCLUDE` or `--exclude`, and any other file whose mean
+  line length exceeds `BCE_INDEX_MINIFIED_LINE_LENGTH` (300); a `!` pattern re-includes. A
+  full index drops excluded files an earlier run indexed, `reindex` applies a changed
+  `.bceignore` to unchanged files, and the command summaries report `excluded`. The
+  decision depends only on the path, the bytes and the patterns, so the file set stays
+  deterministic. Across five repositories (~5 800 source files) the line-length check
+  matched only that worker. See [docs/deployment.md](docs/deployment.md#excluding-files).
 
 ### Changed
 
