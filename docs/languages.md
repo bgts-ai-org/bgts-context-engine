@@ -87,13 +87,62 @@ Route extraction is what makes a path from a bug report resolve to a handler.
 | Python | `flask` | `@app.route("/path", methods=[...])`, one route per method, default `GET` |
 | JS / TS | `express` | `app.get('/path', ...)` and friends |
 | JS / TS | `nestjs` | `@Get`, `@Post`, `@Put`, `@Patch`, `@Delete`, `@Head`, `@Options`, `@All` |
-| Java | `spring` | `@GetMapping` … `@DeleteMapping`, and `@RequestMapping` |
+| Java | `spring` | `@GetMapping` … `@DeleteMapping`, and `@RequestMapping`, with class-level path prefixes (scope below) |
 | C# | `aspnet` | `[HttpGet]` … `[HttpOptions]` |
 | Go | `gin` | `r.GET("/path", ...)` and friends |
 
 Where the handler is a named declaration next to the decorator — FastAPI, Flask, NestJS,
 Spring, ASP.NET — a `ROUTES_TO` edge binds the route to it. Express and Gin usually pass an
 inline closure, so the `Route` node is created without a handler edge.
+
+Spring class-level prefixes come from the positional value, `value=`, or `path=`;
+`produces`, `consumes`, `name`, `headers`, and `params` do not supply a path.
+Named nested types use their own prefix; entering an anonymous class body clears the
+enclosing controller's prefix. Sibling controllers remain independent.
+
+For supported literal paths and URI templates, an empty method path preserves the class
+path, including its trailing slash. Joining non-empty paths removes only an overlapping
+slash at the boundary: `/payments/` + `/{id}` becomes `/payments/{id}`. Neither input
+in this example contains `//`. Relative class paths receive a leading slash.
+
+The extractor retains **pre-prefix, method-only behavior** when the class path contains
+`*` or `?`, or when either the class or method path contains `%`, `;`, or `//`. These
+conservative checks run before joining or normalizing either path. They do not decode
+URLs, parse matrix parameters, validate percent escapes, or collapse repeated slashes.
+Fallback preserves the method path's original spelling, including a relative path;
+an empty method path becomes `/`.
+
+Repeated slashes within either input are outside prefix-combination support. Even
+literal paths can combine differently across matchers: `/payments//` + `/payments/`
+is one such case. All inputs containing `//` use the same conservative fallback,
+including cases where both matchers would agree on a prefixed result. This avoids
+inferring a matcher or implementing matching rules in the extractor.
+
+Wildcard class prefixes, including `/*` and `/**`, are outside this change. Combination
+depends on the configured matcher, which the extractor does not resolve. For example,
+Spring 6.2.18's
+[`PathPattern.combine`](https://github.com/spring-projects/spring-framework/blob/v6.2.18/spring-web/src/main/java/org/springframework/web/util/pattern/PathPattern.java#L385)
+and
+[`AntPathMatcher.combine`](https://github.com/spring-projects/spring-framework/blob/v6.2.18/spring-core/src/main/java/org/springframework/util/AntPathMatcher.java#L524)
+produce different paths for the same annotations. Fallback is **not full Spring
+compatibility** with either matcher:
+
+| Class path | Method path | Extraction (same as base) | PathPattern 6.2.18 | AntPathMatcher 6.2.18 |
+| --- | --- | --- | --- | --- |
+| `/payments//` | `/payments/` | `/payments/` | `/payments//payments/` | `/payments/` |
+| `//` | `/` | `/` | `//` | `/` |
+| `/payments` | `//{id}` | `//{id}` | `/payments//{id}` | `/payments//{id}` |
+| `/payments/**` | `/{id}` | `/{id}` | `/payments/{id}` | `/payments/**/{id}` |
+| `/payments` | `/paym%65nts` | `/paym%65nts` | `/paym%65nts` | `/payments/paym%65nts` |
+| `/payments` | `/payments;version=1` | `/payments;version=1` | `/payments;version=1` | `/payments/payments;version=1` |
+| `/paym%65nts` | `/{id}` | `/{id}` | `/paym%65nts/{id}` | `/paym%65nts/{id}` |
+
+This is not a full Spring mapping implementation or a pattern validator. Path arrays
+yield at most one path rather than all combinations, and fully-qualified annotation
+names are not recognised. Method-level argument interpretation, class-level HTTP method
+constraints, constant expressions, annotation inheritance, relative paths without a
+class prefix, and handler-symbol resolution inside local and anonymous classes retain their
+existing limitations.
 
 ## Cross-language bridges
 

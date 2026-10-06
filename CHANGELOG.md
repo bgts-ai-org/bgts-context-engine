@@ -101,6 +101,18 @@ parse error — and so are the changes; nothing is fitted to the benchmark's tas
 
 ### Fixed
 
+- **Java Spring routes include class-level `@RequestMapping` prefixes.** A controller
+  mapped to `/payments` with a method mapped to `/{id}` now yields `/payments/{id}`.
+  Prefixes are read only from the positional value or `value`/`path` attributes, not
+  metadata such as `produces` or `name`. For supported paths, empty method paths preserve
+  the class path, and joining preserves trailing slashes while removing one overlapping
+  slash at the boundary. Controllers without a prefix keep their route paths.
+  Prefixes are isolated across named types and anonymous class bodies. Wildcard class
+  paths, or `%`/`;`/`//` in either class or method paths, retain pre-prefix method-only
+  extraction; no matcher configuration, URL decoding, matrix parsing, or repeated-slash
+  normalization is inferred. This fallback does not imply full Spring compatibility.
+  Multiple-path expansion and fully-qualified annotation names remain unsupported;
+  see the detailed wildcard scope and other limitations in `docs/languages.md`.
 - **A dropped Voyage connection no longer fails the indexing run.** The `voyageai` client
   retries rate limits and 5xx responses itself but raises `APIConnectionError` at once when
   the API closes a connection without a response — a few times per hour on a long run, and
