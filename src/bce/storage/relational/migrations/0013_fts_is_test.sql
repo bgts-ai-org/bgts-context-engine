@@ -1,0 +1,15 @@
+-- Test symbols are excluded from the search channels *in the query*, not after it.
+--
+-- Anchor finding keeps test symbols out of the lexical, usage and semantic sources (a task
+-- description almost always resembles the tests that assert it). Until now that filter ran in
+-- Python on the rows a channel had already fetched, so the rows still *counted*: on a repository
+-- whose symbols are 60 % tests (Guava, EF Core) every lexical pool of 50 came back full of
+-- ``GroupBy_aggregate_over_filtered_principal_lifted_by_...`` test methods, the term looked
+-- saturated (generic) and the production symbols never entered the pool at all; a body literal
+-- quoted by 3 production symbols and 12 tests looked like a convention and coupled nothing.
+--
+-- ``is_test`` mirrors the deterministic rule of ``bce.domain.testness.is_test_symbol`` (test
+-- directories, ``*Test.java`` / ``*_test.go`` / ``*.spec.ts`` files, ``test_*`` names) and is
+-- written by the upserter alongside the row. Rows already stored keep ``false`` (behaviour as
+-- before: the Python filter still applies); a reindex fills them in.
+ALTER TABLE symbol_fts ADD COLUMN IF NOT EXISTS is_test BOOLEAN NOT NULL DEFAULT FALSE;

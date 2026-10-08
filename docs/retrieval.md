@@ -3,10 +3,13 @@
 This is the part of the engine that turns a sentence like *"fix the login timeout in the
 meeting webhook"* into a small, ordered set of symbols with a reason attached to each one.
 
-The whole pipeline is arithmetic over a graph. There is no language model anywhere in it,
-and every step that could depend on iteration order sorts first. That is what makes the
-output reproducible: the same task text, against the same commit, with the same weights
-and the same retrieval profile, produces the same context pack byte for byte.
+The ranking is arithmetic over a graph. There is no language model in it, and every step
+that could depend on iteration order sorts first. That is what makes it reproducible: the
+same task text, against the same commit, with the same weights and the same retrieval
+profile, produces the same ranked candidates byte for byte. One optional stage after the
+ranking — the [context selector](#context-selection-optional) — asks a decision model which
+of those candidates the task edits; with it switched off (`BCE_SELECTOR=off`, the default, or
+`bce context --no-select`) the whole context pack is byte-for-byte reproducible.
 
 ## The pipeline
 
@@ -19,13 +22,16 @@ task text
    ├─ 4. scoring        weighted sum, deterministic sort
    ├─ 5. scope filter   drop repositories the caller may not see
    ├─ 6. narrowing      K-monotonic interleave of the model's ranks and the engine's scores, file and container caps
+   ├─ (selection)       optional: a decision model tiers the K candidates into full / stub / dropped
    ├─ 7. assembly       fit into a token budget, cheaper detail further out
    └─ 8. coverage       report how much of the answer is trustworthy
 ```
 
-Stages 1 to 6 live in `src/bce/core/orchestrator/` and `src/bce/core/scoring/`; assembly is
-`src/bce/core/assembler/`; coverage is `src/bce/core/coverage/`. `get_context_for_task` in
-`src/bce/tools/layer3/orchestration.py` wires them together.
+Stages 1 to 6 live in `src/bce/core/orchestrator/` and `src/bce/core/scoring/`; selection is
+`src/bce/core/selector/`; assembly is `src/bce/core/assembler/`; coverage is
+`src/bce/core/coverage/`. `get_context_for_task` in `src/bce/tools/layer3/orchestration.py`
+wires them together. `suggest_change_sites` and `bce bench` stop at narrowing and never run
+the selector.
 
 ## 1. Anchors
 
@@ -87,7 +93,11 @@ lexical strength is the share of the task's terms it matches, weighted by term r
 term that fills its pool of 25 rows is common and counts for 0.35 of a precise one. A symbol
 matched by "period" and "comparison" therefore outranks one matched only by "authorization".
 Coverage is scaled so that matching about a third of a long task's terms is already strong
-evidence; symbols below strength 0.15 are dropped.
+evidence; symbols below strength 0.15 are dropped. The word-pair bonus is flat: a pair that
+is not itself saturated adds one precise term's weight, whatever its words' rarity or where
+it matched (scaled forms were measured across the 12-repository benchmark and only
+reshuffled tasks at K=20). URLs in the task text contribute no terms at all (`github`,
+`com`, `pull`, a port number), and contractions (`don`, `doesn`, `isn`) are stop-words.
 
 **Strength combines with a noisy-OR.** `strength = 1 − ∏(1 − sᵢ)` over the sources that
 nominated the symbol. A lexical 0.5 plus a semantic 0.6 gives 0.8; an explicit name gives 1.0
@@ -118,8 +128,13 @@ date formatters names nothing while a query key quoted by three registrations na
 it, so the raw nearest neighbours of "authorization check and proper error responses" are
 ten test functions. Symbols in `tests/`, `test_*.py`, `*_test.go`, `*.test.ts`, `*Test.java`
 and the like are skipped by the lexical, semantic, usage and impact sources (the semantic
-channel over-fetches four times and keeps the first non-test hits). `explicit`, `path` and
-`history` still admit them — the caller named them on purpose — and `include_tests=True`
+channel over-fetches four times and keeps the first non-test hits). The lexical and usage
+sources exclude them *in the query*: the indexer stores the verdict as `symbol_fts.is_test`
+and the searches add `AND NOT is_test`, so the pool of rows a term may return is filled with
+production symbols. Filtering the rows afterwards, as before, let a repository whose symbols
+are 60 % tests (Guava, EF Core) hand back a pool of test methods, which both hid the
+production symbols and made every term look saturated. `explicit`, `path` and `history`
+still admit them — the caller named them on purpose — and `include_tests=True`
 turns the filter off. The *name* rules are narrower than they were: `test_x` / `should_x`
 are tests wherever they live, but the CamelCase `TestFoo` / `testFoo` forms are trusted only
 when no path is known — `TestBotTriggerPanel` is a production component, and real
@@ -382,10 +397,78 @@ Retrieval is a single pass. Task signals are attached to every expanded candidat
 anchor. (Version 1 ran a preliminary pass and only signalled its top `4 · N` — which, because
 anchors always filled that slice, meant a neighbour could never receive a task signal.)
 
+## Context selection (optional)
+
+A long answer finds more of what a change touches, and buries it. On the 12-repository
+benchmark (600 merged changes, 6 languages) a K=50 answer found 94.4 % of the changed files
+against 91.0 % at K=20, but spread them over ~20 distinct files of which ~18 were noise. The
+engine's own order does not separate them: the first file is right in 75 % of tasks, but the
+second and third file of a multi-file change sit anywhere in the top 50. Handing the agent
+all 50 symbols spends the token budget the engine exists to save.
+
+The selector (`src/bce/core/selector/`) runs after narrowing, on the K ranked candidates,
+and sends two requests in parallel to a System One decision model: Jev (TypeSafe,
+`typesafe/jev-1.13`, through the OpenRouter Decisions API), or one of the open-weight
+[decider-2b](https://huggingface.co/Mapika/decider-2b) /
+[decider-4b](https://huggingface.co/Mapika/decider-4b) behind a self-hosted server
+(`BCE_SELECTOR`; choosing and running them: [selector.md](selector.md)). A decision model
+returns a typed answer with a probability for each question instead of generated text, so
+there is nothing to parse and no output tokens to pay for. The policy and the measurements
+below are Jev's; the deciders run under the same thresholds and are compared in
+[selector.md](selector.md#supported-models).
+
+| Request | State | One question per | Type | Answer |
+| --- | --- | --- | --- | --- |
+| files | task text, and per distinct file: path, symbol names, an excerpt, the engine's rank and score | file | `noul` — *is this one of the files the task edits?* | p ∈ [0, 1] |
+| symbols | task text, and per symbol: file, kind, name, line, a 240-character excerpt | symbol | `score` on *unrelated / background / must read / must change* | 0–3 |
+
+A fixed policy turns the answers into tiers:
+
+- **full** — the engine's first file, plus every file with p ≥ 0.5. Its symbols go to the
+  assembler as usual, except those scored below 1 (*unrelated*); a full file always keeps
+  its best symbol.
+- **stub** — files with p ≥ 0.05, at most 12 files listed in total. Each becomes one item at
+  `reference` detail whose content is `path - N candidate symbol(s): a, b, c`. The agent
+  knows the file exists and can open it; it costs about 40 tokens.
+- everything else is dropped.
+
+Items carry `tier`, `file_relevance` (p) and, when the symbol request answered,
+`symbol_relevance`. Full files come first, ordered by p, round-robin: every full file's best
+symbol before any file's second, so a tight budget trims depth rather than whole files. Stubs
+follow, also by p. When the selector is on and the caller leaves `max_candidates` unset, K is
+50 (`SELECTED_MAX_CANDIDATES`), the net the thresholds were fitted on; otherwise 20.
+
+**Measured effect** (600 tasks, K=50, v3 against v2): tokens handed to the agent
+8 310 → 1 714 (−79 %), distinct files 20.5 → 10.9 (2.3 full + 8.5 stub), file recall
+94.4 → 93.4, recall within the first 20 symbols 91.0 → 92.5, first file right 450 → 493
+times, MRR 0.826 → 0.858. Easy and medium tasks are unchanged (98.9 / 98.3); hard tasks lose
+2.5 points at K=50 and gain 3.8 within the first 20. Of the 1 032 expected files, 744 arrive
+in full, 153 only as a stub, 135 not at all. The selector adds ~575 ms (p90 ~0.55 s per
+request, the two run in parallel) and ~$0.0007 per query; the query as a whole still got
+faster, because fewer bodies are loaded and rendered.
+
+**How it was chosen.** `local_bench/multi_repo_bench/select_bench.py` replays the cached K=50
+answers offline, so every method sees the same candidates. On a 50-task sample weighted to
+hard, multi-file changes, recall of the top five files was: engine order 64.7, score-gap
+heuristic 64.4, Voyage `rerank-2.5` over files 64.0 and over symbols 69.1, Jev choice 69.1,
+Jev score 75.6, Jev noul 75.1. The cross-encoder's scores are not calibrated probabilities,
+so no single threshold works across tasks; Jev's are, which is what lets a *threshold*
+instead of a fixed N decide how many files a task gets. The noul-per-file request with the
+engine's rank exposed in the state, tiered, plus symbol pruning from the score request, was
+the best recall per token; its thresholds were then checked on all 597 tasks.
+
+**Failure behaviour.** The stage never adds a candidate. If the file request fails or times
+out (`BCE_SELECTOR_TIMEOUT`, default 3 s for Jev, 10 s for a decider) the ranked items are
+assembled unchanged and `coverage.selector.status` is `"error"`; if only the symbol request
+fails, files are tiered without symbol pruning (`"partial"`). With `BCE_SELECTOR=off` (the
+default), or `jev` without an API key, the stage is skipped.
+
 ## 6. Assembly
 
 Selected candidates are rendered into a token budget, default 1500, estimated at four
-characters per token. Detail level falls off with distance:
+characters per token. Detail level falls off with distance, unless the item already carries
+a `detail_level` (the selector sets `reference` on stub files, and their `summary` becomes
+the rendered line):
 
 | Distance | Detail | What you get |
 | --- | --- | --- |
@@ -399,7 +482,10 @@ valid near distance; only a *missing* distance falls back to reference-only rend
 
 Items are walked top-down in score order. If one does not fit, the assembler retries it at
 `reference` detail; if it still does not fit, it is skipped and the walk continues, so a
-single large function near the top cannot starve everything below it. The response reports
+single large function near the top cannot starve everything below it. Selector stubs sit at
+the bottom of the list, so their cost is reserved before the walk (up to 40 % of the budget)
+and only they may spend it; without the reserve a default 1500-token budget was filled by the
+full tier and every stub was dropped. The response reports
 `used_tokens`, `included` and `skipped` so a caller can tell the difference between "there
 was nothing else" and "there was more, and it did not fit".
 
@@ -425,8 +511,10 @@ trust the pack, and so a human can tell *why* an answer was thin.
 | `provenance_distribution` | Share of `scip` / `treesitter` / `heuristic` edges |
 | `max_centrality_in_context`, `touches_god_node` | Whether a hub leaked in (degree ≥ 20) |
 | `commit_mismatch`, `commit_mismatch_count` | Symbols indexed at a different commit than requested |
+| `selector` | Only when the selector ran: `status` (`ok` / `partial` / `error` / `skipped`), `files_in` / `files_full` / `files_stub` / `files_dropped`, `symbols_in` / `symbols_out`, `ms`, `input_tokens`, `cost_usd`, the `policy` thresholds |
 
-These roll up into one label, computed in `_confidence_level`:
+These roll up into one label, computed in `_confidence_level`. It describes the *ranking*
+and is computed before the selector runs; the selector does not change it:
 
 - **`low`** — no anchor reaches strength 0.35 and none is corroborated; *or* more than half
   the selection is weak single-source anchors or test code; *or* a single source and either
@@ -473,7 +561,7 @@ Stage timings are returned in the `timings` block of `suggest_change_sites`
 
 ## Where nondeterminism could enter
 
-Two places, both upstream of the deterministic core:
+Two places upstream of the deterministic core, and one after it:
 
 **Vector search.** Embeddings decide which anchors are *found*, never how candidates are
 ranked. The default `hashing` provider is pure arithmetic over token digests and is exactly
@@ -486,8 +574,17 @@ bit-exact reproducibility.
 **Task history.** Which files past work touched is data about the past, and it changes as
 work happens.
 
-Everything after anchor selection — expansion, features, scoring, narrowing, assembly — is
-deterministic by construction. `bce bench` measures this directly: it runs each case
+**The context selector.** Jev is not bit-deterministic: sending the same request again moves
+its probabilities by ~0.01 on average and 0.14 at most. On 50 tasks × 3 runs the first file
+was the same in 96–98 % of tasks and the full-tier set in ~90 %; the stub boundary (p ≈ 0.05)
+moved by one or two files in 20–40 % of tasks, and none of the 29 files that flipped was one
+the change touched. Recall across the three runs moved by at most 0.6 points. The model is
+pinned (`BCE_SELECTOR_MODEL`), because the thresholds were fitted on that release. The
+repeat-run test was not done for the deciders. The ranking the selector reads is unaffected,
+and `BCE_SELECTOR=off` restores a byte-exact pack.
+
+Everything from anchor selection up to the selector — expansion, features, scoring,
+narrowing — and assembly are deterministic by construction. `bce bench` measures this directly: it runs each case
 several times and reports `determinism_ok` only if the ordered symbol list is identical
 every time.
 
@@ -497,6 +594,10 @@ The knobs a caller controls per request are `max_candidates`, `max_tokens`, `com
 `repo_ids` and the four anchor hint lists (`explicit_symbols`, `route_paths`,
 `history_file_ids`, `component_repo_ids`). Passing hints is by far the cheapest way to
 improve results: an explicit symbol name turns a guess into a certainty.
+
+The selector is server configuration, not a per-request option: `BCE_SELECTOR` and the
+`BCE_SELECTOR_*` thresholds ([docs/selector.md](selector.md#variables)). It was
+fitted on K=50 answers; with a short K there is less to cut and it mostly reorders.
 
 The scoring weights are not runtime configuration. They are a versioned constant, because
 a context pack is only comparable to another pack produced with the same weights. Changing

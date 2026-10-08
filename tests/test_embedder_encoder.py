@@ -129,13 +129,14 @@ def test_default_encoder_selects_voyage_when_ready(monkeypatch):
     monkeypatch.setattr(
         config,
         "get_settings",
-        lambda: config.Settings(embedding_provider="voyage", voyage_api_key="k"),
+        # _env_file=None: the developer's .env (another model / dim) must not leak into the test.
+        lambda: config.Settings(_env_file=None, embedding_provider="voyage", voyage_api_key="k"),
     )
 
     captured = {}
 
     class _FakeClient:
-        def __init__(self, api_key):
+        def __init__(self, api_key, **kwargs):
             captured["api_key"] = api_key
 
     monkeypatch.setattr("voyageai.Client", _FakeClient, raising=False)
@@ -159,7 +160,7 @@ def test_voyage_encoder_input_types(monkeypatch):
         embeddings = [[0.1] * 8, [0.2] * 8]
 
     class _FakeClient:
-        def __init__(self, api_key):
+        def __init__(self, api_key, **kwargs):
             pass
 
         def embed(self, texts, model, input_type, output_dimension):
@@ -199,7 +200,7 @@ def test_voyage_encode_many_splits_oversized_input(monkeypatch):
     sizes = []
 
     class _FakeClient:
-        def __init__(self, api_key):
+        def __init__(self, api_key, **kwargs):
             pass
 
         def embed(self, texts, model, input_type, output_dimension):
@@ -394,3 +395,47 @@ def test_settings_parse_extra_body_from_env(monkeypatch):
     # An empty string is a deliberate "no prefix", distinct from unset (None -> model default).
     assert s.embedding_document_prefix == ""
     assert s.embedding_query_prefix is None
+
+
+def test_voyage_encoder_retries_dropped_connections_and_gives_up(monkeypatch):
+    """A connection the API closes without a response is retried with a growing pause; a
+    query gets two bounded attempts; a rejected request is raised at once."""
+    voyageai = pytest.importorskip("voyageai")
+
+    class _FakeResult:
+        embeddings = [[0.1] * 4]
+
+    state = {"fail": 2, "calls": 0}
+
+    class _FakeClient:
+        def __init__(self, api_key, **kwargs):
+            state["max_retries"] = kwargs.get("max_retries")
+
+        def embed(self, texts, model, input_type, output_dimension):
+            state["calls"] += 1
+            if state["fail"] > 0:
+                state["fail"] -= 1
+                raise voyageai.error.APIConnectionError("Remote end closed connection")
+            return _FakeResult()
+
+    sleeps: list[float] = []
+    monkeypatch.setattr("voyageai.Client", _FakeClient, raising=False)
+    monkeypatch.setattr("bce.indexing.embedder.encoder.time.sleep", sleeps.append)
+
+    enc = VoyageEncoder("k", model="voyage-code-3", dim=4)
+    assert state["max_retries"]  # the SDK's own retry (rate limits, 5xx) is on as well
+    assert enc.encode("doc") == [0.1] * 4
+    assert state["calls"] == 3 and sleeps == [2.0, 4.0]
+
+    state.update(fail=99, calls=0)
+    with pytest.raises(RuntimeError, match="after 2 attempts"):
+        enc.encode_query("q")
+    assert state["calls"] == 2
+
+    class _Rejecting(_FakeClient):
+        def embed(self, texts, model, input_type, output_dimension):
+            raise voyageai.error.InvalidRequestError("input too long")
+
+    monkeypatch.setattr("voyageai.Client", _Rejecting, raising=False)
+    with pytest.raises(voyageai.error.InvalidRequestError):
+        VoyageEncoder("k", model="voyage-code-3", dim=4).encode("doc")

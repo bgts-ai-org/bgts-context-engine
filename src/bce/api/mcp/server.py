@@ -16,6 +16,10 @@ worker pool, so queued indexing progresses without a separate ``bce serve``; the
 with ``FOR UPDATE SKIP LOCKED``, so running both is safe. The pool claims only the job types the MCP
 tools can enqueue, leaving remote clones to the API server.
 
+``BCE_AGENT_MODE`` (``hint`` by default, or ``trust``; :mod:`bce.core.agent_mode`) is read once at
+startup: the server instructions, the ``get_context_for_task`` description and every answer's
+``payload.workflow`` state that mode's workflow. An unknown mode fails the start.
+
 Logging is configured against stderr. Without it the worker's failures fell back to Python's
 last-resort handler, which prints a bare traceback; with it they are the same JSON lines the API
 server emits, and they reach the log file too.
@@ -42,12 +46,23 @@ def build_server(name: str = "bgts-context-engine") -> Any:
 
     from bce.api.mcp.tools import WRITE_TOOLS, available_tool_specs, dispatch_tool
     from bce.config import get_settings
+    from bce.core.agent_mode import normalize_agent_mode, workflow_text
     from bce.storage.relational.db import connection
 
     settings = get_settings()
     allow_write = settings.mcp_allow_write
-    specs = available_tool_specs(allow_write=allow_write, allowlist=settings.mcp_tool_allowlist)
-    server = Server(name)
+    agent_mode = normalize_agent_mode(settings.agent_mode)
+    specs = available_tool_specs(
+        allow_write=allow_write, allowlist=settings.mcp_tool_allowlist, agent_mode=agent_mode
+    )
+    instructions = (
+        "Call get_context_for_task first, once, with the full task text.\n\n"
+        + workflow_text(agent_mode)
+    )
+    try:
+        server = Server(name, instructions=instructions)
+    except TypeError:  # pragma: no cover - mcp releases before server instructions
+        server = Server(name)
 
     @server.list_tools()
     async def _list_tools() -> list[Tool]:  # pragma: no cover - requires SDK runtime
@@ -61,7 +76,9 @@ def build_server(name: str = "bgts-context-engine") -> Any:
             raise KeyError(f"tool '{name}' is not advertised by this server (BCE_MCP_TOOLS)")
         with connection() as conn:
             try:
-                result = dispatch_tool(conn, name, arguments, allow_write=allow_write)
+                result = dispatch_tool(
+                    conn, name, arguments, allow_write=allow_write, agent_mode=agent_mode
+                )
                 if name in WRITE_TOOLS:
                     conn.commit()  # persist the queued job
                 else:
@@ -112,6 +129,12 @@ async def run_stdio(name: str = "bgts-context-engine") -> None:  # pragma: no co
 
     server = build_server(name)
     _warm_encoder()
+    from bce.core.agent_mode import normalize_agent_mode
+    from bce.core.selector import describe_selector
+
+    log = logging.getLogger("bce.api.mcp")
+    log.info("context selector: %s", describe_selector())
+    log.info("agent mode: %s", normalize_agent_mode(get_settings().agent_mode))
     pool = None
     if get_settings().mcp_allow_write:
         from bce.jobs.worker import JobWorkerPool

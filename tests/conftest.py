@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-from bce.domain.enums import EdgeLabel, NodeLabel
+import os
+
+# Unit tests never call the decision model behind the context selector, whatever the developer's
+# .env says (tests that need it build their own Settings / fake transport).
+os.environ.setdefault("BCE_SELECTOR", "off")
+
+from bce.domain.enums import EdgeLabel, NodeLabel  # noqa: E402
 from bce.domain.models import GraphFragment
 
 

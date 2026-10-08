@@ -124,6 +124,89 @@ def test_mcp_exposes_no_remote_indexing():
         assert "url" not in spec["schema"]["properties"], name
 
 
+class _ReposCursor:
+    def __init__(self, rows: list[tuple[str, str]]) -> None:
+        self.rows = rows
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def execute(self, sql, params=None):
+        assert "FROM repos" in sql
+
+    def fetchall(self):
+        return list(self.rows)
+
+
+class _ReposConn:
+    def __init__(self, rows: list[tuple[str, str]]) -> None:
+        self.rows = rows
+
+    def cursor(self):
+        return _ReposCursor(self.rows)
+
+
+def test_resolve_repo_ids_matches_case_insensitively_and_keeps_unknown_ids():
+    """`PowerShell` from an agent must hit the index stored as `powershell`; the exact filter
+    emptied the lexical and vector searches on 24 of 50 benchmark tasks before this."""
+    from bce.storage.relational.queries import resolve_repo_ids
+
+    conn = _ReposConn([("powershell", "PowerShell"), ("flask", "flask"), ("ef", "EFCore")])
+    assert resolve_repo_ids(conn, ["PowerShell"]) == ["powershell"]
+    assert resolve_repo_ids(conn, ["flask", "FLASK"]) == ["flask"]
+    assert resolve_repo_ids(conn, ["efcore"]) == ["ef"]  # by display name
+    assert resolve_repo_ids(conn, ["nothere"]) == ["nothere"]  # still filters, never widens
+    assert resolve_repo_ids(conn, None) is None and resolve_repo_ids(conn, []) == []
+
+
+def test_resolve_repo_ids_folds_separators_and_path_prefixes():
+    from bce.storage.relational.queries import resolve_repo_ids
+
+    conn = _ReposConn([("my_repo", "my_repo"), ("efcore", "EF Core")])
+    assert resolve_repo_ids(conn, ["my-repo"]) == ["my_repo"]
+    assert resolve_repo_ids(conn, ["MyRepo"]) == ["my_repo"]
+    assert resolve_repo_ids(conn, ["org/my-repo"]) == ["my_repo"]
+    assert resolve_repo_ids(conn, ["C:\\src\\my_repo\\"]) == ["my_repo"]
+    assert resolve_repo_ids(conn, ["my-repo.git"]) == ["my_repo"]
+    assert resolve_repo_ids(conn, ["ef-core"]) == ["efcore"]  # display name, separators folded
+
+
+def test_normalize_file_ids_fixes_slashes_prefixes_and_bare_paths():
+    from bce.storage.relational.queries import normalize_file_ids
+
+    out = normalize_file_ids(
+        ["src\\a.py", "./src/b.py", "/src/c.py", "flask:./src/d.py", "src/a.py"], ["flask"]
+    )
+    assert out == ["flask:src/a.py", "flask:src/b.py", "flask:src/c.py", "flask:src/d.py"]
+    # several repositories in scope: a bare path cannot be prefixed and is left as given
+    assert normalize_file_ids(["src/a.py"], ["flask", "ef"]) == ["src/a.py"]
+    assert normalize_file_ids(None, ["flask"]) is None
+
+
+def test_mcp_context_answer_drops_the_anchor_map_but_keeps_its_count():
+    from bce.api.mcp.tools import _compact_context
+
+    out = _compact_context(
+        {
+            "tool": "get_context_for_task",
+            "payload": {
+                "anchors": {"a#1": ["lexical"], "b#2": ["semantic", "lexical"]},
+                "context": {"items": []},
+                "candidates": [{"path": "x.py"}],
+                "coverage": {"anchor_count": 2},
+            },
+        }
+    )
+    assert "anchors" not in out["payload"] and out["payload"]["anchor_count"] == 2
+    assert out["payload"]["candidates"] == [{"path": "x.py"}]
+    assert "payload.files" in TOOL_SPECS["get_context_for_task"]["description"]
+    assert "unresolved_identifiers" in TOOL_SPECS["get_context_for_task"]["description"]
+    assert _compact_context({"tool": "x", "payload": {"k": 1}})["payload"] == {"k": 1}
+
+
 def test_mcp_job_payload_carries_only_local_fields():
     from bce.api.mcp.tools import _job_payload
 

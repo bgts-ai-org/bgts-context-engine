@@ -25,12 +25,14 @@ from typing import Any
 
 import psycopg
 
+from bce.core.agent_mode import workflow, workflow_text
 from bce.core.auth.scope import Principal, ScopeFilter
-from bce.core.defaults import DEFAULT_MAX_CANDIDATES, DEFAULT_MAX_TOKENS
+from bce.core.defaults import DEFAULT_MAX_CANDIDATES, DEFAULT_MAX_TOKENS, SELECTED_MAX_CANDIDATES
 from bce.core.i18n import get_translator
 from bce.jobs.store import enqueue_job, get_job, list_jobs
 from bce.storage.graph.client import GraphClient
 from bce.storage.graph.repository import GraphRepository
+from bce.storage.relational.queries import normalize_file_ids, resolve_repo_ids
 from bce.storage.vector.store import VectorStore
 from bce.tools.layer1 import find_references, get_call_graph, resolve_symbol
 from bce.tools.layer2 import hybrid_search
@@ -53,8 +55,14 @@ WRITE_TOOLS = frozenset({"index_repo", "reindex_repo"})
 TOOL_SPECS: dict[str, dict[str, Any]] = {
     "get_context_for_task": {
         "description": (
-            "Primary tool: assemble the code context for a task description, with anchors and a "
-            "coverage/confidence report. Start here for any 'where do I change X' question."
+            "Primary tool: assemble the code context for a task description, with a "
+            "coverage/confidence report. Start here for any 'where do I change X' question. "
+            "payload.files lists every file of the answer (path, tier full|stub, relevance, "
+            "why); payload.context.items carry the symbols and their content; "
+            "payload.candidates are further ranked files the selector left out. "
+            "coverage.unresolved_identifiers names identifiers from the task the answer does "
+            "not cover, each with the indexed file defining it - open those directly; when it "
+            "is empty and coverage.likely_incomplete is false, no further search is needed."
         ),
         "schema": _schema(
             {
@@ -70,8 +78,11 @@ TOOL_SPECS: dict[str, dict[str, Any]] = {
                 },
                 "max_candidates": {
                     **_INT,
-                    "default": DEFAULT_MAX_CANDIDATES,
-                    "description": "How many symbols to return (K).",
+                    "description": (
+                        f"How many ranked symbols to consider (K). Omit it: the server uses "
+                        f"{SELECTED_MAX_CANDIDATES} when its context selector cuts the answer "
+                        f"down, {DEFAULT_MAX_CANDIDATES} otherwise."
+                    ),
                 },
                 "commit": _STR,
                 "repo_ids": _STR_LIST,
@@ -150,11 +161,15 @@ TOOL_SPECS: dict[str, dict[str, Any]] = {
 
 
 def available_tool_specs(
-    *, allow_write: bool, allowlist: frozenset[str] | None = None
+    *,
+    allow_write: bool,
+    allowlist: frozenset[str] | None = None,
+    agent_mode: str | None = None,
 ) -> dict[str, dict[str, Any]]:
     """The catalog to advertise: write tools are hidden unless ``allow_write`` is set, and an
     ``allowlist`` (``BCE_MCP_TOOLS``) narrows it further. Unknown names in the allowlist raise, so a
-    typo does not silently publish nothing."""
+    typo does not silently publish nothing. With ``agent_mode`` (``BCE_AGENT_MODE``) the
+    ``get_context_for_task`` description ends with that mode's workflow."""
     if allowlist is not None:
         unknown = sorted(allowlist - set(TOOL_SPECS))
         if unknown:
@@ -166,6 +181,12 @@ def available_tool_specs(
         for name, spec in TOOL_SPECS.items()
         if (allow_write or name not in WRITE_TOOLS) and (allowlist is None or name in allowlist)
     }
+    if agent_mode is not None and "get_context_for_task" in specs:
+        spec = specs["get_context_for_task"]
+        specs["get_context_for_task"] = {
+            **spec,
+            "description": f"{spec['description']}\n\n{workflow_text(agent_mode)}",
+        }
     return specs
 
 
@@ -176,11 +197,13 @@ def dispatch_tool(
     *,
     user_id: str | None = None,
     allow_write: bool = False,
+    agent_mode: str | None = None,
 ) -> dict[str, Any]:
     """Route an MCP tool call to the core, using ``conn`` for graph + vector access (single DB).
 
     Write tools only enqueue jobs, so they leave the transaction dirty; the caller decides whether to
-    commit (see :func:`bce.api.mcp.server.build_server`).
+    commit (see :func:`bce.api.mcp.server.build_server`). With ``agent_mode`` a
+    ``get_context_for_task`` answer carries that mode's ``payload.workflow``.
     """
     if name not in TOOL_SPECS:
         raise KeyError(f"unknown tool: {name}")
@@ -203,11 +226,27 @@ def dispatch_tool(
         if user_id is not None
         else ScopeFilter(Principal.system())
     )
+    # Agents name repositories the way they see them; the index stores the id it was given.
+    for key in ("repo_ids", "component_repo_ids"):
+        if args.get(key):
+            args[key] = resolve_repo_ids(conn, list(args[key]))
+    if args.get("repo_id"):
+        args["repo_id"] = (resolve_repo_ids(conn, [str(args["repo_id"])]) or [args["repo_id"]])[0]
+    if args.get("history_file_ids"):
+        args["history_file_ids"] = normalize_file_ids(
+            list(args["history_file_ids"]), args.get("repo_ids")
+        )
 
     if name == "get_context_for_task":
-        return get_context_for_task(
-            repository, store=store, scope=scope, locale=locale, **_l3_kwargs(args)
+        result = _compact_context(
+            get_context_for_task(
+                repository, store=store, scope=scope, locale=locale, **_l3_kwargs(args)
+            )
         )
+        payload = result.get("payload")
+        if agent_mode is not None and isinstance(payload, dict):
+            payload["workflow"] = workflow(agent_mode)
+        return result
     if name == "hybrid_search":
         return hybrid_search(
             repository,
@@ -234,6 +273,21 @@ def dispatch_tool(
             repository, target_symbols=args["target_symbols"], scope=scope, locale=locale
         )
     raise KeyError(f"unhandled tool: {name}")  # pragma: no cover - guarded above
+
+
+def _compact_context(result: dict[str, Any]) -> dict[str, Any]:
+    """Trim the ``get_context_for_task`` envelope for an agent's context window.
+
+    The ``anchors`` map (every anchor symbol id -> its sources) is diagnostic: it was 40-60 % of the
+    answer on large repositories and pushed it past the ~40 KB at which Cursor stops inlining a
+    tool result and writes it to a file the agent must then open. ``coverage.anchor_count`` and
+    ``anchor_sources`` keep the summary; the REST API still returns the full map.
+    """
+    payload = result.get("payload")
+    if isinstance(payload, dict) and "anchors" in payload:
+        anchors = payload.pop("anchors")
+        payload["anchor_count"] = len(anchors) if isinstance(anchors, dict) else None
+    return result
 
 
 #: MCP write tool -> queue job_type (the job types the worker pool understands).

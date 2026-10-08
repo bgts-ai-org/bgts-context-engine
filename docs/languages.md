@@ -47,14 +47,30 @@ characters — as search text. It is not stored as a graph property; it feeds th
 column and the chunked embeddings (see [data model](data-model.md)), so a string sixty lines
 into a component is findable by both lexical and semantic search.
 
-**Java.** Classes and enums become `class`, interfaces become `interface`, methods become
-`method`, constructors become `constructor`. `extends` becomes `INHERITS` and `implements`
-becomes `IMPLEMENTS` — Java is the language where that distinction is cleanest.
+**Java.** Classes and records become `class`, enums `enum`, interfaces and annotation types
+`interface`, methods `method`, constructors `constructor`. Types nested in other types are
+symbols of their own, addressed by their container chain (`LocalCache.Segment.lookup`) and
+so are the methods declared in an enum's body after its constants. `static` fields and
+interface constants become `constant` (upper-case name) or `field` — the `MAX_SEGMENTS` and
+`DEFAULT_CHARSET` a task names; instance fields stay part of their type's search text. A
+static call through a type declared in the same file (`Segment.lookup(key)`) resolves to a
+`CALLS` edge. `extends` becomes `INHERITS` and `implements` becomes `IMPLEMENTS` — Java is
+the language where that distinction is cleanest. In Guava, a quarter of all methods live in
+nested types; before this none of them was indexed.
 
-**C#.** Classes, structs and records all become `class`; interfaces become `interface`;
-methods become `method`, constructors `constructor`, properties `property`. C# does not
-distinguish base classes from interfaces syntactically in its base list, so every entry
-becomes `INHERITS`.
+**C#.** Classes, structs and records all become `class`; interfaces become `interface`; enums
+`enum`; delegates `type`; methods become `method`, constructors `constructor`, properties
+`property`; `const` fields become `constant` and `static` fields `field`. Nested types carry
+their container chain like Java's (`SelectExpression.Helper.Run`), and `Type.Method()` calls
+on a type declared in the file resolve. Declarations under `#if` / `#else` regions — a whole
+file behind `#if !UNIX`, a method with one body per target framework — are indexed; a member
+declared once per branch is one symbol. Files the grammar (`tree-sitter-c-sharp` 0.23) cannot
+parse are re-parsed after a byte-for-byte repair of the offending constructs — a `#if` that
+splits one statement, `async` used as an identifier, null-conditional assignment, collection
+expressions, the `$@"""{x}"""` idiom — so a 3 000-line cmdlet no longer yields zero symbols;
+the repaired tree is used only when it has fewer errors, and positions are read from the
+original source. C# does not distinguish base classes from interfaces syntactically in its
+base list, so every entry becomes `INHERITS`.
 
 **Go.** Function declarations become `function`, method declarations become `method`, a
 `type_spec` over an `interface_type` becomes `interface`, other type specs become `type`.

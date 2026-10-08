@@ -29,12 +29,14 @@ from bce.api.rest.schemas import (
     ToolResponse,
 )
 from bce.core.auth.scope import ScopeFilter
+from bce.core.defaults import DEFAULT_MAX_CANDIDATES
 from bce.core.i18n import get_translator
 from bce.indexing.gitsync import GitCredentials, GitError
 from bce.indexing.indexer import Indexer
 from bce.indexing.parser.registry import build_default_registry
 from bce.jobs.store import cancel_job, enqueue_job, get_job, list_jobs
 from bce.storage.graph.repository import GraphRepository
+from bce.storage.relational.queries import resolve_repo_ids
 from bce.storage.vector.store import VectorStore
 from bce.tools.layer1 import (
     find_implementers,
@@ -187,6 +189,11 @@ def get_context_for_task_route(
     scope: ScopeFilter = Depends(get_scope),
     locale: str = Depends(get_locale),
 ) -> dict[str, Any]:
+    conn = getattr(getattr(repository, "client", None), "conn", None)
+
+    def _ids(ids: list[str] | None) -> list[str] | None:
+        return resolve_repo_ids(conn, ids) if conn is not None else ids
+
     return get_context_for_task(
         repository,
         task_text=body.task_text,
@@ -194,11 +201,11 @@ def get_context_for_task_route(
         max_tokens=body.max_tokens,
         max_candidates=body.max_candidates,
         commit=body.commit,
-        repo_ids=body.repo_ids,
+        repo_ids=_ids(body.repo_ids),
         explicit_symbols=body.explicit_symbols,
         route_paths=body.route_paths,
         history_file_ids=body.history_file_ids,
-        component_repo_ids=body.component_repo_ids,
+        component_repo_ids=_ids(body.component_repo_ids),
         semantic_candidates=body.semantic_candidates,
         store=store,
         auto_semantic=body.auto_semantic,
@@ -218,7 +225,7 @@ def suggest_change_sites_route(
     return suggest_change_sites(
         repository,
         task_text=body.task_text,
-        max_candidates=body.max_candidates,
+        max_candidates=body.max_candidates or DEFAULT_MAX_CANDIDATES,
         commit=body.commit,
         repo_ids=body.repo_ids,
         explicit_symbols=body.explicit_symbols,
