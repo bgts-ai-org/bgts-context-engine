@@ -9,6 +9,12 @@ Kept in a module with no heavy imports so the CLI can read them without loading 
 #: and flattens after), and the agent benchmark ran with it.
 DEFAULT_MAX_CANDIDATES = 20
 
+#: Default K of ``get_context_for_task`` when the context selector runs (``bce.core.selector``).
+#: The selector cuts a wide answer down to the files the task edits, so it is given the wide net
+#: its thresholds were fitted on: at K=50 the 12-repository benchmark found 94.4 % of the changed
+#: files against 91.0 % at K=20, and the selected answer still carried a fifth of the tokens.
+SELECTED_MAX_CANDIDATES = 50
+
 #: Default token budget of the assembled context. An agent re-sends the context on every model
 #: turn, so it is kept short: at 1500 the agent benchmark carried ~1.3k tokens of graph context per
 #: turn and still halved its search output; the earlier 4000 travelled as ~4k tokens per turn for

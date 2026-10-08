@@ -15,7 +15,7 @@ import os
 from functools import lru_cache
 from typing import Any
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 #: Environment variable holding an explicit ``.env`` path; set by ``bce --env-file``.
@@ -28,6 +28,8 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        # ``openrouter_api_key`` has an explicit alias; keep the field name usable in ``Settings(...)``.
+        populate_by_name=True,
     )
 
     # --- PostgreSQL (single DB: AGE + pgvector + SQL + RLS) ---
@@ -116,6 +118,43 @@ class Settings(BaseSettings):
     retrieval_semantic_reserve_share: float | None = None
     retrieval_semantic_rank_scale: float | None = None
 
+    # --- Context selector (post-ranking tiering of the K candidates, see bce.core.selector) ---
+    # The decision model that tiers the ranked answer: "off" (default: raw ranking), "jev"
+    # (TypeSafe's hosted model, via OpenRouter or TypeSafe's own API), "decider-2b" or "decider-4b"
+    # (open-weight models behind a self-hosted ``decider.serve``). The selector never changes
+    # *which* candidates the engine ranked - it only tiers them (full / stub / dropped) so an
+    # agent reads the right 2-3 files instead of 20.
+    selector: str = "off"
+    # OpenRouter API key; also read from the un-prefixed ``OPENROUTER_API_KEY``. Jev's key when
+    # ``selector_api_key`` is empty.
+    openrouter_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("BCE_OPENROUTER_API_KEY", "OPENROUTER_API_KEY"),
+    )
+    # Bearer token for the selector endpoint: a TypeSafe key when Jev is called on TypeSafe's own
+    # API, or the proxy's token in front of a decider server. A plain decider server needs none.
+    selector_api_key: str = ""
+    # Empty = the chosen selector's default (bce.core.selector.PRESETS): Jev on OpenRouter as
+    # ``typesafe/jev-1.13``, a decider server on ``http://127.0.0.1:8000/v1/systemone``.
+    selector_model: str = ""
+    selector_url: str = ""
+    # Seconds for one decision request; on timeout the answer is returned unselected, so this is
+    # also the worst-case latency the selector adds. Unset: 3 for Jev (p99 ~1 s), 10 for a decider
+    # (p99 ~5 s for decider-4b on one 32 GB GPU).
+    selector_timeout: float | None = None
+    # File-level policy: p(file is edited) >= full_threshold -> full content; >= stub_threshold ->
+    # one reference line; below -> dropped. The cut is by probability; ``max_files`` only caps
+    # the stub listing (a full file is never removed by it). The engine's first file and files
+    # the task text names (pinned) are always kept.
+    selector_full_threshold: float = 0.5
+    selector_stub_threshold: float = 0.02
+    selector_max_files: int = 20
+    # Symbols inside a full file scored below this (0 unrelated .. 3 must change) are dropped.
+    selector_symbol_min_score: float = 1.0
+    # Bytes of symbol text handed over at full detail; beyond it the least probable full files
+    # become stubs (the first and the pinned files never do). 0 disables the budget.
+    selector_full_content_bytes: int = 12_000
+
     # --- Logging (JSON to stdout; optional rotating file sink) ---
     log_level: str = "INFO"
     log_file_enabled: bool = False
@@ -137,6 +176,10 @@ class Settings(BaseSettings):
     # tool's schema before using it and tend to chain small calls when many tools are on offer, so a
     # narrow catalog (e.g. "get_context_for_task,find_references") costs fewer model turns.
     mcp_tools: str = ""
+    # How far the agent relies on the get_context_for_task answer (bce.core.agent_mode): "hint"
+    # (empty = default) uses it as the starting point, "trust" takes it as the answer. The init
+    # commands write it into the editor's MCP server entry, which overrides this file.
+    agent_mode: str = ""
 
     @property
     def mcp_tool_allowlist(self) -> frozenset[str] | None:

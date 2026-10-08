@@ -1,4 +1,5 @@
-"""Editor integrations: ``bce cursor-init`` / ``bce claude-init`` files and the pre-context block."""
+"""Editor integrations: ``bce cursor-init`` / ``claude-init`` / ``opencode-init`` files and the
+pre-context block."""
 
 from __future__ import annotations
 
@@ -9,7 +10,7 @@ import pytest
 
 from bce.api.mcp.tools import TOOL_SPECS
 from bce.api.rest.schemas import AssembleContextRequest, ContextForTaskRequest
-from bce.core.defaults import DEFAULT_MAX_CANDIDATES, DEFAULT_MAX_TOKENS
+from bce.core.defaults import DEFAULT_MAX_CANDIDATES, DEFAULT_MAX_TOKENS, SELECTED_MAX_CANDIDATES
 from bce.integrations import agents, precontext
 from bce.integrations.agents import (
     CLAUDE_BEGIN,
@@ -19,6 +20,7 @@ from bce.integrations.agents import (
     render_cursor_rule,
     setup_claude,
     setup_cursor,
+    setup_opencode,
     upsert_marked_section,
 )
 from bce.integrations.precontext import HEADING, claude_hook_response, render_context_markdown
@@ -34,11 +36,14 @@ def test_defaults_are_the_benchmarked_values():
 
 
 def test_rest_and_mcp_read_the_shared_defaults():
+    # K is left unset on every surface: get_context_for_task picks 50 with the selector, 20 without.
     req = ContextForTaskRequest(task_text="x")
-    assert (req.max_candidates, req.max_tokens) == (DEFAULT_MAX_CANDIDATES, DEFAULT_MAX_TOKENS)
+    assert (req.max_candidates, req.max_tokens) == (None, DEFAULT_MAX_TOKENS)
     assert AssembleContextRequest(symbol_ids=["a"]).max_tokens == DEFAULT_MAX_TOKENS
     props = TOOL_SPECS["get_context_for_task"]["schema"]["properties"]
-    assert props["max_candidates"]["default"] == DEFAULT_MAX_CANDIDATES
+    assert "default" not in props["max_candidates"]
+    assert str(SELECTED_MAX_CANDIDATES) in props["max_candidates"]["description"]
+    assert str(DEFAULT_MAX_CANDIDATES) in props["max_candidates"]["description"]
     assert props["max_tokens"]["default"] == DEFAULT_MAX_TOKENS
 
 
@@ -48,7 +53,7 @@ def test_cli_context_defaults_follow_the_constants():
     from bce.cli import context
 
     params = inspect.signature(context).parameters
-    assert params["max_candidates"].default.default == DEFAULT_MAX_CANDIDATES
+    assert params["max_candidates"].default.default is None
     assert params["max_tokens"].default.default == DEFAULT_MAX_TOKENS
 
 
@@ -177,7 +182,7 @@ def test_cursor_init_merges_mcp_json_and_writes_rule(tmp_path: Path):
     assert cfg["mcpServers"][SERVER_NAME] == {
         "command": "/opt/bce",
         "args": ["serve-mcp", "--env-file", str(env)],
-        "env": {"PYTHONUTF8": "1"},
+        "env": {"PYTHONUTF8": "1", "BCE_AGENT_MODE": "hint"},
     }
     rule = (tmp_path / ".cursor" / "rules" / agents.RULE_FILE).read_text(encoding="utf-8")
     assert rule.startswith("---\n") and "alwaysApply: true" in rule
@@ -239,6 +244,84 @@ def test_claude_init_without_hook_tells_the_agent_to_call_the_tool(tmp_path: Pat
     md = (tmp_path / "CLAUDE.md").read_text(encoding="utf-8")
     assert "call `get_context_for_task` once" in md
     assert not (tmp_path / ".claude" / "settings.json").exists()
+
+
+def test_opencode_init_merges_opencode_json_and_agents_md(tmp_path: Path):
+    (tmp_path / "opencode.json").write_text(
+        json.dumps({"model": "x/y", "mcp": {"other": {"type": "remote", "url": "http://h"}}}),
+        encoding="utf-8",
+    )
+    (tmp_path / "AGENTS.md").write_text("# Agents\n\nKeep me.\n", encoding="utf-8")
+    env = tmp_path / "engine.env"
+    env.write_text("BCE_DB_NAME=x\n", encoding="utf-8")
+
+    for _ in range(2):  # second run must not duplicate anything
+        res = setup_opencode(tmp_path, repo_ids=["cortex-web"], bce_cmd="/opt/bce", env_file=env)
+
+    cfg = json.loads((tmp_path / "opencode.json").read_text(encoding="utf-8"))
+    assert cfg["model"] == "x/y" and cfg["$schema"] == agents.OPENCODE_SCHEMA
+    assert cfg["mcp"]["other"] == {"type": "remote", "url": "http://h"}  # kept
+    assert cfg["mcp"][SERVER_NAME] == {
+        "type": "local",
+        "command": ["/opt/bce", "serve-mcp", "--env-file", str(env)],
+        "environment": {"PYTHONUTF8": "1", "BCE_AGENT_MODE": "hint"},
+        "enabled": True,
+        "timeout": agents.OPENCODE_MCP_TIMEOUT_MS,
+    }
+    md = (tmp_path / "AGENTS.md").read_text(encoding="utf-8")
+    assert md.startswith("# Agents\n\nKeep me.\n")
+    assert md.count(CLAUDE_BEGIN) == 1 and md.count(CLAUDE_END) == 1
+    assert "call `get_context_for_task` once" in md and "bce precontext" not in md
+    assert "`BCE_AGENT_MODE` in `opencode.json`" in md
+    assert {p.name for p in res.written} == {"opencode.json", "AGENTS.md"}
+
+
+def test_opencode_init_cli_without_env_points_mcp_at_the_template(tmp_path: Path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from bce.cli import app
+
+    monkeypatch.delenv("BCE_ENV_FILE", raising=False)
+    monkeypatch.chdir(tmp_path)
+    out = CliRunner().invoke(
+        app, ["opencode-init", "--project", str(tmp_path), "--bce-command", "bce"]
+    )
+    assert out.exit_code == 0, out.output
+    env = tmp_path / ".opencode" / agents.ENV_TEMPLATE_FILE
+    cfg = json.loads((tmp_path / "opencode.json").read_text(encoding="utf-8"))
+    assert cfg["mcp"][SERVER_NAME]["command"] == ["bce", "serve-mcp", "--env-file", str(env)]
+    assert env.is_file()
+
+
+def test_env_template_is_written_once_and_gitignored(tmp_path: Path):
+    path = tmp_path / ".cursor" / agents.ENV_TEMPLATE_FILE
+    assert agents.write_env_template(path) is True
+    text = path.read_text(encoding="utf-8")
+    assert "BCE_EMBEDDING_PROVIDER=voyage" in text and "BCE_VOYAGE_API_KEY=" in text
+    assert "# BCE_EMBEDDING_BASE_URL=" in text and "BCE_SELECTOR=off" in text
+    path.write_text("BCE_DB_NAME=mine\n", encoding="utf-8")
+    assert agents.write_env_template(path) is False  # never overwrites the user's values
+    assert path.read_text(encoding="utf-8") == "BCE_DB_NAME=mine\n"
+    ignore = (tmp_path / ".cursor" / ".gitignore").read_text(encoding="utf-8")
+    assert ignore.splitlines() == [agents.ENV_TEMPLATE_FILE]
+
+
+def test_cursor_init_without_env_points_mcp_at_the_template(tmp_path: Path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from bce.cli import app
+
+    monkeypatch.delenv("BCE_ENV_FILE", raising=False)
+    monkeypatch.chdir(tmp_path)
+    for _ in range(2):  # rerun keeps the template and the pointer
+        out = CliRunner().invoke(
+            app, ["cursor-init", "--project", str(tmp_path), "--bce-command", "bce"]
+        )
+        assert out.exit_code == 0, out.output
+    env = tmp_path / ".cursor" / agents.ENV_TEMPLATE_FILE
+    cfg = json.loads((tmp_path / ".cursor" / "mcp.json").read_text(encoding="utf-8"))
+    assert cfg["mcpServers"][SERVER_NAME]["args"] == ["serve-mcp", "--env-file", str(env)]
+    assert "BCE_EMBEDDING_PROVIDER=voyage" in env.read_text(encoding="utf-8")
 
 
 def test_upsert_replaces_only_the_marked_block(tmp_path: Path):

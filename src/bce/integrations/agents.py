@@ -1,9 +1,14 @@
 """Write the editor-side files that connect a project to the engine.
 
 Cursor reads a project ``.cursor/mcp.json`` and ``.cursor/rules/*.mdc``; Claude Code reads a project
-``.mcp.json``, ``CLAUDE.md`` and hooks in ``.claude/settings.json``. Everything here merges into
-existing files (other MCP servers, other hooks and the rest of a ``CLAUDE.md`` are kept) and is
+``.mcp.json``, ``CLAUDE.md`` and hooks in ``.claude/settings.json``; OpenCode reads a project
+``opencode.json`` (its own MCP format) and ``AGENTS.md``. Everything here merges into existing files
+(other MCP servers, other hooks and the rest of a ``CLAUDE.md`` / ``AGENTS.md`` are kept) and is
 idempotent: running the command twice yields the same files.
+
+The server entry carries ``BCE_AGENT_MODE`` (:mod:`bce.core.agent_mode`) in its environment block:
+that line is the switch between the two workflows. A rerun keeps the mode already there unless one
+is passed explicitly.
 """
 
 from __future__ import annotations
@@ -17,6 +22,12 @@ from importlib import resources
 from pathlib import Path
 
 from bce.config import ENV_FILE_VAR
+from bce.core.agent_mode import (
+    AGENT_MODE_VAR,
+    DEFAULT_AGENT_MODE,
+    LABELS,
+    normalize_agent_mode,
+)
 
 SERVER_NAME = "bgts-context-engine"
 RULE_FILE = "bgts-context-engine.mdc"
@@ -71,11 +82,57 @@ def resolve_env_file(explicit: Path | None, project: Path) -> Path | None:
     return None
 
 
-def mcp_server_entry(bce_cmd: str, env_file: Path | None) -> dict:
+#: Name of the settings file the init commands write when no ``.env`` is found.
+ENV_TEMPLATE_FILE = "bce.env"
+
+
+def write_env_template(path: Path) -> bool:
+    """Write the commented settings template to ``path`` unless a file is already there.
+
+    A ``.gitignore`` beside it keeps the keys the user fills in out of version control. Returns
+    whether the template was written.
+    """
+    if path.exists():
+        return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_template(ENV_TEMPLATE_FILE), encoding="utf-8")
+    ignore = path.parent / ".gitignore"
+    lines = ignore.read_text(encoding="utf-8").splitlines() if ignore.is_file() else []
+    if path.name not in lines:
+        ignore.write_text("\n".join([*lines, path.name]) + "\n", encoding="utf-8")
+    return True
+
+
+def mcp_server_entry(
+    bce_cmd: str, env_file: Path | None, *, mode: str = DEFAULT_AGENT_MODE
+) -> dict:
     args = ["serve-mcp"]
     if env_file is not None:
         args += ["--env-file", str(env_file)]
-    return {"command": bce_cmd, "args": args, "env": {"PYTHONUTF8": "1"}}
+    return {"command": bce_cmd, "args": args, "env": {"PYTHONUTF8": "1", AGENT_MODE_VAR: mode}}
+
+
+#: OpenCode applies this per-request MCP timeout (ms) to tool calls too; a cold
+#: ``get_context_for_task`` (embedding + selector round trips) can exceed the client default.
+OPENCODE_MCP_TIMEOUT_MS = 120_000
+
+
+def opencode_mcp_entry(
+    bce_cmd: str,
+    env_file: Path | None,
+    *,
+    mode: str = DEFAULT_AGENT_MODE,
+    timeout_ms: int = OPENCODE_MCP_TIMEOUT_MS,
+) -> dict:
+    """The server entry in OpenCode's ``mcp`` format: one command array, ``environment``."""
+    base = mcp_server_entry(bce_cmd, env_file, mode=mode)
+    return {
+        "type": "local",
+        "command": [base["command"], *base["args"]],
+        "environment": base["env"],
+        "enabled": True,
+        "timeout": timeout_ms,
+    }
 
 
 def _template(name: str) -> str:
@@ -97,7 +154,7 @@ def render_cursor_rule(repo_ids: list[str]) -> str:
     return _template("cursor_rule.mdc").format(**_repo_fields(repo_ids))
 
 
-def render_claude_section(repo_ids: list[str], *, hook: bool) -> str:
+def render_claude_section(repo_ids: list[str], *, hook: bool, mcp_config: str = ".mcp.json") -> str:
     if hook:
         hook_paragraph = (
             '- Every prompt you receive is accompanied by a "Code context for this task" system\n'
@@ -105,13 +162,21 @@ def render_claude_section(repo_ids: list[str], *, hook: bool) -> str:
             "  the `bce precontext` hook before you saw it. Start from those files and lines; read\n"
             "  them before searching the tree."
         )
+        workflow_source = (
+            'the "Workflow" lines of the code context block, and `payload.workflow` when you call '
+            "the tool"
+        )
     else:
         hook_paragraph = (
             "- Before searching the tree for a task, call `get_context_for_task` once with the full\n"
             "  task text. Make it your first action, not something you try after a round of grep."
         )
+        workflow_source = "`payload.workflow`"
     return _template("claude_section.md").format(
-        hook_paragraph=hook_paragraph, **_repo_fields(repo_ids)
+        hook_paragraph=hook_paragraph,
+        mcp_config=mcp_config,
+        workflow_source=workflow_source,
+        **_repo_fields(repo_ids),
     )
 
 
@@ -149,6 +214,66 @@ def merge_mcp_servers(path: Path, entry: dict, *, key: str = "mcpServers") -> No
     servers[SERVER_NAME] = entry
     data[key] = servers
     _dump_json(path, data)
+
+
+#: Editor MCP configs, as (file relative to the project, servers key, environment key).
+_MCP_CONFIGS = (
+    (".mcp.json", "mcpServers", "env"),
+    (".cursor/mcp.json", "mcpServers", "env"),
+    ("opencode.json", "mcp", "environment"),
+)
+
+
+def configured_agent_mode(
+    path: Path, *, key: str = "mcpServers", env_key: str = "env"
+) -> str | None:
+    """The ``BCE_AGENT_MODE`` our server entry in an editor MCP config sets, if any (unvalidated)."""
+    try:
+        data = _load_json(path)
+    except ValueError:
+        return None
+    servers = data.get(key)
+    entry = servers.get(SERVER_NAME) if isinstance(servers, dict) else None
+    env = entry.get(env_key) if isinstance(entry, dict) else None
+    value = env.get(AGENT_MODE_VAR) if isinstance(env, dict) else None
+    return str(value) if value else None
+
+
+def project_agent_mode(project: Path) -> str | None:
+    """The mode a project's editor MCP config selects: ``.mcp.json``, then ``.cursor/mcp.json``,
+    then ``opencode.json``. Lets ``bce precontext`` follow the same switch as the server."""
+    for rel, key, env_key in _MCP_CONFIGS:
+        mode = configured_agent_mode(project / rel, key=key, env_key=env_key)
+        if mode:
+            return mode
+    return None
+
+
+def _pick_mode(
+    explicit: str | None,
+    config: Path,
+    res: SetupResult,
+    *,
+    key: str = "mcpServers",
+    env_key: str = "env",
+) -> str:
+    """The mode to write: the one passed, else the one already in ``config``, else the default."""
+    if explicit:
+        mode = normalize_agent_mode(explicit)
+    else:
+        current = configured_agent_mode(config, key=key, env_key=env_key)
+        try:
+            mode = normalize_agent_mode(current)
+        except ValueError:
+            res.notes.append(
+                f"{AGENT_MODE_VAR}={current!r} in {config} is not a mode; reset to {DEFAULT_AGENT_MODE}."
+            )
+            mode = DEFAULT_AGENT_MODE
+    res.notes.append(
+        f"Agent mode: {mode} ({LABELS[mode]}). Switch it with {AGENT_MODE_VAR} (hint | trust) in "
+        f"{config}, then reload the MCP server."
+    )
+    return mode
 
 
 def upsert_marked_section(path: Path, section: str) -> None:
@@ -212,12 +337,14 @@ def setup_cursor(
     repo_ids: list[str],
     bce_cmd: str,
     env_file: Path | None,
+    mode: str | None = None,
 ) -> SetupResult:
     """``.cursor/mcp.json`` (merged) + ``.cursor/rules/bgts-context-engine.mdc``."""
     res = SetupResult()
     cursor_dir = project / ".cursor"
     mcp_path = cursor_dir / "mcp.json"
-    merge_mcp_servers(mcp_path, mcp_server_entry(bce_cmd, env_file))
+    mode = _pick_mode(mode, mcp_path, res)
+    merge_mcp_servers(mcp_path, mcp_server_entry(bce_cmd, env_file, mode=mode))
     res.written.append(mcp_path)
     rule_path = cursor_dir / "rules" / RULE_FILE
     rule_path.parent.mkdir(parents=True, exist_ok=True)
@@ -241,12 +368,15 @@ def setup_claude(
     bce_cmd: str,
     env_file: Path | None,
     hook: bool,
+    mode: str | None = None,
 ) -> SetupResult:
     """``.mcp.json`` (merged) + a marked section in ``CLAUDE.md`` + optionally the
-    ``UserPromptSubmit`` hook in ``.claude/settings.json``."""
+    ``UserPromptSubmit`` hook in ``.claude/settings.json``. The hook reads the mode from
+    ``.mcp.json`` on every prompt, so the one switch covers both."""
     res = SetupResult()
     mcp_path = project / ".mcp.json"
-    merge_mcp_servers(mcp_path, mcp_server_entry(bce_cmd, env_file))
+    mode = _pick_mode(mode, mcp_path, res)
+    merge_mcp_servers(mcp_path, mcp_server_entry(bce_cmd, env_file, mode=mode))
     res.written.append(mcp_path)
     claude_md = project / "CLAUDE.md"
     upsert_marked_section(claude_md, render_claude_section(repo_ids, hook=hook))
@@ -267,5 +397,39 @@ def setup_claude(
         )
     res.notes.append(
         "Start a new Claude Code session in the project so it loads the MCP server and CLAUDE.md."
+    )
+    return res
+
+
+OPENCODE_SCHEMA = "https://opencode.ai/config.json"
+
+
+def setup_opencode(
+    project: Path,
+    *,
+    repo_ids: list[str],
+    bce_cmd: str,
+    env_file: Path | None,
+    mode: str | None = None,
+) -> SetupResult:
+    """``opencode.json`` (``mcp`` merged) + a marked section in ``AGENTS.md``."""
+    res = SetupResult()
+    config = project / "opencode.json"
+    if not config.is_file() and (project / "opencode.jsonc").is_file():
+        config = project / "opencode.jsonc"
+    mode = _pick_mode(mode, config, res, key="mcp", env_key="environment")
+    data = _load_json(config)
+    data.setdefault("$schema", OPENCODE_SCHEMA)
+    _dump_json(config, data)
+    merge_mcp_servers(config, opencode_mcp_entry(bce_cmd, env_file, mode=mode), key="mcp")
+    res.written.append(config)
+    agents_md = project / "AGENTS.md"
+    upsert_marked_section(
+        agents_md, render_claude_section(repo_ids, hook=False, mcp_config=config.name)
+    )
+    res.written.append(agents_md)
+    res.notes.append(
+        "Start opencode in the project (`opencode mcp list` should show "
+        f"{SERVER_NAME} connected); it loads opencode.json and AGENTS.md at startup."
     )
     return res

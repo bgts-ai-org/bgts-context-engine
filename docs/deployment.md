@@ -139,6 +139,26 @@ Workers run as threads inside the API process, `BCE_JOB_WORKERS` of them, pollin
 the default of 1 makes indexing strictly sequential, which is usually what you want: two
 concurrent indexes of the same repository contend on the same subgraphs.
 
+Give the database memory. An index run is one long transaction of small statements —
+a `MERGE` per node and edge, an `INSERT` per embedding — and each embedding insert touches
+dozens of random pages of the HNSW index, which for a 70 000-symbol repository is over a
+gigabyte. With PostgreSQL's default `shared_buffers = 128MB` those inserts evict the graph's
+GIN and B-tree pages between every statement, and running several repositories at once
+multiplies the effect (four concurrent indexes wrote 167 GB to disk in an afternoon). Start
+the container with `postgres -c shared_buffers=2GB` (or a quarter of the machine's memory)
+and index large repositories one at a time. The planner settings an index run needs
+(`plan_cache_mode = force_custom_plan` on every connection, nested-loop-only joins for the
+duration of the run — the label tables are never analyzed inside the indexing transaction,
+see the changelog) are set by the engine itself; nothing server-side is required.
+
+Leave the container alone while it indexes. In the compose setup PostgreSQL is PID 1 of
+the container, so any helper started with `docker exec` that is orphaned and exits with a
+status other than 0 or 1 is reaped by the postmaster as a *crashed server process*: the
+postmaster then kills every backend and runs crash recovery, and the index run — one
+transaction — is rolled back after however many hours it had been going. Inspect progress
+from the host (the port is published) rather than with shell pipelines inside the
+container, or give the container an init process (`init: true` in the compose service).
+
 ## Configuration
 
 Every setting is an environment variable prefixed `BCE_`, also read from `.env`.
@@ -241,6 +261,37 @@ the model's own hits 83 % → 92 % with the guard). The overrides exist for fitt
 not change stored data, so a profile change never needs a re-index — only a re-run of the
 query side. The active profile is written into every `bce bench-prs` report.
 
+### Context selector
+
+After ranking, `get_context_for_task` can tier its K candidates with a decision model: files
+the task most likely edits in full, likely related files as one line each, the rest dropped.
+On the 12-repository benchmark at K=50, Jev cut the tokens handed to the agent by 79 % for
+one point of file recall ([docs/retrieval.md](retrieval.md#context-selection-optional)). It is off unless
+`BCE_SELECTOR` names a model; off, the answer is the plain ranking at K=20.
+
+| `BCE_SELECTOR` | Model | Needs |
+| --- | --- | --- |
+| `off` (default) | none | — |
+| `jev` | [Jev 1.13](https://openrouter.ai/typesafe/jev-1.13), hosted | `OPENROUTER_API_KEY`, or a TypeSafe key in `BCE_SELECTOR_API_KEY` with `BCE_SELECTOR_URL=https://api.typesafe.ai/v1/systemone` |
+| `decider-2b` | [Mapika/decider-2b](https://huggingface.co/Mapika/decider-2b), open weights | a `decider.serve` server on your GPU; `BCE_SELECTOR_URL` |
+| `decider-4b` | [Mapika/decider-4b](https://huggingface.co/Mapika/decider-4b), open weights | the same, with the 4b weights loaded |
+
+Installing the decider server (GPU sizing, `pip install "decider-ai[serve]"`, the server
+settings this workload needs, RunPod), the measured comparison of the three models, every
+`BCE_SELECTOR_*` variable and troubleshooting are in [docs/selector.md](selector.md).
+
+Cost and latency, measured over 600 queries at K=50: two parallel requests of ~6 k and ~11 k
+input tokens. Jev adds ~0.6 s and ~$0.0007 per query (output tokens are free); decider-2b
+~1.7 s and decider-4b ~2.7 s on one 32 GB RunPod GPU, with no per-query bill. With `jev` the
+task text and the excerpts of the candidate symbols (240 characters each) leave the perimeter
+for OpenRouter and TypeSafe, which is the one place the engine sends source code to a third
+party at query time; a self-hosted decider keeps them inside, and `BCE_SELECTOR=off` sends
+nothing.
+
+The stage is fail-open: an HTTP error, a timeout or a malformed answer is logged and the
+ranked candidates are assembled as they are, with `coverage.selector.status` saying so.
+`bce bench` and `suggest_change_sites` never run it.
+
 ### API
 
 | Variable | Default | |
@@ -306,6 +357,11 @@ scoped principal cannot see forbidden repositories.
 
 Run it before and after any change to scoring, expansion or anchor discovery. It is the
 only thing that will tell you whether a retrieval change was actually an improvement.
+
+`bce bench` measures the ranking and does not run the context selector. The selector is
+measured end to end by `local_bench/multi_repo_bench/run_bench.py` (12 repositories, 600
+tasks; `--no-select` for the engine alone), whose reports add the tokens and files handed to
+the agent, and offline against cached answers by `select_bench.py` in the same folder.
 
 ### The case file
 

@@ -36,28 +36,63 @@ After you add or change MCP config, **restart Cursor or VS Code** (or Command Pa
 “Developer: Reload Window”). The server should appear enabled with eight tools, or ten once
 indexing is enabled (see [Configuration](#configuration)).
 
-### One-command setup: `bce cursor-init`, `bce claude-init`
+### One-command setup: `bce cursor-init`, `bce claude-init`, `bce opencode-init`
 
 Run in the project the agent works on, pointing at the engine's `.env`:
 
 ```bash
 bce --env-file /path/to/engine/.env cursor-init --repo-id my-service
 bce --env-file /path/to/engine/.env claude-init --repo-id my-service
+bce --env-file /path/to/engine/.env opencode-init --repo-id my-service
 ```
 
 | | writes | merged into existing? |
 | --- | --- | --- |
-| `cursor-init` | `.cursor/mcp.json` — server entry with the absolute path of this `bce`, `serve-mcp --env-file …`, `PYTHONUTF8=1` | yes: other servers kept |
+| `cursor-init` | `.cursor/mcp.json` — server entry with the absolute path of this `bce`, `serve-mcp --env-file …`, `PYTHONUTF8=1`, `BCE_AGENT_MODE` | yes: other servers kept |
 | | `.cursor/rules/bgts-context-engine.mdc` — `alwaysApply` rule | overwritten (ours) |
 | `claude-init` | `.mcp.json` — same server entry | yes |
 | | `CLAUDE.md` — a section between `<!-- bgts-context-engine:begin/end -->` markers | yes: rest of the file kept |
 | | `.claude/settings.json` — `UserPromptSubmit` hook running `bce precontext` (skip with `--no-hook`) | yes: other hooks kept |
+| `opencode-init` | `opencode.json` — `mcp` entry (`type: local`, `command` array, `environment`, `timeout` 120000 ms) | yes: other servers and settings kept |
+| | `AGENTS.md` — the `claude-init --no-hook` section between the same markers | yes: rest of the file kept |
 
 Options: `--project DIR` (default `.`), `--repo-id ID` (repeatable; default: the directory
 name — must match the name the repository was indexed under), `--env-file PATH` (default:
 `bce --env-file` / `BCE_ENV_FILE`, then `<project>/.env`, then `./.env`; without one the
 server reads `BCE_*` from the editor's environment and the command says so), `--bce-command`
-(default: the running `bce`). Both commands are idempotent.
+(default: the running `bce`), `--mode hint|trust` (the [agent mode](#agent-mode); default: the
+value already in the config, else `hint`). The commands are idempotent.
+
+### Agent mode
+
+The agent benchmark measured two ways of using the `get_context_for_task` answer, and the
+server offers both. `BCE_AGENT_MODE` picks one:
+
+| `BCE_AGENT_MODE` | | the agent… |
+| --- | --- | --- |
+| `hint` (default) | starting point | starts from `payload.files`, adds the `defined_in` files of every `coverage.unresolved_identifiers` entry, and stops when that list is empty and `coverage.likely_incomplete` is false. Only when the engine says the answer is likely incomplete does it look at `payload.candidates` and run a few targeted greps |
+| `trust` | accept as correct | takes `payload.files` (`full` and `stub`) as the set of locations, opens them directly and does not search the tree; it says so when they do not cover the task |
+
+The init commands write the mode into the server entry's environment block, which is the
+switch:
+
+```json
+"env": { "PYTHONUTF8": "1", "BCE_AGENT_MODE": "hint" }
+```
+
+(`environment` in `opencode.json`). Change the value and reload the MCP server; rerunning
+an init command keeps it. The server reads the mode once at startup and states that mode's
+steps in three places the agent sees: the server instructions, the end of the
+`get_context_for_task` description, and `payload.workflow` (`mode`, `label`, `steps`) in
+every answer. The rule and the `CLAUDE.md` / `AGENTS.md` section carry no search policy of
+their own; they tell the agent to follow `payload.workflow`, so a switch needs no rewrite.
+Under Claude Code the `bce precontext` hook reads the mode from the session's `.mcp.json`
+and ends its block with the same steps. An unknown value fails the server start.
+
+On 600 tasks across 12 repositories (Cursor CLI, `local_bench/agent_mcp_bench`, file
+localisation), `hint` found 92.9 % of the files at 59k tokens per run and `trust` 92.3 % at
+45k, against 95.6 % at 264k for the CLI alone. In 583 of the 600 `hint` runs the engine
+reported nothing missing and the agent searched no further.
 
 **Why a rule and a hook, not just the server.** In the agent benchmark (a Cursor CLI agent
 on 14 tasks against a React/TypeScript codebase, plain vs. with the engine) the server alone made
@@ -87,7 +122,8 @@ block for inspection.
   "mcpServers": {
     "bgts-context-engine": {
       "command": "bce",
-      "args": ["serve-mcp", "--env-file", "C:/path/to/project/.env"]
+      "args": ["serve-mcp", "--env-file", "C:/path/to/project/.env"],
+      "env": { "BCE_AGENT_MODE": "hint" }
     }
   }
 }
@@ -135,6 +171,10 @@ The variables that matter for MCP:
 | `BCE_EMBEDDING_API_KEY` | `openai` only; leave empty for a local server that does not check one |
 | `BCE_MCP_ALLOW_WRITE` | `false` by default; `true` adds the two indexing tools |
 | `BCE_MCP_TOOLS` | comma-separated names to advertise (default: all). Agents fetch a tool's schema before first use and chain small calls when many tools are offered, so a narrow catalog such as `get_context_for_task,find_references` costs fewer model turns. Unknown names fail at startup. |
+| `BCE_AGENT_MODE` | `hint` (default) or `trust`: the workflow every answer states in `payload.workflow`; see [Agent mode](#agent-mode). The init commands set it in the MCP config, which overrides the `.env` |
+| `BCE_SELECTOR` | context selector for `get_context_for_task`: `off` (default, the raw ranking), `jev`, `decider-2b` or `decider-4b`. See [docs/selector.md](selector.md) |
+| `OPENROUTER_API_KEY` | Jev's key when `BCE_SELECTOR=jev` |
+| `BCE_SELECTOR_URL` | the decider server (`http://<host>:<port>/v1/systemone`), or TypeSafe's own API for Jev |
 
 The encoder is built once at startup rather than on the first search. It pulls in numpy, and
 loading that lazily inside a tool call can stall for minutes on Windows; paying it during
@@ -212,7 +252,7 @@ This is the tool an agent should reach for first. Full options:
 | --- | --- | --- |
 | `task_text` | required | the task in prose |
 | `task_id` | `null` | for audit correlation and history lookup |
-| `max_candidates` | `20` | how many symbols to return (K). 20 is where recall@K flattened in the retrieval benchmarks for both fitted profiles |
+| `max_candidates` | `50` with the selector, `20` without | how many ranked symbols to consider (K). Leave it unset: with the context selector on the server ranks 50 and cuts them down; without it, 20 is where recall@K flattened in the retrieval benchmarks for both fitted profiles |
 | `max_tokens` | `1500` | budget for the assembled context. Kept short because an agent re-sends it on every turn; raise it for longer snippets |
 | `commit` | `null` | pin the answer to a commit |
 | `repo_ids` | `null` | restrict to these repositories |
@@ -231,6 +271,14 @@ level. If your agent already parsed a traceback, forward it.
 `commit` matters for reproducibility: pin it and the response tells you, through
 `commit_mismatch`, whether the index actually covers that commit.
 
+When the server has the context selector on, the K ranked candidates are tiered before
+assembly: the files the task most likely edits keep their symbols, likely-related files
+become one `stub` line each, the rest is dropped
+([docs/retrieval.md](retrieval.md#context-selection-optional)). It is server configuration
+(`BCE_SELECTOR`, [docs/selector.md](selector.md)), not a request field, and it is why
+`max_candidates` defaults to 50 when it is on: the selector was fitted on a K=50 net. The MCP
+server logs the active selector to stderr at startup (`context selector: …`).
+
 Layer-3 tools apply the repository scope filter when a user id is supplied
 programmatically. The stdio server does not supply one.
 
@@ -239,7 +287,7 @@ programmatically. The stdio server does not supply one.
 ```json
 {
   "tool": "get_context_for_task",
-  "payload": { "...": "deterministic, language-neutral" },
+  "payload": { "...": "language-neutral; deterministic unless the context selector ran" },
   "message": "Assembled 8 symbols (2913 tokens), confidence: high.",
   "locale": "en"
 }
@@ -257,10 +305,22 @@ A `get_context_for_task` payload contains:
   has `symbol_id`, `repo_id`, `detail_level`, `graph_distance`, `score`, `tokens`,
   `content` and, where the graph knows them, `name`, `kind`, `file_id` and `line` (so an
   agent opens the file directly instead of searching for the symbol). A non-zero `skipped` means relevant symbols were dropped for budget; raise
-  `max_tokens` or lower `max_candidates`.
+  `max_tokens` or lower `max_candidates`. When the selector ran, items also carry `tier`
+  (`full`: read these first; `stub`: one line `path - N candidate symbol(s): …`, open the file
+  only if the full tier does not cover the task), `file_relevance` (the model's probability
+  that the task edits the file) and, on full items, `symbol_relevance` (0 unrelated … 3 must
+  change).
 - **`coverage`** — the trust report, ending in `confidence` of `high`, `medium` or `low`.
   See [docs/retrieval.md](retrieval.md#7-coverage-and-confidence). Treat `low` as a signal
-  to ask a clarifying question rather than to start editing.
+  to ask a clarifying question rather than to start editing. `coverage.selector` is present
+  when the selector ran: `method` (`jev`, `decider-2b`, `decider-4b`), `served_model`,
+  `status` (`ok`, `partial`, `error` — the items are then the raw ranking), tier counts, `ms`
+  and, for Jev, `cost_usd`.
+- **`files`** — one entry per file of the answer (`path`, `tier`, `relevance`, `why`), and
+  **`candidates`** — files the selector left out (paths only). `coverage.unresolved_identifiers`
+  names identifiers of the task the answer does not cover, each with the files defining it;
+  `coverage.likely_incomplete` folds that with the selector's failure modes.
+- **`workflow`** — MCP only: the [agent mode](#agent-mode) and its numbered steps.
 
 ## REST endpoints
 
@@ -326,10 +386,11 @@ whatever sits in front of the engine must authenticate the user and overwrite th
 | `bce reindex --repo P --name N [--since C] [--to HEAD]` | incremental re-index from git diff |
 | `bce resolve-symbol --name N [--repo R]` | Layer 1 from the shell |
 | `bce find-references --symbol-id S` | Layer 1 from the shell |
-| `bce context --task T [--max-tokens 1500] [--max-candidates 20]` | Layer 3 from the shell |
-| `bce precontext --task T [--repo-id R]` | the compact context block an agent prompt carries; without `--task` it is a Claude Code `UserPromptSubmit` hook |
-| `bce cursor-init [--project DIR] [--repo-id R] [--env-file PATH]` | write `.cursor/mcp.json` + the agent rule into a project |
-| `bce claude-init [--project DIR] [--repo-id R] [--env-file PATH] [--no-hook]` | write `.mcp.json`, a `CLAUDE.md` section and the pre-context hook |
+| `bce context --task T [--max-tokens 1500] [--max-candidates K] [--no-select]` | Layer 3 from the shell; K defaults to 50 with the context selector, 20 without; `--no-select` skips the selector and returns the raw ranking |
+| `bce precontext --task T [--repo-id R] [--mode M]` | the compact context block an agent prompt carries; without `--task` it is a Claude Code `UserPromptSubmit` hook |
+| `bce cursor-init [--project DIR] [--repo-id R] [--env-file PATH] [--mode M]` | write `.cursor/mcp.json` + the agent rule into a project |
+| `bce claude-init [--project DIR] [--repo-id R] [--env-file PATH] [--no-hook] [--mode M]` | write `.mcp.json`, a `CLAUDE.md` section and the pre-context hook |
+| `bce opencode-init [--project DIR] [--repo-id R] [--env-file PATH] [--mode M]` | write the `opencode.json` `mcp` entry + an `AGENTS.md` section |
 | `bce bench --cases F [--out F] [--determinism-runs 3]` | benchmark report as JSON |
 | `bce languages` | list supported languages; needs no database |
 | `bce serve [--host] [--port] [--reload] [--no-ui] [--env-file PATH]` | REST API and web UI |

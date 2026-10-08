@@ -9,9 +9,12 @@ from __future__ import annotations
 
 import re
 
+from bce.domain.testness import is_test_symbol as is_test_symbol  # re-exported
+
 #: Unicode-aware so that Turkish task text tokenises as words ("toplantı", not "toplant" + a
 #: dropped tail); identifiers are ASCII anyway and unaffected.
 _WORD_RE = re.compile(r"[^\W\d]\w*")
+_URL_RE = re.compile(r"\b[a-z][a-z0-9+.-]*://\S+", re.IGNORECASE)
 _BACKTICK_RE = re.compile(r"`([^`\s]+)`")
 _CAMEL_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
 _HAS_LOWER_UPPER_RE = re.compile(r"[a-z][A-Z]")
@@ -49,6 +52,7 @@ files call calls called calling given gives give take takes taken many much few 
 various different based related relevant possible impossible able unable allow allows allowed
 avoid avoids prevent prevents well good bad better best worse worst true false none null nil
 yes
+don doesn didn isn aren wasn weren won wouldn shouldn couldn hasn haven hadn ain
 """
 
 _STOPWORDS_TR = """
@@ -64,30 +68,17 @@ deger
 
 STOPWORDS: frozenset[str] = frozenset(_STOPWORDS_EN.split()) | frozenset(_STOPWORDS_TR.split())
 
-_TEST_DIR_PARTS = frozenset(
-    {"test", "tests", "__tests__", "spec", "specs", "testing", "e2e", "fixtures"}
-)
-_TEST_FILE_RE = re.compile(
-    r"(^|[/\\.])("
-    r"test_[^/\\]*"  # test_foo.py
-    r"|[^/\\]*_test\.[a-z]+"  # foo_test.go / foo_test.py
-    r"|[^/\\]*\.(test|spec)\.[a-z]+"  # foo.test.ts / foo.spec.js
-    r"|[^/\\]*(Test|Tests|Spec|Specs)\.(java|cs|kt|scala|php|rb)"  # FooTest.java / FooTests.cs
-    r"|conftest\.py"
-    r")$",
-)
-#: ``test_x`` / ``should_x`` are tests wherever they live (pytest, rspec, JUnit-snake); the
-#: CamelCase forms are only trusted when no path is known - ``TestBotTriggerPanel`` and
-#: ``testConnection`` are production names, and real ``TestFoo`` / ``testFoo`` tests sit in
-#: test directories or ``*Test.java`` files that the path rules already catch.
-_TEST_NAME_RE = re.compile(r"^(test_|it_|should_|spec_)")
-_TEST_NAME_CAMEL_RE = re.compile(r"^(test[A-Z]|Test[A-Z])")
-
 
 def tokens(text: str) -> list[str]:
-    """Identifier-like tokens (original case) in first-seen order, de-duplicated."""
+    """Identifier-like tokens (original case) in first-seen order, de-duplicated.
+
+    URLs are dropped first: ``https://github.com/org/repo/pull/123`` in a task ("Fixes ...",
+    "Similar to ...") tokenises into ``https github com org repo pull`` - words that name nothing
+    in the code and, being short, prefix-match half of it (``com:*`` is every ``Compact*``,
+    ``Comparison*``, ``Command*``).
+    """
     seen: list[str] = []
-    for token in _WORD_RE.findall(text or ""):
+    for token in _WORD_RE.findall(_URL_RE.sub(" ", text or "")):
         if token not in seen:
             seen.append(token)
     return seen
@@ -466,11 +457,12 @@ def explicit_references(text: str) -> list[tuple[str | None, str]]:
             qualified_tails.add(parts[-1])
         add(container, parts[-1])
 
-    for quoted in _BACKTICK_RE.findall(text or ""):
+    cleaned = _URL_RE.sub(" ", text or "")  # ``github.com`` is not a ``Type.member``
+    for quoted in _BACKTICK_RE.findall(cleaned):
         add_qualified(quoted)
-    for dotted in _DOTTED_RE.findall(text or ""):
+    for dotted in _DOTTED_RE.findall(cleaned):
         add_qualified(dotted)
-    for token in tokens(text):
+    for token in tokens(cleaned):
         if token not in qualified_tails and looks_like_identifier(token):
             add(None, token)
     return out
@@ -486,7 +478,6 @@ _CODE_PIECE_RE = re.compile(r"^[A-Za-z_$][\w$?.\[\]()'\"]*$")
 #: Identifier-looking words shorter than this are abbreviations / prose, not a code mention.
 _MENTION_MIN_LEN = 4
 
-_URL_RE = re.compile(r"\b[a-z][a-z0-9+.-]*://\S+", re.IGNORECASE)
 #: ``src/utils/auth.ts``, ``./flask/app.py``, ``pkg\sub\Thing.cs`` - a slash-joined path ending in
 #: a file name with an extension. Bare file names are covered by :data:`_CODE_FILE_RE`.
 _PATH_MENTION_RE = re.compile(
@@ -573,9 +564,10 @@ def mention_terms(text: str) -> list[tuple[str, str]]:
                 add("code", piece)
     for _, literal in _QUOTED_RE.findall(text or ""):
         add("literal", literal)
-    for dotted in _DOTTED_RE.findall(text or ""):
+    cleaned = _URL_RE.sub(" ", text or "")  # ``github.com/org/repo`` is not a code fragment
+    for dotted in _DOTTED_RE.findall(cleaned):
         add("code", dotted)
-    for token in tokens(text):
+    for token in tokens(cleaned):
         if looks_like_identifier(token) and _IDENT_ONLY_RE.match(token):
             add("ident", token)
     return out
@@ -621,37 +613,3 @@ def explicit_candidates(text: str) -> list[str]:
         if name not in out:
             out.append(name)
     return out
-
-
-def is_test_symbol(
-    symbol_id: str | None, name: str | None = None, file_id: str | None = None
-) -> bool:
-    """Deterministic test detection from the file path, module path and symbol name.
-
-    Works on symbol ids of the form ``<lang>::<module.path>::<Class>::<name>#<hash>`` as well as
-    on ``repo:path/to/file.py`` file ids; any of the three inputs may be missing.
-    """
-    paths: list[str] = []
-    if file_id:
-        paths.append(file_id.split(":", 1)[1] if ":" in file_id else file_id)
-    if symbol_id:
-        segments = symbol_id.split("::")
-        if len(segments) >= 2 and segments[1]:
-            paths.append(segments[1].replace(".", "/"))
-        if name is None and segments:
-            name = segments[-1].split("#", 1)[0] or None
-    for path in paths:
-        norm = path.replace("\\", "/")
-        parts = norm.split("/")
-        if any(p.lower() in _TEST_DIR_PARTS for p in parts[:-1]):
-            return True
-        if _TEST_FILE_RE.search(parts[-1]) or _TEST_FILE_RE.search(norm):
-            return True
-        # Module-path form has no extension: "tests/test_api_ui" -> last part "test_api_ui".
-        if parts[-1].startswith("test_") or parts[-1].endswith("_test"):
-            return True
-    if name and _TEST_NAME_RE.match(name):
-        return True
-    if name and not paths and _TEST_NAME_CAMEL_RE.match(name):
-        return True
-    return False

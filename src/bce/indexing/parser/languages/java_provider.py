@@ -35,6 +35,16 @@ from bce.indexing.parser.symbol_id import make_module_id, make_symbol_id
 
 _REF_KIND_RANK = {RefKind.READ: 0, RefKind.PASS: 1, RefKind.WRITE: 2, RefKind.DEFINE: 3}
 
+#: Type declarations that become symbols, at the top level and nested in other types.
+_TYPE_KINDS: dict[str, SymbolKind] = {
+    "class_declaration": SymbolKind.CLASS,
+    "interface_declaration": SymbolKind.INTERFACE,
+    "enum_declaration": SymbolKind.ENUM,
+    "record_declaration": SymbolKind.CLASS,
+    "annotation_type_declaration": SymbolKind.INTERFACE,
+}
+_TYPE_DECLS = frozenset(_TYPE_KINDS)
+
 # Spring MVC mapping annotations -> HTTP method (RequestMapping resolves method from its args).
 _SPRING_MAPPING = {
     "GetMapping": "GET",
@@ -156,32 +166,132 @@ class JavaProvider(LanguageProvider):
 
     def _iter_type_decls(self, root):
         for child in root.named_children:
-            if child.type in ("class_declaration", "interface_declaration", "enum_declaration"):
+            if child.type in _TYPE_DECLS:
                 yield child
 
     def _collect_type(
-        self, node, ctx, package, source, frag, module_symbols, class_methods, defs, unresolved
+        self,
+        node,
+        ctx,
+        package,
+        source,
+        frag,
+        module_symbols,
+        class_methods,
+        defs,
+        unresolved,
+        outer: str = "",
     ) -> None:
-        kind = SymbolKind.INTERFACE if node.type == "interface_declaration" else SymbolKind.CLASS
-        d = self._add_symbol(node, ctx, package, "", source, frag, kind, None)
-        module_symbols[d.name] = d.symbol_id
+        """One type declaration and, recursively, the types nested in it.
+
+        A nested type is addressed by its container chain (``Outer.Inner``), which is what the
+        symbol id carries and what a task means by ``Types.TypeVariableImpl``; its simple name is
+        registered too so an intra-file ``Inner.helper()`` still resolves. Java code keeps a
+        large share of its logic in nested classes (Guava: 40 % of all methods live in one), so
+        stopping at the top level left those methods - and any file that is one nested-class
+        holder - out of the index entirely.
+        """
+        kind = _TYPE_KINDS[node.type]
+        d = self._add_symbol(node, ctx, package, outer, source, frag, kind, None)
+        qualified = f"{outer}.{d.name}" if outer else d.name
+        module_symbols.setdefault(d.name, d.symbol_id)
+        if qualified != d.name:
+            module_symbols[qualified] = d.symbol_id
         defs.append(d)
         self._add_heritage(node, source, frag, d.symbol_id, module_symbols, unresolved)
 
         body = node.child_by_field_name("body")
         if body is None:
             return
-        methods = class_methods.setdefault(d.name, {})
-        for member in body.named_children:
+        methods = class_methods.setdefault(qualified, {})
+        if qualified != d.name:
+            class_methods.setdefault(d.name, methods)
+        for member in self._iter_members(body):
             if member.type in ("method_declaration", "constructor_declaration"):
                 mkind = (
                     SymbolKind.CONSTRUCTOR
                     if member.type == "constructor_declaration"
                     else SymbolKind.METHOD
                 )
-                md = self._add_symbol(member, ctx, package, d.name, source, frag, mkind, member)
+                md = self._add_symbol(member, ctx, package, qualified, source, frag, mkind, member)
                 methods[md.name] = md.symbol_id
                 defs.append(md)
+            elif member.type in _TYPE_DECLS:
+                self._collect_type(
+                    member,
+                    ctx,
+                    package,
+                    source,
+                    frag,
+                    module_symbols,
+                    class_methods,
+                    defs,
+                    unresolved,
+                    outer=qualified,
+                )
+            elif member.type in ("field_declaration", "constant_declaration"):
+                self._collect_fields(member, ctx, package, qualified, source, frag, defs)
+
+    @staticmethod
+    def _iter_members(body):
+        """Direct members of a type body; an enum keeps its methods and fields one level down
+        (``enum_body_declarations``), after the constants."""
+        for member in body.named_children:
+            if member.type == "enum_body_declarations":
+                yield from member.named_children
+            else:
+                yield member
+
+    def _collect_fields(self, node, ctx, package, namespace, source, frag, defs) -> None:
+        """Static fields (constants, singletons, registries) as symbols of their own.
+
+        ``MediaType.APPLICATION_GZIP``, ``HttpHeaders.X_FOO`` are what a task names when it adds
+        or renames a constant; as part of the class's search text they matched only in the body
+        tier. Instance fields stay described by the class - they carry a type and a name, and
+        the name is in the class text already. Interface constants are static by definition.
+        """
+        static = node.type == "constant_declaration"
+        for child in node.named_children:
+            if child.type == "modifiers" and "static" in node_text(child, source).split():
+                static = True
+        if not static:
+            return
+        for declarator in node.named_children:
+            if declarator.type != "variable_declarator":
+                continue
+            name_node = declarator.child_by_field_name("name")
+            if name_node is None:
+                continue
+            name = node_text(name_node, source)
+            kind = SymbolKind.CONSTANT if name.isupper() else SymbolKind.FIELD
+            symbol_id = make_symbol_id(
+                language=self.language,
+                package=package,
+                namespace=namespace,
+                name=name,
+                signature=None,
+                kind=str(kind),
+            )
+            symbol = GraphNode(
+                NodeLabel.SYMBOL,
+                symbol_id,
+                {
+                    "name": name,
+                    "kind": str(kind),
+                    "signature": None,
+                    "visibility": self._visibility(node, source),
+                    "docstring": None,
+                    "body": body_snippet(node, source),
+                    "namespace": namespace or package or "",
+                    "file_id": ctx.file_id,
+                    "line": declarator.start_point[0] + 1,
+                    "indexed_at_commit": ctx.indexed_at_commit,
+                },
+            )
+            symbol.search_text = search_text(node, source)
+            frag.add_node(symbol)
+            frag.add_edge(GraphEdge(EdgeLabel.DEFINED_IN, symbol_id, ctx.file_id))
+            defs.append(_Def(symbol_id, name, kind, None, None))
 
     def _add_symbol(self, node, ctx, package, namespace, source, frag, kind, body_holder) -> _Def:
         name_node = node.child_by_field_name("name")
@@ -400,8 +510,8 @@ class JavaProvider(LanguageProvider):
         stop = {
             "method_declaration",
             "constructor_declaration",
-            "class_declaration",
             "lambda_expression",
+            *_TYPE_DECLS,  # nested types are symbols of their own (pass 1)
         }
         stack = [node]
         while stack:
@@ -423,6 +533,13 @@ class JavaProvider(LanguageProvider):
                 hit = class_methods.get(class_name, {}).get(method_name)
                 if hit:
                     return hit
+        elif obj.type == "identifier":
+            # ``Inner.helper()`` / ``Outer.create()``: a static or nested-type call on a type
+            # declared in this file.
+            hit = class_methods.get(node_text(obj, source), {}).get(method_name)
+            if hit:
+                return hit
+            return None
         return module_symbols.get(method_name)
 
     # --- REFERENCES.ref_kind ---
@@ -461,8 +578,8 @@ class JavaProvider(LanguageProvider):
         stop = {
             "method_declaration",
             "constructor_declaration",
-            "class_declaration",
             "lambda_expression",
+            *_TYPE_DECLS,  # nested types are symbols of their own (pass 1)
         }
         stack = [node]
         while stack:

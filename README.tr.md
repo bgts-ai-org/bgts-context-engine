@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="https://raw.githubusercontent.com/bgts-ai-org/bgts-context-engine/main/docs/assets/social-preview.png" alt="BGTS Context Engine" width="820">
+<img src="https://raw.githubusercontent.com/bgts-ai-org/bgts-context-engine/main/docs/assets/architecture-overview.tr.png" alt="BGTS Context Engine" width="820">
 
 **Yapay zekâ kodlama ajanları için deterministik kod-graf bağlamı.**
 
@@ -14,7 +14,7 @@ veren sekiz sembolü sıralanmış, bütçelenmiş ve yeniden üretilebilir şek
 [![MCP](https://img.shields.io/badge/MCP-uyumlu-000000.svg)](docs/mcp.md)
 [![Yıldızlar](https://img.shields.io/github/stars/bgts-ai-org/bgts-context-engine?style=flat&logo=github)](https://github.com/bgts-ai-org/bgts-context-engine/stargazers)
 
-[Hızlı başlangıç](#hızlı-başlangıç) · [Ajanınızdan kullanma](#ajanınızdan-kullanma) · [Nasıl çalışır](#nasıl-çalışır) · [Desteklenen modeller](#desteklenen-modeller) · [Dokümantasyon](#dokümantasyon) · [Site](https://bgts-ai-org.github.io/bce-microsite/) · [English](README.md)
+[Hızlı başlangıç](#hızlı-başlangıç) · [Ajanınızdan kullanma](#ajanınızdan-kullanma) · [Nasıl çalışır](#nasıl-çalışır) · [Desteklenen modeller](#desteklenen-modeller) · [Seçici modeller](docs/selector.md) · [Dokümantasyon](#dokümantasyon) · [Site](https://bgts-ai-org.github.io/bce-microsite/) · [English](README.md)
 
 </div>
 
@@ -41,10 +41,17 @@ hiyerarşileri, HTTP route'ları, diller arası köprüler — ve soruları bu g
 yanıtlar. Embedding yalnızca tek bir yerde kullanılır: görev metni tanıdık hiçbir şey
 adlandırmadığında giriş noktalarını bulmak için. Sıralamayı asla etkilemez.
 
-**Aynı görev metni, aynı commit üzerinde, aynı bağlam paketini döner.** Getirme yolunda
+**Aynı görev metni, aynı commit üzerinde, aynı sıralamayı döner.** Getirme yolunda
 model yok, saat yok, rastgelelik yok. Bir ajan hatalı bir değişiklik yaptığında, ona tam
 olarak ne söylendiğini yeniden oynatabilir, yanlış sembolü yüzeye çıkaran aşamayı bulabilir
 ve o aşamayı düzeltebilirsiniz.
+
+Bu sıralamanın üstünde isteğe bağlı, açıkça işaretlenmiş tek bir olasılıksal adım var:
+sıralanan dosyalardan görevin gerçekten hangilerini değiştirdiğini bir karar modeline soran
+*bağlam seçici*. Ajana bu dosyaları tam, muhtemelen ilgili olanları birer satır olarak verir,
+gerisini atar. 600 gerçek değişiklikte bağlamı %79 küçülttü, recall'dan bir puan verdi.
+`BCE_SELECTOR` bir model adı (barındırılan Jev ya da kendi GPU'nuzda decider-2b /
+decider-4b) verilene kadar kapalıdır; `--no-select` bayt bayt aynı paketi geri verir.
 
 Motor, insanların çalıştırabilmesi için yayımlanır. Aynı şeyi kendi çevrelerinde isteyen
 kurumlar — indeksleme, kurulum, depolarınıza göre ayarlanmış skorlama veya etrafındaki
@@ -103,7 +110,11 @@ süreç sessiz kalır; IDE kendi kopyasını başlatır.
 ```bash
 bce --env-file /path/to/engine/.env cursor-init --repo-id my-service   # Cursor
 bce --env-file /path/to/engine/.env claude-init --repo-id my-service   # Claude Code
+bce --env-file /path/to/engine/.env opencode-init --repo-id my-service # OpenCode
 ```
+
+`opencode-init`, sunucuyu `opencode.json` dosyasına (OpenCode'un `mcp` biçiminde)
+birleştirir ve aynı ajan yönergesini `AGENTS.md` içinde işaretli bir bölüm olarak yazar.
 
 `cursor-init`, `.cursor/mcp.json` dosyasını (varsa üzerine birleştirerek) ve
 `.cursor/rules/bgts-context-engine.mdc` kuralını yazar. Kural ajana şunları söyler:
@@ -117,6 +128,22 @@ iyi kontroller; React/TypeScript bir kod tabanında 14 görev, aynı model ve ma
 Cursor'ın istem kancası bağlam ekleyemediği için orada bu işi kural yapar. `--no-hook`,
 `--repo-id` (tekrarlanabilir) ve `--bce-command` dosyaları ayarlar; iki komut da tekrar
 çalıştırılmaya uygundur.
+
+**İki ajan modu.** Ajanın cevaba ne kadar dayanacağını `BCE_AGENT_MODE` belirler. Üç init
+komutu da bu değeri sunucu girdisinin `env` bloğuna yazar (`.cursor/mcp.json`, `.mcp.json`;
+`opencode.json` içinde `environment`). Değeri değiştirip MCP sunucusunu yeniden yükledikten
+sonra ajan diğer akışla çalışır:
+
+- `hint` (**başlangıç**, varsayılan): ajan `payload.files` ile başlar. Kapsanmayan
+  tanımlayıcıların (`coverage.unresolved_identifiers`) dosyalarını ekler; aramaya yalnızca
+  motor cevabın eksik olabileceğini söylediğinde (`coverage.likely_incomplete`) geçer.
+- `trust` (**doğru kabul**): `payload.files` cevabın kendisidir. Ajan bu dosyaları doğrudan
+  açar ve depoda arama yapmaz.
+
+Sunucu aktif modun adımlarını araç açıklamasına ve her cevabın `payload.workflow` alanına
+yazar; kurallar ajana bu adımları izlemesini söyler. Bu yüzden mod değiştirmek kural
+dosyasında değişiklik gerektirmez. `--mode hint|trust` init sırasında modu seçer; tekrar
+çalıştırma mevcut değeri korur. Ayrıntılar: [docs/mcp.md](docs/mcp.md#agent-mode).
 
 MCP yapılandırmasını ekledikten veya değiştirdikten sonra **Cursor veya VS Code'u
 yeniden başlatın** (veya Komut Paleti → “Developer: Reload Window”). Sunucu sekiz araçla
@@ -219,6 +246,12 @@ komşuları imza olarak, dış halka `name @ dosya:satır` biçiminde gelir. Ger
 yirmi sembolün 1500 token'a sığması bu sayede olur — bir ajanın her turda taşıyabileceği
 kadar kısa. Her öge `file_id` ve `line` da taşır; ajan sembolü aramak yerine dosyayı açar.
 
+Bağlam seçici açıkken ögeler bir de **`tier`** taşır: görevin en muhtemel değiştireceği iki
+üç dosya için `full`, muhtemelen ilgili dosyalar için tek satırlık `stub`
+(`yol - N aday sembol: …`); `coverage.selector` neyin neden kesildiğini söyler
+([docs/retrieval.md](docs/retrieval.md#context-selection-optional); modeller ve kurulum
+[docs/selector.md](docs/selector.md) içinde).
+
 ## Nasıl çalışır
 
 ```
@@ -232,6 +265,8 @@ görev metni
    │                yaprak cezası ve kenar kaynağı üzerinden ağırlıklı toplam
    ├─ kapsam        çağıranın göremeyeceği depoları düşür
    ├─ daraltma      en iyi N tanesini tut
+   ├─ seçim         isteğe bağlı: bir karar modeli N dosyayı
+   │                tam / tek satır stub / atıldı olarak katmanlar
    ├─ birleştirme   token bütçesine sığdır, uzaklaştıkça daha ucuz detay
    └─ kapsama       sonucun ne kadarının güvenilir olduğunu raporla
 ```
@@ -253,6 +288,9 @@ Formülün tamamı, her ağırlık ve güven eşikleri
 - **Yapısı gereği deterministik.** Sıralı gezinme, kararlı eşitlik bozma, sürümlenmiş
   skorlama ağırlıkları. `bce bench` her vakayı tekrar tekrar koşup çıktıyı karşılaştırarak
   bunu doğrular.
+- **İsteğe bağlı olarak token'ın beşte biri.** Bağlam seçici görevin değiştirdiği dosyaları
+  tutar, gerisini birer satırla listeler: 600 gerçek değişiklikte cevap başına 8.310 → 1.714
+  token, dosya recall'u 94.4 → 93.4; hata olursa düz sıralamaya düşer.
 - **Altı dil.** Python, JavaScript ve TypeScript yerleşik; Java, C# ve Go `langs` ekiyle.
   [Yeni bir dil eklemek](docs/languages.md#adding-a-language) iki dosyaya dokunur.
 - **Diller arası çağrı kenarları.** React Native ve Expo köprüleri, TypeScript'teki
@@ -300,6 +338,23 @@ sunucu (vLLM, TEI, Ollama). Model veya boyutu değiştirmek yeniden indekslemedi
   — 1.5b'nin küçük kardeşi; 1.5B parametreyi taşıyamayan makineler için.
 - [`Nomic Embed Code`](https://huggingface.co/nomic-ai/nomic-embed-code) — açık kaynaklı
   7B kod getiricisi.
+
+### Seçici modeller
+
+İsteğe bağlı [bağlam seçici](#ne-döner), sıralanmış cevabın üzerinde bu karar modellerinden
+birini çalıştırır. `BCE_SELECTOR`'ı modelin adına ayarlayın; ayarlanmazsa (`off`) motor
+K=20'de düz sıralamayı döner.
+
+| `BCE_SELECTOR` | Model | Nerede çalışır | Dosya recall @50 · token* |
+| --- | --- | --- | --- |
+| `jev` | [Jev 1.13](https://openrouter.ai/typesafe/jev-1.13) (`typesafe/jev-1.13`, TypeSafe) | barındırılan: [OpenRouter](https://openrouter.ai/docs/guides/community/jev) ya da [TypeSafe API'si](https://www.typesafeai.org/guides/jev-api-quickstart) | 93.3 · 1.121 |
+| `decider-2b` | [Mapika/decider-2b](https://huggingface.co/Mapika/decider-2b) (açık ağırlık, Apache-2.0) | kendi GPU'nuz (16 GB+), `decider.serve` ile | 89.8 · 1.355 |
+| `decider-4b` | [Mapika/decider-4b](https://huggingface.co/Mapika/decider-4b) (açık ağırlık, Apache-2.0) | kendi GPU'nuz (32 GB), `decider.serve` ile | 92.1 · 1.193 |
+
+\* 12 depoda 600 gerçek değişiklik, K=50; seçicisiz 94.4 recall ve 8.310 token'a karşı. Jev
+`OPENROUTER_API_KEY` ister ve görev metniyle kod alıntılarını üçüncü tarafa gönderir;
+decider'lar her şeyi çevrenizin içinde tutar ve anahtar istemez.
+**Kurulum, decider sunucusunun kurulumu ve RunPod notları: [docs/selector.md](docs/selector.md).**
 
 ## Nereye oturur
 
@@ -368,6 +423,7 @@ Tümü İngilizcedir.
 | --- | --- |
 | [Architecture](docs/architecture.md) | deterministik hat, üç katman, indeksleme |
 | [Retrieval](docs/retrieval.md) | çapalar, genişletme, her skorlama ağırlığı, güven |
+| [Selector models](docs/selector.md) | Jev, decider-2b ve decider-4b: seçim, kurulum, bağlam seçici yapılandırması |
 | [Data model](docs/data-model.md) | düğüm etiketleri, kenar tipleri, tablolar, sembol kimliği |
 | [MCP and API](docs/mcp.md) | her araç ve uç nokta, MCP yapılandırması, CLI |
 | [Languages](docs/languages.md) | her parser'ın çıkardıkları ve yeni dil ekleme |

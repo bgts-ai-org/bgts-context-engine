@@ -1225,3 +1225,72 @@ def test_auto_semantic_overfetches_and_skips_test_symbols(monkeypatch):
     assert store.limits == [AUTO_SEMANTIC_LIMIT * 4]
     with_tests = _auto_semantic_candidates(store, "task", None, include_tests=True)
     assert with_tests == ids[:AUTO_SEMANTIC_LIMIT]
+
+
+class _Savepoints:
+    def __init__(self):
+        self.opened = 0
+        self.failed = 0
+
+    def transaction(self):
+        import contextlib
+
+        @contextlib.contextmanager
+        def sp():
+            self.opened += 1
+            try:
+                yield
+            except Exception:
+                self.failed += 1
+                raise
+
+        return sp()
+
+
+def test_auto_semantic_refuses_an_index_built_with_another_model(monkeypatch):
+    import bce.indexing.embedder.encoder as enc
+    from bce.tools.layer3.orchestration import _auto_semantic_or_none
+
+    class _Enc:
+        model_id = "bce-hashing-v1"
+
+        def encode_query(self, text):  # pragma: no cover - the guard must stop before it
+            raise AssertionError("query encoded against a mismatched index")
+
+    class _ModelStore(_Store):
+        conn = _Savepoints()
+
+        def stored_model(self, kind="symbol"):
+            return "jina-code-embeddings-1.5b-1536"
+
+    monkeypatch.setattr(enc, "build_default_encoder", lambda: _Enc())
+    store = _ModelStore(["py::app.mod::::fn#x"])
+    ids, error = _auto_semantic_or_none("t", store, "task", None, None)
+    assert ids is None and "jina-code-embeddings-1.5b-1536" in error and "bce-hashing-v1" in error
+    assert store.limits == []
+
+
+def test_auto_semantic_sql_failure_stays_inside_a_savepoint(monkeypatch):
+    import bce.indexing.embedder.encoder as enc
+    from bce.tools.layer3.orchestration import _auto_semantic_or_none
+
+    class _Enc:
+        model_id = "m-8"
+
+        def encode_query(self, text):
+            return [0.0]
+
+    class _FailingStore:
+        conn = _Savepoints()
+
+        def stored_model(self, kind="symbol"):
+            return "m-8"
+
+        def search(self, *a, **k):
+            raise RuntimeError("different vector dimensions 1024 and 1536")
+
+    monkeypatch.setattr(enc, "build_default_encoder", lambda: _Enc())
+    store = _FailingStore()
+    ids, error = _auto_semantic_or_none("t", store, "task", None, None)
+    assert ids is None and "different vector dimensions" in error
+    assert (store.conn.opened, store.conn.failed) == (1, 1)

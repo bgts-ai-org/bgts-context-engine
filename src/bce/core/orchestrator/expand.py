@@ -26,6 +26,7 @@ attaches the graph features (degree, leaf) and the task signal in a single pass.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
@@ -62,6 +63,30 @@ EXPAND_ROOT_LIMIT = 20
 SIBLING_MIN_STRENGTH = 0.7
 #: Max siblings per anchor (nearest by line, then symbol_id).
 SIBLING_LIMIT = 12
+
+#: Sibling *files* (see :func:`_expand_sibling_files`): anchor files consulted (strongest first),
+#: files nominated per anchor file by the directory rule, files nominated in total, symbols taken
+#: from each, and the family / directory / importer sizes above which a rule names nothing.
+SIBLING_FILE_ROOTS = 8
+SIBLING_FILES_PER_ANCHOR = 6
+SIBLING_FILE_TOTAL = 24
+SIBLING_FILE_SYMBOLS = 6
+SIBLING_FAMILY_LIMIT = 8
+SIBLING_DIR_LIMIT = 60
+SIBLING_IMPORTER_LIMIT = 8
+#: Evidence scale for a sibling-file symbol relative to a same-file sibling.
+SIBLING_FILE_SCALE = 0.8
+#: Name parts shorter than this, or in this set, do not relate two files (``Base``, ``Impl``).
+SIBLING_PART_MIN_LEN = 4
+_GENERIC_NAME_PARTS = frozenset(
+    {
+        "base", "impl", "test", "tests", "spec", "util", "utils", "helper", "helpers", "common",
+        "core", "main", "index", "types", "type", "model", "models", "service", "services",
+        "manager", "handler", "controller", "component", "module", "default", "abstract",
+        "internal", "extensions", "extension", "factory", "provider", "builder", "config",
+        "configuration", "options", "settings", "constants", "interface", "class", "data",
+    }
+)  # fmt: skip
 
 #: Partial task-signal credit (fraction of the name's parts that appear in the task text).
 _PARTIAL_SIGNAL_SCALE = 0.6
@@ -193,6 +218,7 @@ def expand_from_anchors(
                 )
 
     _expand_siblings(repository, walked, record)
+    _expand_sibling_files(repository, walked, record)
 
     _fill_repo_ids(repository, found)
     return found
@@ -244,6 +270,185 @@ def _expand_siblings(repository: GraphRepository, walked: dict[str, float], reco
                     provenance=None,
                     source_strength=strength * HOP_DECAY,
                 )
+
+
+def _expand_sibling_files(
+    repository: GraphRepository, walked: dict[str, float], record: Any
+) -> None:
+    """Files that travel with a well-evidenced anchor's file, without any graph edge between them.
+
+    Code bases spread one abstraction over parallel files that a change has to follow together
+    and that no CALLS / IMPORTS / INHERITS edge connects: the per-provider variants of one type
+    (``SqliteTypeMappingSource`` / ``SqlServerTypeMappingSource`` / ``RelationalTypeMappingSource``),
+    the members of one family (``ImmutableMap`` / ``ImmutableSortedMap`` / ``ImmutableBiMap``),
+    the neighbours in one package that share a name part (``SqliteDateTimeOffsetTypeMapping``
+    next to ``SqliteTypeMappingSource``). Three deterministic rules nominate them:
+
+    1. *name family* - the anchor's basename with its first camel/snake part dropped, or with its
+       first and last parts kept and the middle wildcarded, resolved repo-wide
+       (:meth:`~bce.storage.graph.repository.GraphRepository.files_by_basename_pattern`);
+    2. *directory neighbours* - files in the anchor's directory whose basename shares a
+       meaningful name part with it;
+    3. *importers* - files importing the anchor's file (``File -> Module -> File``).
+
+    Each rule is bounded (a family or directory larger than its limit names nothing - a flat
+    package of 400 ``*Test.java`` says nothing about change sets), the result is capped per
+    anchor file and overall, and only the strongest anchors are consulted
+    (:data:`SIBLING_MIN_STRENGTH`). A sibling file contributes its container symbols first, then
+    its first symbols by line (:data:`SIBLING_FILE_SYMBOLS`), at distance 1 with evidence
+    ``strength * HOP_DECAY * SIBLING_FILE_SCALE`` - weaker than a same-file sibling, stronger
+    than a second hop - so scoring ranks them into the K pool where the selector tiers them.
+    Repositories without file lookups (unit-test fakes) yield nothing.
+    """
+    strong = {sid: s for sid, s in walked.items() if s >= SIBLING_MIN_STRENGTH}
+    if not strong:
+        return
+    meta = bulk.symbols_meta(repository, sorted(strong))
+    file_strength: dict[str, float] = {}
+    for sid in sorted(strong):
+        file_id = (meta.get(sid) or {}).get("file_id")
+        if file_id:
+            file_strength[file_id] = max(file_strength.get(file_id, 0.0), strong[sid])
+    if not file_strength:
+        return
+    anchor_files = sorted(file_strength, key=lambda f: (-file_strength[f], f))[:SIBLING_FILE_ROOTS]
+    repo_ids = sorted({f.split(":", 1)[0] for f in anchor_files if ":" in f})
+
+    nominated: dict[str, tuple[float, str]] = {}  # sibling file -> (strength, rule)
+
+    def nominate(fid: str, strength: float, rule: str) -> None:
+        if fid in file_strength or fid in nominated:
+            return
+        if is_test_symbol(None, None, fid):
+            return
+        nominated[fid] = (strength, rule)
+
+    # 1. name family, repo-wide.
+    patterns: dict[str, list[str]] = {}
+    for fid in anchor_files:
+        patterns[fid] = _name_family_patterns(fid)
+    by_pattern = _lookup(
+        repository,
+        "files_by_basename_pattern",
+        sorted({p for ps in patterns.values() for p in ps}),
+        repo_ids=repo_ids or None,
+        limit=SIBLING_FAMILY_LIMIT,
+    )
+    for fid in anchor_files:
+        for pattern in patterns[fid]:
+            for sibling in by_pattern.get(pattern, []):
+                nominate(sibling, file_strength[fid], "name_family")
+
+    # 2. directory neighbours sharing a name part.
+    dirs = sorted({_dir_of(f) for f in anchor_files if _dir_of(f)})
+    by_dir = _lookup(repository, "files_in_directories", dirs, limit=SIBLING_DIR_LIMIT)
+    for fid in anchor_files:
+        parts = _name_parts(fid)
+        if not parts:
+            continue
+        hits = [f for f in by_dir.get(_dir_of(fid), []) if f != fid and parts & _name_parts(f)]
+        for sibling in hits[:SIBLING_FILES_PER_ANCHOR]:
+            nominate(sibling, file_strength[fid], "directory")
+
+    # 3. importers of the anchor's file (bounded fan-in).
+    importers_of = getattr(repository, "file_importers", None)
+    if callable(importers_of):
+        for fid in anchor_files:
+            try:
+                rows = importers_of(fid)
+            except NotImplementedError:
+                break
+            if 0 < len(rows) <= SIBLING_IMPORTER_LIMIT:
+                for row in rows:
+                    if row.get("file_id"):
+                        nominate(row["file_id"], file_strength[fid], "importer")
+
+    if not nominated:
+        return
+    chosen = sorted(nominated, key=lambda f: (-nominated[f][0], f))[:SIBLING_FILE_TOTAL]
+    in_file = bulk.symbols_in_files(repository, chosen)
+    for fid in chosen:
+        strength, rule = nominated[fid]
+        symbols = [s for s in in_file.get(fid, []) if s.get("symbol_id")]
+        symbols.sort(
+            key=lambda s: (
+                0 if (s.get("kind") or "").lower() in CONTAINER_KINDS else 1,
+                _as_int(s.get("line")),
+                s["symbol_id"],
+            )
+        )
+        for sym in symbols[:SIBLING_FILE_SYMBOLS]:
+            record(
+                sym["symbol_id"],
+                1,
+                anchor=False,
+                provenance=f"sibling_file:{rule}",
+                source_strength=strength * HOP_DECAY * SIBLING_FILE_SCALE,
+            )
+
+
+def _lookup(repository: GraphRepository, name: str, keys: list[str], **kwargs: Any) -> dict:
+    fn = getattr(repository, name, None)
+    if not keys or not callable(fn):
+        return {}
+    try:
+        return fn(keys, **kwargs) or {}
+    except NotImplementedError:
+        return {}
+
+
+def _dir_of(file_id: str) -> str:
+    return file_id.rsplit("/", 1)[0] if "/" in file_id else ""
+
+
+def _basename(file_id: str) -> tuple[str, str]:
+    """``("SqliteTypeMappingSource", ".cs")`` for ``repo:src/.../SqliteTypeMappingSource.cs``."""
+    name = file_id.rsplit("/", 1)[-1]
+    if ":" in name:
+        name = name.rsplit(":", 1)[-1]
+    stem, dot, ext = name.rpartition(".")
+    if not dot:
+        return name, ""
+    return stem, "." + ext
+
+
+def _name_parts(file_id: str) -> set[str]:
+    stem, _ = _basename(file_id)
+    return {
+        p
+        for p in split_identifier(stem)
+        if len(p) >= SIBLING_PART_MIN_LEN and p not in STOPWORDS and p not in _GENERIC_NAME_PARTS
+    }
+
+
+def _name_family_patterns(file_id: str) -> list[str]:
+    """Basename wildcards (``*`` = any run of characters) naming the file's family.
+
+    ``SqliteTypeMappingSource.cs`` -> ``*TypeMappingSource.cs`` (the provider prefix varies) and
+    ``Sqlite*Source.cs`` (the middle varies); a two-part name only yields the suffix form. Names
+    whose tail would be a single generic part (``*Map.java``, ``*Test.cs``) yield nothing.
+    """
+    stem, ext = _basename(file_id)
+    raw = [p for p in _split_keep_case(stem) if p]
+    if len(raw) < 2:
+        return []
+    out: list[str] = []
+    tail = "".join(raw[1:])
+    if len(raw) > 2 or (
+        len(tail) >= SIBLING_PART_MIN_LEN and tail.lower() not in _GENERIC_NAME_PARTS
+    ):
+        out.append(f"*{tail}{ext}")
+    if len(raw) >= 3:
+        out.append(f"{raw[0]}*{raw[-1]}{ext}")
+    return out
+
+
+def _split_keep_case(stem: str) -> list[str]:
+    """Camel / snake split that keeps the original casing (``SqlServer`` stays ``SqlServer``)."""
+    pieces: list[str] = []
+    for chunk in re.split(r"[_\-.\s]+", stem):
+        pieces.extend(re.findall(r"[A-Z]+(?![a-z])|[A-Z]?[a-z0-9]+|[A-Z]+", chunk))
+    return pieces
 
 
 def _has_reads(repository: GraphRepository, bulk_name: str, single_name: str) -> bool:

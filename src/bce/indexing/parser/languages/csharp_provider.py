@@ -10,6 +10,7 @@ provider when the grammar import succeeds.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from bce.domain.enums import EdgeLabel, NodeLabel, RefKind, SymbolKind
@@ -34,6 +35,48 @@ from bce.indexing.parser.symbol_id import make_module_id, make_symbol_id
 
 _REF_KIND_RANK = {RefKind.READ: 0, RefKind.PASS: 1, RefKind.WRITE: 2, RefKind.DEFINE: 3}
 
+#: Type declarations that become symbols, at the top level and nested in other types.
+_TYPE_KINDS: dict[str, SymbolKind] = {
+    "class_declaration": SymbolKind.CLASS,
+    "interface_declaration": SymbolKind.INTERFACE,
+    "struct_declaration": SymbolKind.CLASS,
+    "record_declaration": SymbolKind.CLASS,
+    "record_struct_declaration": SymbolKind.CLASS,
+    "enum_declaration": SymbolKind.ENUM,
+    "delegate_declaration": SymbolKind.TYPE,
+}
+_TYPE_DECLS = frozenset(_TYPE_KINDS)
+#: Containers the top-level walk looks through to find type declarations.
+_TRANSPARENT = frozenset(
+    {"namespace_declaration", "file_scoped_namespace_declaration", "declaration_list"}
+)
+#: Source rewrites for what the grammar (tree-sitter-c-sharp 0.23) cannot parse. Every rewrite
+#: keeps byte length and newlines, so node positions from the repaired parse are valid against
+#: the original source. See :func:`_repair_source`.
+#:
+#: Conditional-compilation directives: handled at statement boundaries (``preproc_if`` nodes) but
+#: not *inside* a statement (an ``#if`` splitting an ``if / else if`` chain, a ``catch`` list, an
+#: initializer). Blanking the directive lines lets both branches parse; ``#pragma warning
+#: suppress`` (analyzer-specific) is rejected outright and blanked too.
+_PREPROC_LINE_RE = re.compile(rb"^[ \t]*#[ \t]*(if|elif|else|endif|pragma)\b[^\r\n]*", re.MULTILINE)
+#: ``async`` used as a plain identifier (``bool async``, ``async: true``, ``return async._x``):
+#: a contextual keyword in C#, a reserved one to the grammar. Only value positions - followed by
+#: a delimiter - are renamed, never the modifier (followed by a type or a lambda).
+_ASYNC_IDENT_RE = re.compile(rb"\basync\b(?=\s*[,;:)\].?])")
+#: Null-conditional assignment (C# 14): ``x?.P = v`` / ``xs?[i] = v``. Dropping the ``?`` in
+#: front of a ``.`` / ``[`` that leads to an assignment on the same line yields ordinary member
+#: access / indexing.
+_NULL_COND_ASSIGN_RE = re.compile(rb"\?(?=[.\[][^;\n]*?[^=!<>]=[^=>])")
+#: Collection expressions (C# 12) in argument or assignment position (``Add(x, [item])``,
+#: ``xs = [a, b];``): parsed as attributes and rejected. The brackets become parentheses (a
+#: parenthesized expression or a tuple) - spreads and empty collections are left alone. The
+#: trailing delimiter keeps ``[Attr] type name`` parameter attributes out.
+_COLLECTION_EXPR_RE = re.compile(rb"([(,=]\s*)\[([^\[\]\n]+)\](?=\s*[,);])")
+#: A verbatim string that starts and ends with an escaped quote - the ``$@"""{x}"""`` idiom for
+#: quoting a value - is lexed as a raw string literal opener. The two escape pairs become spaces
+#: (single-line only; the interpolation hole and any strings inside it are left as they are).
+_VERBATIM_QUOTED_RE = re.compile(rb'((?:\$@|@\$|@)")""([^\n]*?[^"])""("(?!"))')
+
 # ASP.NET HTTP verb attributes -> method.
 _ASPNET_ATTRS = {
     "HttpGet": "GET",
@@ -44,6 +87,47 @@ _ASPNET_ATTRS = {
     "HttpHead": "HEAD",
     "HttpOptions": "OPTIONS",
 }
+
+
+def _blank(text: bytes) -> bytes:
+    """Same length, same line structure, nothing to parse."""
+    return re.sub(rb"[^\r\n]", b" ", text)
+
+
+def _repair_source(source: bytes) -> bytes:
+    """Rewrite the constructs the grammar cannot parse, preserving every byte offset.
+
+    Applied only to files whose first parse has errors, and the result is used only when it has
+    fewer errors (see :meth:`CSharpProvider.parse`). Surveyed on EF Core (66 error files of
+    2 947) and PowerShell (34 of 1 182): conditional-compilation lines inside statements,
+    ``async`` as an identifier, null-conditional assignment and collection expressions account
+    for all but a handful (unsafe pointer code, function pointers, a verbatim string nested in
+    an interpolation hole). A declaration duplicated across ``#if`` branches collapses to one
+    symbol id at upsert.
+    """
+
+    def collection_to_parens(match: re.Match[bytes]) -> bytes:
+        prefix, inner = match.groups()
+        if b".." in inner:  # spread: no same-length equivalent
+            return match.group(0)
+        return prefix + b"(" + inner + b")"
+
+    repaired = _PREPROC_LINE_RE.sub(lambda m: _blank(m.group(0)), source)
+    repaired = _ASYNC_IDENT_RE.sub(b"asyn_", repaired)
+    repaired = _NULL_COND_ASSIGN_RE.sub(b" ", repaired)
+    repaired = _VERBATIM_QUOTED_RE.sub(rb"\1  \2  \3", repaired)
+    return _COLLECTION_EXPR_RE.sub(collection_to_parens, repaired)
+
+
+def _error_count(root: Any) -> int:
+    count = 0
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        if node.type == "ERROR" or node.is_missing:
+            count += 1
+        stack.extend(node.children)
+    return count
 
 
 class _Def:
@@ -71,7 +155,22 @@ class CSharpProvider(LanguageProvider):
         return (".cs",)
 
     def parse(self, source: bytes) -> Any:
-        return self._parser.parse(source)
+        """Parse; when the tree has errors, retry on a *position-preserving* repair of the source.
+
+        A handful of constructs the grammar cannot take derail whole files (EF Core: 66 of
+        2 947 source files, PowerShell: 34 of 1 182 - among them a 3 000-line cmdlet file that
+        yielded zero symbols). The repair (:func:`_repair_source`) rewrites them byte-for-byte so
+        every node position is valid against the original source, which is what the extractor
+        keeps reading; the repaired tree is used only when it has fewer errors than the first.
+        """
+        tree = self._parser.parse(source)
+        if not tree.root_node.has_error:
+            return tree
+        repaired = _repair_source(source)
+        if repaired == source:
+            return tree
+        retry = self._parser.parse(repaired)
+        return retry if _error_count(retry.root_node) < _error_count(tree.root_node) else tree
 
     def extract(self, tree: Any, ctx: ParseContext) -> GraphFragment:
         frag = GraphFragment()
@@ -156,53 +255,146 @@ class CSharpProvider(LanguageProvider):
     # --- pass 1 ---
 
     def _iter_type_decls(self, root):
-        # Types can be top-level or nested under namespace_declaration -> declaration_list.
+        """Top-level type declarations: under namespaces (block or file-scoped) and under any
+        ``#if`` / ``#else`` region wrapping them. A ``#if !UNIX`` around a whole file is common
+        in cross-platform .NET code (PowerShell: 280 types) and used to hide every type in it."""
         stack = [root]
         while stack:
             current = stack.pop()
-            for child in current.named_children:
-                if child.type in (
-                    "class_declaration",
-                    "interface_declaration",
-                    "struct_declaration",
-                    "record_declaration",
-                ):
+            for child in reversed(current.named_children):
+                if child.type in _TYPE_DECLS:
                     yield child
-                elif child.type in (
-                    "namespace_declaration",
-                    "file_scoped_namespace_declaration",
-                    "declaration_list",
-                ):
+                elif child.type in _TRANSPARENT or child.type.startswith("preproc_"):
                     stack.append(child)
 
     def _collect_type(
-        self, node, ctx, package, source, frag, module_symbols, class_methods, defs, unresolved
+        self,
+        node,
+        ctx,
+        package,
+        source,
+        frag,
+        module_symbols,
+        class_methods,
+        defs,
+        unresolved,
+        outer: str = "",
     ) -> None:
-        kind = SymbolKind.INTERFACE if node.type == "interface_declaration" else SymbolKind.CLASS
-        d = self._add_symbol(node, ctx, package, "", source, frag, kind)
-        module_symbols[d.name] = d.symbol_id
+        """One type declaration and, recursively, the types nested in it.
+
+        A nested type is addressed by its container chain (``Outer.Inner``) - what the symbol id
+        carries and what a task means by ``SelectExpression.Helper`` - and registered under its
+        simple name too so an intra-file ``Inner.Helper()`` resolves. Partial-class files that
+        hold one nested visitor, and the visitor's methods with them, were invisible before.
+        """
+        kind = _TYPE_KINDS[node.type]
+        d = self._add_symbol(node, ctx, package, outer, source, frag, kind)
+        qualified = f"{outer}.{d.name}" if outer else d.name
+        module_symbols.setdefault(d.name, d.symbol_id)
+        if qualified != d.name:
+            module_symbols[qualified] = d.symbol_id
         defs.append(d)
         self._add_heritage(node, source, frag, d.symbol_id, module_symbols, unresolved)
 
         body = node.child_by_field_name("body")
         if body is None:
             return
-        methods = class_methods.setdefault(d.name, {})
-        for member in body.named_children:
+        methods = class_methods.setdefault(qualified, {})
+        if qualified != d.name:
+            class_methods.setdefault(d.name, methods)
+        for member in self._iter_members(body):
             if member.type in ("method_declaration", "constructor_declaration"):
                 mkind = (
                     SymbolKind.CONSTRUCTOR
                     if member.type == "constructor_declaration"
                     else SymbolKind.METHOD
                 )
-                md = self._add_symbol(member, ctx, package, d.name, source, frag, mkind)
+                md = self._add_symbol(member, ctx, package, qualified, source, frag, mkind)
                 methods[md.name] = md.symbol_id
                 defs.append(md)
             elif member.type == "property_declaration":
                 pd = self._add_symbol(
-                    member, ctx, package, d.name, source, frag, SymbolKind.PROPERTY
+                    member, ctx, package, qualified, source, frag, SymbolKind.PROPERTY
                 )
                 defs.append(pd)
+            elif member.type in _TYPE_DECLS:
+                self._collect_type(
+                    member,
+                    ctx,
+                    package,
+                    source,
+                    frag,
+                    module_symbols,
+                    class_methods,
+                    defs,
+                    unresolved,
+                    outer=qualified,
+                )
+            elif member.type == "field_declaration":
+                self._collect_fields(member, ctx, package, qualified, source, frag, defs)
+
+    @staticmethod
+    def _iter_members(body):
+        """Direct members of a type body, looking through ``#if`` / ``#else`` regions."""
+        stack = [body]
+        while stack:
+            current = stack.pop()
+            for member in reversed(current.named_children):
+                if member.type.startswith("preproc_") and member.named_children:
+                    stack.append(member)
+                else:
+                    yield member
+
+    def _collect_fields(self, node, ctx, package, namespace, source, frag, defs) -> None:
+        """``const`` and ``static`` fields as symbols of their own (see the Java provider): the
+        setting names, well-known keys and singletons a task names. Instance fields stay part of
+        their type's search text."""
+        modifiers = {
+            node_text(child, source) for child in node.named_children if child.type == "modifier"
+        }
+        if not modifiers & {"const", "static"}:
+            return
+        declaration = next(
+            (c for c in node.named_children if c.type == "variable_declaration"), None
+        )
+        if declaration is None:
+            return
+        for declarator in declaration.named_children:
+            if declarator.type != "variable_declarator":
+                continue
+            name_node = declarator.child_by_field_name("name")
+            if name_node is None:
+                continue
+            name = node_text(name_node, source)
+            kind = SymbolKind.CONSTANT if "const" in modifiers else SymbolKind.FIELD
+            symbol_id = make_symbol_id(
+                language=self.language,
+                package=package,
+                namespace=namespace,
+                name=name,
+                signature=None,
+                kind=str(kind),
+            )
+            symbol = GraphNode(
+                NodeLabel.SYMBOL,
+                symbol_id,
+                {
+                    "name": name,
+                    "kind": str(kind),
+                    "signature": None,
+                    "visibility": self._visibility(node, source),
+                    "docstring": None,
+                    "body": body_snippet(node, source),
+                    "namespace": namespace or package or "",
+                    "file_id": ctx.file_id,
+                    "line": declarator.start_point[0] + 1,
+                    "indexed_at_commit": ctx.indexed_at_commit,
+                },
+            )
+            symbol.search_text = search_text(node, source)
+            frag.add_node(symbol)
+            frag.add_edge(GraphEdge(EdgeLabel.DEFINED_IN, symbol_id, ctx.file_id))
+            defs.append(_Def(symbol_id, name, kind, None, None))
 
     def _add_symbol(self, node, ctx, package, namespace, source, frag, kind) -> _Def:
         name_node = node.child_by_field_name("name")
@@ -312,7 +504,10 @@ class CSharpProvider(LanguageProvider):
                                     local_name="*", module_path=name.removeprefix("static ").strip()
                                 )
                             )
-                elif child.type in ("namespace_declaration", "file_scoped_namespace_declaration"):
+                elif child.type in (
+                    "namespace_declaration",
+                    "file_scoped_namespace_declaration",
+                ) or child.type.startswith("preproc_"):
                     stack.append(child)
 
     # --- route extraction (ASP.NET) ---
@@ -389,9 +584,9 @@ class CSharpProvider(LanguageProvider):
         stop = {
             "method_declaration",
             "constructor_declaration",
-            "class_declaration",
             "lambda_expression",
             "local_function_statement",
+            *_TYPE_DECLS,  # nested types are symbols of their own (pass 1)
         }
         stack = [node]
         while stack:
@@ -417,13 +612,25 @@ class CSharpProvider(LanguageProvider):
         if fn.type == "member_access_expression":
             expr = fn.child_by_field_name("expression")
             name = fn.child_by_field_name("name")
-            if (
-                expr is not None
-                and name is not None
-                and node_text(expr, source) == "this"
-                and class_name
-            ):
-                return class_methods.get(class_name, {}).get(node_text(name, source))
+            if expr is None or name is None:
+                return None
+            method = node_text(name, source)
+            if node_text(expr, source) == "this":
+                return class_methods.get(class_name, {}).get(method) if class_name else None
+            # ``Helper.Run()`` / ``Outer.Inner.Run()``: a static or nested-type call on a type
+            # declared in this file (types are registered under both spellings in pass 1).
+            qualifier = self._qualifier_chain(expr, source)
+            if qualifier is None:
+                return None
+            methods = class_methods.get(qualifier)
+            if methods is None:
+                # ``Inner.Deep.Run()`` written from the enclosing type: match the chain suffix.
+                suffix = "." + qualifier
+                candidates = [key for key in class_methods if key.endswith(suffix)]
+                if len(candidates) != 1:
+                    return None
+                methods = class_methods[candidates[0]]
+            return methods.get(method)
         return None
 
     def _unresolved_call_parts(self, call, source) -> tuple[str, str | None] | None:
@@ -495,9 +702,9 @@ class CSharpProvider(LanguageProvider):
         stop = {
             "method_declaration",
             "constructor_declaration",
-            "class_declaration",
             "lambda_expression",
             "local_function_statement",
+            *_TYPE_DECLS,  # nested types are symbols of their own (pass 1)
         }
         stack = [node]
         while stack:

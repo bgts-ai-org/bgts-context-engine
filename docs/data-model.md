@@ -16,7 +16,10 @@ in pgvector, and metadata in ordinary tables.
 
 Every node also carries a `gid` property equal to its own id, which is what edge MERGE
 statements match on. It exists so an edge can be attached without knowing the label of
-either endpoint.
+either endpoint; in practice the write path always names the labels anyway (from the
+fragment's own nodes, otherwise from the edge type — `CALLS` is Symbol → Symbol,
+`DEFINED_IN` Symbol → File, …), because an unlabelled `MATCH (a {gid})` is an Append over
+every vertex table and dominates indexing time on large graphs.
 
 **Properties.** `Repo` has `name`, `default_branch`, `last_indexed_commit` and optionally
 `remote_url`. `File` has `path`, `language`, `repo_id` and `indexed_at_commit`. `Symbol`
@@ -98,6 +101,7 @@ Applied in order by `bce migrate`, tracked in `schema_migrations`.
 | `0010_file_churn` | `file_churn` — commits per file inside the churn window |
 | `0011_search_text` | `symbol_fts.body` (the symbol's full text) folded into the FTS document, every word of the file *path* at weight C, `embeddings.chunk` and the `(kind, ref_id, chunk)` uniqueness that lets a long symbol be several vectors |
 | `0012_body_trgm` | `pg_trgm` GIN indexes on `symbol_fts.body` and `symbol_fts.file_id`, for the usage and path anchor sources (skipped with a notice where the extension is unavailable) |
+| `0013_fts_is_test` | `symbol_fts.is_test` — whether the symbol is a test (path / name rules), so the lexical and usage searches can exclude tests in the query instead of after the fetch |
 
 Note that `0005` **truncates** `embeddings`. Widening a vector column cannot preserve
 existing rows, so upgrading across that migration means re-indexing to repopulate them.
@@ -108,6 +112,10 @@ Stored vectors of another width are discarded only with `--reset-embeddings`.
 `0011` does not truncate anything, but rows indexed before it have no `body` and a single
 `chunk 0` vector, so the usage source and body search only see what has been re-indexed
 since. Run `bce index` (or `bce reindex` over the whole history) once after upgrading.
+
+`0013` adds `is_test` with a `false` default; rows indexed before it are treated as production
+symbols by the query-level filter, and the callers' Python-side check still removes them from
+the results. Re-index once so the pools fill with production symbols.
 
 ### repos
 
@@ -164,7 +172,8 @@ refuses to drop the stored vectors unless run with `--reset-embeddings`.
 
 `symbol_id` primary key, plus `repo_id`, `name`, `kind`, `signature`, `docstring`, `body`
 (the symbol's full declaration text, capped at 24 000 characters by the extractor),
-`file_id`, `line`, `indexed_at_commit`, and a stored generated, weighted `tsvector`:
+`file_id`, `line`, `indexed_at_commit`, `is_test` (the test-file / test-name verdict, written at
+upsert so searches can add `AND NOT is_test`), and a stored generated, weighted `tsvector`:
 
 | Weight | Contents |
 | --- | --- |

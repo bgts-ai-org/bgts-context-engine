@@ -2,7 +2,7 @@
 
 <div align="center">
 
-<img src="https://raw.githubusercontent.com/bgts-ai-org/bgts-context-engine/main/docs/assets/social-preview.png" alt="BGTS Context Engine" width="820">
+<img src="https://raw.githubusercontent.com/bgts-ai-org/bgts-context-engine/main/docs/assets/architecture-overview.png" alt="BGTS Context Engine" width="820">
 
 **Deterministic code-graph context for AI coding agents.**
 
@@ -16,7 +16,7 @@ that actually answer it — ranked, budgeted, and reproducible.
 [![MCP](https://img.shields.io/badge/MCP-compatible-000000.svg)](docs/mcp.md)
 [![Stars](https://img.shields.io/github/stars/bgts-ai-org/bgts-context-engine?style=flat&logo=github)](https://github.com/bgts-ai-org/bgts-context-engine/stargazers)
 
-[Quick start](#quick-start) · [Use it from your agent](#use-it-from-your-agent) · [How it works](#how-it-works) · [Supported models](#supported-models) · [Documentation](#documentation) · [Website](https://bgts-ai-org.github.io/bce-microsite/) · [Türkçe](README.tr.md)
+[Quick start](#quick-start) · [Use it from your agent](#use-it-from-your-agent) · [How it works](#how-it-works) · [Supported models](#supported-models) · [Selector models](docs/selector.md) · [Documentation](#documentation) · [Website](https://bgts-ai-org.github.io/bce-microsite/) · [Türkçe](README.tr.md)
 
 </div>
 
@@ -40,10 +40,17 @@ references, type hierarchies, HTTP routes, cross-language bridges — and answer
 by walking it. Embeddings are used in one place only: finding entry points when the task
 text names nothing recognisable. They never affect ranking.
 
-**The same task text, against the same commit, returns the same context pack.** No model in
+**The same task text, against the same commit, returns the same ranking.** No model in
 the retrieval path, no clock, no randomness. When an agent makes a bad change you can
 replay exactly what it was told, find the stage that surfaced the wrong symbol, and fix
 that stage.
+
+On top of that ranking sits one optional, clearly marked probabilistic step: a *context
+selector* that asks a decision model which of the ranked files the task actually edits and
+hands the agent those in full, the likely-related ones as one line each, and nothing else.
+On 600 real changes it cut the context by 79 % for one point of recall. It is off until
+`BCE_SELECTOR` names a model — hosted Jev, or decider-2b / decider-4b on your own GPU — and
+`--no-select` gives back the byte-exact pack.
 
 The engine is published so people can run it. Organisations that want the same thing
 inside their own perimeter — help with indexing, deployment, scoring tuned to their
@@ -103,7 +110,11 @@ indexed), pointing at the engine's `.env`:
 ```bash
 bce --env-file /path/to/engine/.env cursor-init --repo-id my-service   # Cursor
 bce --env-file /path/to/engine/.env claude-init --repo-id my-service   # Claude Code
+bce --env-file /path/to/engine/.env opencode-init --repo-id my-service # OpenCode
 ```
+
+`opencode-init` merges the server into `opencode.json` (OpenCode's `mcp` format) and writes
+the same agent guidance as a marked section of `AGENTS.md`.
 
 `cursor-init` writes `.cursor/mcp.json` (merged into an existing one) and the rule
 `.cursor/rules/bgts-context-engine.mdc`, which tells the agent to call
@@ -115,6 +126,21 @@ before its first turn — the flow the agent benchmark measured (−20 % tokens,
 output, same or better checks; 14 tasks on a React/TypeScript codebase, same model and machine).
 Cursor's prompt hook cannot add context, so there the rule does that job. `--no-hook`,
 `--repo-id` (repeatable) and `--bce-command` adjust the files; both commands are safe to rerun.
+
+**Two agent modes.** `BCE_AGENT_MODE` sets how far the agent relies on the answer. All three
+init commands write it into the server entry's `env` block (`environment` in
+`opencode.json`); change it there and reload the MCP server to switch:
+
+- `hint` (**starting point**, the default): the agent starts from `payload.files`, adds the
+  files of identifiers the answer does not cover (`coverage.unresolved_identifiers`), and
+  searches only when the engine says the answer is likely incomplete.
+- `trust` (**accept as correct**): `payload.files` is the answer; the agent opens those files
+  and does not search the tree.
+
+The server states the active mode's steps in the tool description and in every answer's
+`payload.workflow`, and the rules tell the agent to follow them, so switching needs no rule
+edit. `--mode hint|trust` picks it at init; a rerun keeps the configured value. Details:
+[docs/mcp.md](docs/mcp.md#agent-mode).
 
 After you add or change the MCP config, **restart Cursor or VS Code** (or Command Palette
 → “Developer: Reload Window”). The server should then show as enabled with eight tools (ten with indexing enabled).
@@ -216,6 +242,12 @@ genuinely relevant symbols fit in 1500 tokens — short enough for an agent to c
 turn. Every item also names its `file_id` and `line`, so the agent opens the file instead of
 searching for the symbol.
 
+With the context selector on, items also carry a **`tier`**: `full` for the two or three
+files the task most likely edits, `stub` — a single `path - N candidate symbols: …` line —
+for files that are probably related, and `coverage.selector` says what was cut and why
+([docs/retrieval.md](docs/retrieval.md#context-selection-optional); models and setup in
+[docs/selector.md](docs/selector.md)).
+
 ## How it works
 
 ```
@@ -229,6 +261,8 @@ task text
    │                distance, leaf penalty, edge provenance
    ├─ scope         drop repositories this caller may not see
    ├─ narrowing     keep the top N
+   ├─ selection     optional: a decision model tiers the N files into
+   │                full / one-line stub / dropped
    ├─ assembly      fit the token budget, cheaper detail further out
    └─ coverage      report how much of this is trustworthy
 ```
@@ -248,6 +282,9 @@ The full formula, every weight, and the confidence thresholds are in
   `IMPORTS`, HTTP `ROUTES_TO` handlers, and `WHY:` comments bound to what they explain.
 - **Deterministic by construction.** Sorted traversal, stable tiebreaks, versioned scoring
   weights. `bce bench` verifies it by running each case repeatedly and comparing output.
+- **A fifth of the tokens, optionally.** The context selector keeps the files a task edits
+  and lists the rest in one line each: 8 310 → 1 714 tokens per answer on 600 real changes,
+  file recall 94.4 → 93.4, fail-open to the plain ranking.
 - **Six languages.** Python, JavaScript and TypeScript built in; Java, C# and Go behind the
   `langs` extra. [Adding one](docs/languages.md#adding-a-language) touches two files.
 - **Cross-language call edges.** React Native and Expo bridges connect
@@ -294,6 +331,23 @@ Voyage is a hosted API — `pip install "bgts-context-engine[embed]"` and
   — the smaller sibling of 1.5b, for hosts that cannot hold 1.5B parameters.
 - [`Nomic Embed Code`](https://huggingface.co/nomic-ai/nomic-embed-code) — an open 7B
   code retriever.
+
+### Selector models
+
+The optional [context selector](#what-comes-back) runs one of these decision models over the
+ranked answer. Set `BCE_SELECTOR` to its name; unset (`off`), the engine returns the plain
+ranking at K=20.
+
+| `BCE_SELECTOR` | Model | Runs on | File recall @50 · tokens* |
+| --- | --- | --- | --- |
+| `jev` | [Jev 1.13](https://openrouter.ai/typesafe/jev-1.13) (`typesafe/jev-1.13`, TypeSafe) | hosted: [OpenRouter](https://openrouter.ai/docs/guides/community/jev) or [TypeSafe's API](https://www.typesafeai.org/guides/jev-api-quickstart) | 93.3 · 1 121 |
+| `decider-2b` | [Mapika/decider-2b](https://huggingface.co/Mapika/decider-2b) (open weights, Apache-2.0) | your GPU (16 GB+), via `decider.serve` | 89.8 · 1 355 |
+| `decider-4b` | [Mapika/decider-4b](https://huggingface.co/Mapika/decider-4b) (open weights, Apache-2.0) | your GPU (32 GB), via `decider.serve` | 92.1 · 1 193 |
+
+\* 600 real changes over 12 repositories, K=50, against 94.4 recall and 8 310 tokens without
+a selector. Jev needs `OPENROUTER_API_KEY` and sends task text and code excerpts to a third
+party; the deciders keep everything inside your perimeter and need no key.
+**Setup, the decider server install and RunPod notes: [docs/selector.md](docs/selector.md).**
 
 ## Where it fits
 
@@ -359,6 +413,7 @@ actually ask for reorders this list.
 | --- | --- |
 | [Architecture](docs/architecture.md) | the deterministic line, the three layers, indexing |
 | [Retrieval](docs/retrieval.md) | anchors, expansion, every scoring weight, confidence |
+| [Selector models](docs/selector.md) | Jev, decider-2b and decider-4b: choosing, installing, configuring the context selector |
 | [Data model](docs/data-model.md) | node labels, edge types, tables, symbol identity |
 | [MCP and API](docs/mcp.md) | every tool and endpoint, MCP configuration, the CLI |
 | [Languages](docs/languages.md) | what each parser extracts, and how to add one |

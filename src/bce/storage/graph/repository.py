@@ -10,11 +10,46 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from bce.domain.enums import NodeLabel
+from bce.domain.enums import EdgeLabel, NodeLabel
 from bce.domain.models import GraphEdge, GraphFragment, GraphNode
+from bce.domain.testness import is_test_symbol
 from bce.storage.graph.client import GraphClient
 
 _REFERENCE_EDGE_TYPES = "['CALLS', 'REFERENCES']"
+
+#: Endpoint labels fixed by the edge semantics (``EdgeLabel`` docs). Cross-file edges arrive from
+#: the linker as edge-only fragments, so their endpoints are never in the fragment's node list;
+#: without these the MATCH would fall back to the unlabelled Append over every vertex table.
+_EDGE_ENDPOINTS: dict[EdgeLabel, tuple[NodeLabel, NodeLabel]] = {
+    EdgeLabel.DEFINED_IN: (NodeLabel.SYMBOL, NodeLabel.FILE),
+    EdgeLabel.BELONGS_TO: (NodeLabel.FILE, NodeLabel.REPO),
+    EdgeLabel.CALLS: (NodeLabel.SYMBOL, NodeLabel.SYMBOL),
+    EdgeLabel.INHERITS: (NodeLabel.SYMBOL, NodeLabel.SYMBOL),
+    EdgeLabel.IMPLEMENTS: (NodeLabel.SYMBOL, NodeLabel.SYMBOL),
+    EdgeLabel.REFERENCES: (NodeLabel.SYMBOL, NodeLabel.SYMBOL),
+    EdgeLabel.ROUTES_TO: (NodeLabel.ROUTE, NodeLabel.SYMBOL),
+    EdgeLabel.EXPLAINS: (NodeLabel.DESIGN_NOTE, NodeLabel.SYMBOL),
+}
+#: ``IMPORTS`` joins a File and a Module in either direction (provider: File -> Module, linker:
+#: Module -> File), so only the complement of a known endpoint can be inferred.
+_IMPORT_COMPLEMENT = {NodeLabel.FILE: NodeLabel.MODULE, NodeLabel.MODULE: NodeLabel.FILE}
+
+
+def _endpoint_labels(
+    edge: GraphEdge, labels: dict[str, NodeLabel] | None
+) -> tuple[NodeLabel | None, NodeLabel | None]:
+    src = labels.get(edge.src_id) if labels else None
+    dst = labels.get(edge.dst_id) if labels else None
+    fixed = _EDGE_ENDPOINTS.get(edge.label)
+    if fixed is not None:
+        return src or fixed[0], dst or fixed[1]
+    if edge.label is EdgeLabel.IMPORTS:
+        if src is None and dst is not None:
+            src = _IMPORT_COMPLEMENT.get(dst)
+        elif dst is None and src is not None:
+            dst = _IMPORT_COMPLEMENT.get(src)
+    return src, dst
+
 
 _FTS_TOKEN_RE = re.compile(r"\w+", re.UNICODE)
 #: ``ts_rank`` normalization: 1 divides the rank by ``1 + log(document length)``. Since the FTS
@@ -65,6 +100,8 @@ class GraphRepository:
         self._fts_ready: bool | None = None
         # Lazily probed: whether symbol_fts.body exists (migration 0011 applied).
         self._fts_body_ready: bool | None = None
+        # Lazily probed: whether symbol_fts.is_test exists (migration 0013 applied).
+        self._fts_is_test_ready: bool | None = None
         # Lazily probed: whether the file_churn table exists (migration 0010 applied).
         self._churn_ready: bool | None = None
 
@@ -147,6 +184,33 @@ class GraphRepository:
                     self._fts_body_ready = False
         return self._fts_body_ready
 
+    def _fts_is_test_available(self) -> bool:
+        """Whether ``symbol_fts.is_test`` exists (migration 0013: tests excluded in the query)."""
+        if self._fts_is_test_ready is None:
+            conn = getattr(self.client, "conn", None)
+            self._fts_is_test_ready = False
+            if conn is not None:
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "SELECT 1 FROM information_schema.columns "
+                            "WHERE table_name = 'symbol_fts' AND column_name = 'is_test'"
+                        )
+                        self._fts_is_test_ready = cur.fetchone() is not None
+                except Exception:
+                    self._fts_is_test_ready = False
+        return self._fts_is_test_ready
+
+    def _test_filter_sql(self, exclude_tests: bool, alias: str = "") -> str:
+        """``AND NOT <alias>is_test`` when the caller excludes tests and the column exists.
+
+        Snapshots before migration 0013 have no column: the filter is skipped and the callers'
+        Python-side check (``is_test_symbol`` on the fetched rows) still applies, as before.
+        """
+        if not exclude_tests or not self._fts_is_test_available():
+            return ""
+        return f" AND NOT {alias}is_test"
+
     def _upsert_symbol_fts(self, node: GraphNode) -> None:
         """Mirror a Symbol node into the FTS side table (same transaction, P5).
 
@@ -184,6 +248,10 @@ class GraphRepository:
             values.append(search_text if search_text is not None else props.get("body"))
             columns += ", body"
             updates += ", body = EXCLUDED.body"
+        if self._fts_is_test_available():
+            values.append(is_test_symbol(node.node_id, str(props.get("name") or ""), file_id))
+            columns += ", is_test"
+            updates += ", is_test = EXCLUDED.is_test"
         placeholders = ", ".join(["%s"] * len(values))
         self.client.conn.execute(
             f"INSERT INTO symbol_fts ({columns}) VALUES ({placeholders}) "  # noqa: S608
@@ -191,21 +259,39 @@ class GraphRepository:
             tuple(values),
         )
 
-    def upsert_edge(self, edge: GraphEdge) -> None:
+    def upsert_edge(
+        self,
+        edge: GraphEdge,
+        labels: dict[str, NodeLabel] | None = None,
+    ) -> None:
+        """MERGE one edge.
+
+        The MATCH names the endpoint labels: from ``labels`` (node id -> label, usually the nodes
+        of the same fragment) when the endpoint is known, otherwise from the edge semantics
+        (``_EDGE_ENDPOINTS``; cross-file CALLS / REFERENCES edges are Symbol -> Symbol). An
+        unlabelled ``MATCH (a {gid: ..})`` is an Append over every label table; inside the long
+        indexing transaction (no fresh planner statistics yet) that plan degrades to tens or
+        hundreds of milliseconds per edge on large graphs, while the labelled lookup is a single
+        GIN probe per endpoint. Only an IMPORTS edge with both endpoints unknown stays unlabelled.
+        """
         set_sql, params = _set_clause("r", edge.merged_properties())
         params["src"] = edge.src_id
         params["dst"] = edge.dst_id
-        query = f"MATCH (a {{gid: $src}}), (b {{gid: $dst}}) MERGE (a)-[r:{edge.label}]->(b)"
+        src_label, dst_label = _endpoint_labels(edge, labels)
+        a = f"a:{src_label}" if src_label else "a"
+        b = f"b:{dst_label}" if dst_label else "b"
+        query = f"MATCH ({a} {{gid: $src}}), ({b} {{gid: $dst}}) MERGE (a)-[r:{edge.label}]->(b)"
         if set_sql:
             query += f" SET {set_sql}"
         self.client.execute(query, params)
 
     def upsert_fragment(self, fragment: GraphFragment) -> None:
         frag = fragment.deduped()
+        labels = {node.node_id: node.label for node in frag.nodes}
         for node in frag.nodes:
             self.upsert_node(node)
         for edge in frag.edges:
-            self.upsert_edge(edge)
+            self.upsert_edge(edge, labels)
 
     def delete_file_subgraph(self, file_id: str) -> None:
         """Remove a file's symbols and the file node (for incremental re-index, Phase 1)."""
@@ -798,22 +884,29 @@ class GraphRepository:
         return _as_int(out_rows) + _as_int(in_rows)
 
     def lexical_search(
-        self, term: str, *, repo_ids: list[str] | None = None, limit: int = 20
+        self,
+        term: str,
+        *,
+        repo_ids: list[str] | None = None,
+        limit: int = 20,
+        exclude_tests: bool = False,
     ) -> list[dict[str, Any]]:
         """Deterministic keyword match on symbol name/signature/docstring.
 
         Prefers the Postgres FTS side table (``ts_rank`` DESC, then symbol_id - reproducible) when
         migration 0006 is applied; otherwise falls back to the AGE Cypher CONTAINS path (name only,
         ordered by name then symbol_id). Feeds hybrid search + anchor source #4 without any model.
+        ``exclude_tests`` keeps test symbols out of the ``limit`` rows (migration 0013; on older
+        snapshots it is a no-op and the caller filters the rows itself).
         """
         if self._fts_available():
-            rows = self._lexical_search_fts(term, repo_ids, limit)
+            rows = self._lexical_search_fts(term, repo_ids, limit, exclude_tests)
             if rows is not None:
                 return rows
         return self._lexical_search_contains(term, repo_ids, limit)
 
     def _lexical_search_fts(
-        self, term: str, repo_ids: list[str] | None, limit: int
+        self, term: str, repo_ids: list[str] | None, limit: int, exclude_tests: bool = False
     ) -> list[dict[str, Any]] | None:
         """FTS path: per-token prefix matching (``tok:*``) so 'calc' still finds 'calculate_cost'.
 
@@ -829,6 +922,7 @@ class GraphRepository:
         if repo_ids:
             where += " AND repo_id = ANY(%s)"
             params.append(repo_ids)
+        where += self._test_filter_sql(exclude_tests)
         params.append(limit)
         tier = _MATCH_TIER_SQL.format(doc="document", query="to_tsquery('simple', %s)")
         sql = (
@@ -855,14 +949,21 @@ class GraphRepository:
         ]
 
     def lexical_search_many(
-        self, terms: list[str], *, repo_ids: list[str] | None = None, limit: int = 20
+        self,
+        terms: list[str],
+        *,
+        repo_ids: list[str] | None = None,
+        limit: int = 20,
+        exclude_tests: bool = False,
     ) -> dict[str, list[dict[str, Any]]]:
         """``term -> best ``limit`` keyword matches`` for many terms in a single FTS query.
 
         Anchor finding asks for one pool per content token, and a PR description yields dozens of
         them; per-term round-trips dominated retrieval latency. Ranking is unchanged - the window
         function reproduces the per-term ``ORDER BY rank DESC, symbol_id ASC LIMIT n`` exactly.
-        Falls back to per-term queries when the FTS side table is absent.
+        Falls back to per-term queries when the FTS side table is absent. With ``exclude_tests``
+        the ``limit`` rows are production symbols only (see :meth:`lexical_search`): a pool that
+        tests would otherwise fill says "generic" about a term that names three helpers.
         """
         unique = sorted({t for t in terms if t})
         if not unique:
@@ -887,6 +988,7 @@ class GraphRepository:
         if repo_ids:
             where += " AND f.repo_id = ANY(%s)"
             params.append(repo_ids)
+        where += self._test_filter_sql(exclude_tests, alias="f.")
         params.append(limit)
         tier = _MATCH_TIER_SQL.format(doc="f.document", query="to_tsquery('simple', q.tsq)")
         sql = (
@@ -953,12 +1055,84 @@ class GraphRepository:
                 out[suffix] = rows if 0 < len(rows) <= limit else []
         return out
 
+    def files_in_directories(self, dir_ids: list[str], *, limit: int = 60) -> dict[str, list[str]]:
+        """Indexed files directly inside each directory (``"repo:src/a" -> ["repo:src/a/x.py"]``).
+
+        Only files with at least one symbol count (read from ``symbol_fts``); subdirectories are
+        not descended. A directory holding more than ``limit`` files is returned empty: a flat
+        500-file package says nothing about which of them changes together.
+        """
+        if not dir_ids or not self._fts_available():
+            return {}
+        out: dict[str, list[str]] = {}
+        with self.client.conn.cursor() as cur:
+            for dir_id in dir_ids:
+                clean = dir_id.replace("\\", "/").rstrip("/")
+                if not clean:
+                    continue
+                escaped = clean.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                cur.execute(
+                    "SELECT DISTINCT file_id FROM symbol_fts "
+                    "WHERE file_id LIKE %s AND file_id NOT LIKE %s ORDER BY file_id LIMIT %s",
+                    (f"{escaped}/%", f"{escaped}/%/%", int(limit) + 1),
+                )
+                rows = [r[0] for r in cur.fetchall()]
+                out[dir_id] = rows if 0 < len(rows) <= limit else []
+        return out
+
+    def files_by_basename_pattern(
+        self, patterns: list[str], *, repo_ids: list[str] | None = None, limit: int = 8
+    ) -> dict[str, list[str]]:
+        """Indexed files whose *basename* matches each wildcard pattern (``*`` = any run).
+
+        ``*TypeMappingSource.cs`` finds ``.../SqliteTypeMappingSource.cs``,
+        ``.../SqlServerTypeMappingSource.cs`` and ``.../RelationalTypeMappingSource.cs`` - the
+        per-provider variants of one abstraction that a change to it has to follow;
+        ``Immutable*Map.java`` finds the members of a family. Case insensitive; the wildcard
+        never crosses a ``/``; a pattern matching more than ``limit`` files names a family too
+        large to be a change set and is returned empty.
+        """
+        if not patterns or not self._fts_available():
+            return {}
+        out: dict[str, list[str]] = {}
+        with self.client.conn.cursor() as cur:
+            for pattern in patterns:
+                clean = pattern.replace("\\", "/").strip("/")
+                if not clean or "/" in clean or clean.strip("*") == "":
+                    continue
+                escaped = clean.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                like = escaped.replace("*", "%")
+                where = "(file_id ILIKE %s OR file_id ILIKE %s)"
+                params: list[Any] = [f"%/{like}", f"%:{like}"]
+                if repo_ids:
+                    where += " AND repo_id = ANY(%s)"
+                    params.append(repo_ids)
+                # Over-fetch: a middle wildcard may have crossed a ``/`` in SQL; the basename
+                # check below drops those before the family-size rule is applied.
+                params.append(4 * (int(limit) + 1))
+                cur.execute(
+                    f"SELECT DISTINCT file_id FROM symbol_fts WHERE {where} "  # noqa: S608
+                    "ORDER BY file_id LIMIT %s",
+                    params,
+                )
+                rx = re.compile(
+                    "^" + ".*".join(re.escape(p) for p in clean.split("*")) + "$", re.IGNORECASE
+                )
+                rows = [
+                    r[0]
+                    for r in cur.fetchall()
+                    if rx.match(r[0].rsplit("/", 1)[-1].rsplit(":", 1)[-1])
+                ]
+                out[pattern] = rows if 0 < len(rows) <= limit else []
+        return out
+
     def body_mentions(
         self,
         mentions: list[tuple[str, str]],
         *,
         repo_ids: list[str] | None = None,
         limit: int = 50,
+        exclude_tests: bool = False,
     ) -> dict[tuple[str, str], tuple[int, list[dict[str, Any]]]]:
         """Symbols whose *text* contains a code fragment of the task (the usage anchor source).
 
@@ -968,6 +1142,8 @@ class GraphRepository:
         ``limit`` rows by symbol_id)``: the total tells the caller how generic the fragment is
         (``useState`` is in every component; ``localStorage`` in a few dozen symbols), the rows
         are what it anchors on. Needs ``symbol_fts.body`` (migration 0011); ``{}`` before it.
+        With ``exclude_tests`` both the total and the rows count production symbols only, so a
+        key quoted by three services and forty tests is still the coupling it is.
         """
         if not mentions or not self._fts_available() or not self._fts_body_available():
             return {}
@@ -994,6 +1170,7 @@ class GraphRepository:
                 if repo_ids:
                     where += " AND repo_id = ANY(%s)"
                     params.append(repo_ids)
+                where += self._test_filter_sql(exclude_tests)
                 params.append(int(limit))
                 cur.execute(
                     "SELECT symbol_id, name, kind, file_id, line, count(*) OVER () AS total "

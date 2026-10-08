@@ -401,11 +401,14 @@ def _lexical_anchors(
     pool = max(1, int(pool))
 
     hits_by_term = bulk.lexical_hits(
-        repository, unique_terms + unique_phrases, repo_ids=repo_ids, limit=pool
+        repository,
+        unique_terms + unique_phrases,
+        repo_ids=repo_ids,
+        limit=pool,
+        exclude_tests=not include_tests,
     )
     term_weight: dict[str, float] = {}
     matched: dict[str, dict[str, float]] = {}
-    phrase_hits: dict[str, int] = {}
     rows: dict[str, dict] = {}
     for term in unique_terms:
         hits = hits_by_term.get(term) or []
@@ -418,10 +421,15 @@ def _lexical_anchors(
             tier = MATCH_TIER_WEIGHT.get(str(row.get("match_tier") or "a"), 1.0)
             per_term = matched.setdefault(sid, {})
             per_term[term] = max(per_term.get(term, 0.0), tier)
+    phrase_hits: dict[str, int] = {}
     for phrase in unique_phrases:
         hits = hits_by_term.get(phrase) or []
         if len(hits) >= pool:
             continue  # both words are everywhere together: the pair names nothing either
+        # The bonus is deliberately flat. Scaling it by the words' rarity, the pair's rarity or
+        # the match tier was measured on 12 repositories: no gain at K=50 anywhere, and at K=20
+        # a wash that merely reshuffled tasks in every language (-4 file hits on prometheus,
+        # +-1 elsewhere). A pair that survives the saturation test above is evidence enough.
         for row in hits:
             sid = row.get("symbol_id")
             if not sid:
@@ -467,12 +475,13 @@ def _usage_anchors(
     Repositories without body search (pre-0011 snapshots, unit-test fakes) yield nothing.
     """
     mentions = mention_terms(task_text)
-    lookup = getattr(repository, "body_mentions", None)
-    if not mentions or not callable(lookup):
+    if not mentions or not callable(getattr(repository, "body_mentions", None)):
         return []
     pool = max(2, int(pool))
     try:
-        found = lookup(mentions, repo_ids=repo_ids, limit=pool)
+        found = bulk.body_mentions(
+            repository, mentions, repo_ids=repo_ids, limit=pool, exclude_tests=not include_tests
+        )
     except NotImplementedError:
         return []
     cap = SOURCE_STRENGTH["usage"]
@@ -576,6 +585,7 @@ def _shared_literals(
     repo_ids: list[str] | None,
     *,
     pool: int,
+    include_tests: bool = False,
 ) -> dict[str, tuple[float, list[dict]]]:
     """``literal -> (strength, symbols whose text quotes it)`` for the roots' namespaced literals.
 
@@ -586,8 +596,7 @@ def _shared_literals(
     with the strongest root that carries the literal. Empty for repositories without body search.
     """
     bodies_of = getattr(repository, "symbol_bodies", None)
-    lookup = getattr(repository, "body_mentions", None)
-    if not callable(bodies_of) or not callable(lookup):
+    if not callable(bodies_of) or not callable(getattr(repository, "body_mentions", None)):
         return {}
     try:
         bodies = bodies_of(roots)
@@ -602,7 +611,13 @@ def _shared_literals(
         return {}
     literal_pool = max(2, math.ceil(pool * IMPACT_LITERAL_POOL_SHARE))
     try:
-        found = lookup([("literal", lit) for lit in weight], repo_ids=repo_ids, limit=literal_pool)
+        found = bulk.body_mentions(
+            repository,
+            [("literal", lit) for lit in weight],
+            repo_ids=repo_ids,
+            limit=literal_pool,
+            exclude_tests=not include_tests,
+        )
     except NotImplementedError:
         return {}
     out: dict[str, tuple[float, list[dict]]] = {}
@@ -670,7 +685,12 @@ def _impact_anchors(
         for sid in users:
             evidence.setdefault(sid, {})[f"user:{root}"] = strength
     shared = _shared_literals(
-        repository, roots, {r: result.strength[r] for r in roots}, repo_ids, pool=pool
+        repository,
+        roots,
+        {r: result.strength[r] for r in roots},
+        repo_ids,
+        pool=pool,
+        include_tests=include_tests,
     )
     for literal in sorted(shared):
         weight, rows = shared[literal]

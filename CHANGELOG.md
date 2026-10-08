@@ -7,6 +7,163 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-10-08
+
+Java and C# were the weak languages of the 12-repository benchmark
+(`local_bench/multi_repo_bench`: 87.9 and 90.4 file recall at K=50 against 94–98 for the
+others). The causes were general — test symbols filling the lexical pools of test-heavy
+repositories, nested types never indexed, whole C# files hidden behind `#if` or lost to a
+parse error — and so are the changes; nothing is fitted to the benchmark's tasks.
+
+### Added
+
+- **Agent mode: a switch between the two workflows the agent benchmark measured.**
+  `BCE_AGENT_MODE` is `hint` (the default: the answer is the starting point; add the files of
+  `coverage.unresolved_identifiers`, search only when `coverage.likely_incomplete` says so) or
+  `trust` (the answer is the set of locations; no searching the tree). `bce serve-mcp` reads it
+  once and states the active workflow in the server instructions, at the end of the
+  `get_context_for_task` description and in every answer's `payload.workflow`; an unknown
+  value fails the start. `cursor-init`, `claude-init` and `opencode-init` write it into the
+  server entry's environment block (`.cursor/mcp.json`, `.mcp.json`, `opencode.json`), which
+  is where the user flips it; a rerun keeps the configured value, `--mode hint|trust`
+  overrides it. The rules and `CLAUDE.md` / `AGENTS.md` sections no longer carry a search
+  policy of their own and point at `payload.workflow` instead, so switching needs no rule
+  rewrite. `bce precontext` (the Claude Code hook) reads the mode from the session's
+  `.mcp.json`, and its block now also lists the uncovered identifiers with their files, the
+  files the selector left out (`Also ranked`) and the likely-incomplete flag. On 600 tasks
+  with the Cursor CLI (`local_bench/agent_mcp_bench`, prompt v4) the two arms scored 92.9 and
+  92.3 % file recall at 59k and 45k tokens per run, against 95.6 % and 264k for the CLI alone.
+- **Context selector: the K ranked candidates are tiered before assembly.** A K=50 answer
+  found 94.4 % of the files a change touches but spread them over ~20 files, ~18 of them
+  noise, so an agent either read everything or guessed. `get_context_for_task` now runs an
+  optional stage after narrowing (`bce.core.selector`): two parallel requests to Jev
+  (TypeSafe's decision model, `typesafe/jev-1.13` via the OpenRouter Decisions API) ask, per
+  distinct file, *does the task edit this file?* (`noul` → p) and, per symbol, a 0–3
+  relevance score. Files with p ≥ 0.5 plus the engine's first file keep their symbols at
+  normal detail (symbols scored < 1 dropped); files with p ≥ 0.05 become one `reference`
+  line (`tier: "stub"`, path + symbol names), at most 12 files listed; the rest is dropped.
+  Items carry `tier`, `file_relevance` and `symbol_relevance`; `coverage.selector` reports
+  status, tier counts, latency and cost. The stage never adds a candidate and fails open: an
+  error or timeout returns the ranked answer unchanged with `status: "error"`.
+  On the 12-repository benchmark (600 tasks, K=50, `local_bench/multi_repo_bench`, tag v3
+  against v2): tokens handed to the agent 8 310 → 1 714 (−79 %), distinct files 20.5 → 10.9
+  (2.3 full + 8.5 stub), file recall 94.4 → 93.4, first 20 symbols 91.0 → 92.5, hit@1
+  450 → 493, MRR 0.826 → 0.858; +575 ms per query, $0.42 for the 600 tasks. The policy was
+  chosen on the same corpus against a Voyage `rerank-2.5` cross-encoder, a score-gap
+  heuristic and three other Jev question shapes (`select_bench.py`). Jev is not
+  bit-deterministic: probabilities jitter by ~0.01 between identical calls; in three repeated
+  runs the flips sat at the stub boundary on files the change never touched and recall moved
+  by ≤ 0.6 points. Configured with `BCE_SELECTOR` (`off` by default, `jev`, `decider-2b`,
+  `decider-4b`) and `BCE_SELECTOR_*`; `bce context --no-select` returns the raw ranking.
+  With the selector on, `max_candidates` left unset means K=50 (`SELECTED_MAX_CANDIDATES`),
+  otherwise 20; REST, MCP, `bce context` and `bce precontext` no longer send a K of their own.
+  The assembler reserves the stubs' cost (≤ 40 % of the budget) and the full tier is emitted
+  round-robin across files, so at the default 1500 tokens neither the stubs nor a second or
+  third full file are cut by the first file's bodies. `bce precontext` renders stubs as
+  `` `path` stub: N candidate symbol(s): … ``.
+- **Open-weight selector models: `BCE_SELECTOR=decider-2b` / `decider-4b`.** The selector
+  also talks to [Mapika/decider-2b](https://huggingface.co/Mapika/decider-2b) and
+  [Mapika/decider-4b](https://huggingface.co/Mapika/decider-4b) behind a self-hosted
+  `decider.serve` (same System One wire format as Jev), so the request never leaves the
+  perimeter and has no per-query bill. Each value carries its defaults (model, URL
+  `http://127.0.0.1:8000/v1/systemone`, timeout 10 s, no API key; Jev keeps OpenRouter,
+  `typesafe/jev-1.13` and 3 s). `BCE_SELECTOR_API_KEY` is a bearer token for TypeSafe's own
+  API (`https://api.typesafe.ai/v1/systemone`) or a proxy in front of a decider; an OpenRouter
+  key is never sent to a decider. On the 12-repository benchmark under Jev's thresholds:
+  file recall @50 93.3 (Jev) / 92.1 (decider-4b) / 89.8 (decider-2b), 1 121 / 1 193 / 1 355
+  tokens, selector latency 0.59 / 2.67 / 1.66 s. `coverage.selector` adds `method` and
+  `served_model`; a decider server that loaded other weights than `BCE_SELECTOR` names is
+  logged once. `bce serve` prints and `bce serve-mcp` logs the active selector at startup.
+  Setup in [docs/selector.md](docs/selector.md).
+- **Test symbols are excluded in the query.** Migration `0013_fts_is_test` adds
+  `symbol_fts.is_test`, written at upsert from the path / name rules
+  (`bce.domain.testness.is_test_symbol`, moved out of the orchestrator so storage can share
+  it). `lexical_search`, `lexical_search_many` and `body_mentions` take `exclude_tests` and
+  add `AND NOT is_test`, so a term's pool of rows is filled with production symbols. Before,
+  the rows were filtered after the fetch: in Guava and EF Core (60 % of symbols are tests)
+  the pool of 25–50 came back mostly tests, the production symbols never entered it and
+  every term looked saturated. Snapshots without the column behave as before.
+- **Java: nested types, enum bodies, records, annotation types, static fields.** Types
+  declared inside other types are symbols with their container chain
+  (`LocalCache.Segment.lookup`), methods in an enum body after the constants are indexed,
+  `record` / `@interface` declarations are types, `static` fields and interface constants
+  become `constant` / `field` symbols, and `Inner.helper()` calls resolve inside the file.
+  Guava had 5 100 of its 13 000 methods in nested types, Netty 3 300; none was indexed.
+- **C#: `#if` regions, nested types, enums, delegates, fields, parse recovery.** Type
+  declarations under `preproc_if` / `preproc_else` (a whole file behind `#if !UNIX`: 280
+  types in PowerShell) and members declared per branch are indexed; nested types carry their
+  container chain; `enum` → `enum`, `delegate` → `type`, `const` / `static` fields →
+  `constant` / `field`; `Type.Method()` calls on a type in the file resolve. A file whose
+  parse has errors is re-parsed after a byte-for-byte repair of the constructs the grammar
+  rejects (a `#if` splitting one statement, `async` as an identifier, null-conditional
+  assignment, collection expressions, `$@"""{x}"""`), keeping the tree only when it has
+  fewer errors; positions stay valid against the original source. EF Core: 64 → 9 files
+  without symbols (all `AssemblyInfo` / `TypeForwards`), 66 → 6 files with parse errors,
+  +3 700 symbols; PowerShell: 49 → 5 and 34 → 10, +8 900 symbols.
+
+### Changed
+
+- The README banner is the architecture overview diagram: `docs/assets/architecture-overview.png`
+  in `README.md`, `architecture-overview.tr.png` in `README.tr.md`. `social-preview.png` stays
+  the repository social preview.
+- The assembler honours a `detail_level` set on an item (the selector demotes stub files to
+  `reference`) and renders an item's `summary` as its reference line; unknown levels fall
+  back to the distance rule.
+- `local_bench/multi_repo_bench/run_bench.py`: `--no-select`, `--max-tokens` (default
+  unbounded; 1500 measures what an agent receives); reports gain *Token* and
+  *Dosya* columns, per-task tier counts (⚠ when an expected file arrived only as a stub) and
+  selector statistics; `compare` shows token / file / symbol / latency deltas.
+- **URLs contribute no query terms**, and contractions (`don`, `doesn`, `isn`, …) are
+  stop-words. A PR link used to add `https github com org repo pull` to every task.
+- The word-pair (phrase) bonus stays flat. Three scaled forms — by the words' rarity, by
+  the pair's rarity, by the match tier — were measured on the 12-repository benchmark: no
+  gain at K=50 anywhere and a reshuffle at K=20 that moved single tasks in every language
+  (net −4 file hits on prometheus, ±1 elsewhere, ±1 on guava). The code now says why.
+
+### Fixed
+
+- **A dropped Voyage connection no longer fails the indexing run.** The `voyageai` client
+  retries rate limits and 5xx responses itself but raises `APIConnectionError` at once when
+  the API closes a connection without a response — a few times per hour on a long run, and
+  fatal 20 minutes into indexing netty. `VoyageEncoder` now retries those (and the SDK's
+  transient errors) three times with a growing pause; a query embedding gets two bounded
+  attempts so a search can still degrade to lexical quickly; rejected requests are raised
+  at once.
+- **Indexing time on large repositories.** Edge upserts matched their endpoints without a
+  label (`MATCH (a {gid}), (b {gid})`), which AGE plans as an Append over every label
+  table; inside the single indexing transaction, with no fresh planner statistics, that
+  plan cost ~30–50 ms per edge on a 20 000-symbol graph (netty: 74 min, guava: 84 min).
+  `GraphRepository.upsert_fragment` now passes the fragment's node labels so each endpoint
+  is one GIN probe (`MATCH (a:Symbol {gid}), (b:File {gid})`, ~2.4 ms, same edge counts).
+  Cross-file edges come from the linker as edge-only fragments, so their endpoints were
+  never in that map and every one of them (the bulk of a Java graph: 100–300 ms each on
+  guava) still took the unlabelled path; the endpoint labels are now derived from the edge
+  type when the fragment does not name them (`CALLS`/`REFERENCES`/`INHERITS`/`IMPLEMENTS`
+  are Symbol → Symbol, `ROUTES_TO` Route → Symbol, `EXPLAINS` DesignNote → Symbol, an
+  `IMPORTS` endpoint is the File/Module complement of the known one). Node and edge counts
+  per label are unchanged (verified on a full re-index of flask).
+- **Indexing time, second cause: generic plans.** Even with labelled lookups every `MERGE`
+  kept slowing as the graph grew — 5 → 17 ms per statement between 2 000 and 6 000
+  symbols, 35–220 ms at guava's size — while an ad-hoc `EXPLAIN ANALYZE` of the same
+  statement ran in 1 ms. psycopg prepares a statement server-side after five executions and
+  PostgreSQL then settles on a *generic* plan from the row estimates of that moment: chosen
+  while the fresh graph held a hundred vertices, never re-planned inside the indexing
+  transaction. Connections now run with `plan_cache_mode = force_custom_plan`, so every
+  statement is planned with its actual parameters (flat ~2 ms; 6 000 symbols in 49 s
+  instead of 170 s, and the gap widens with size).
+- **Indexing time, third cause: the edge MERGE sorted the whole edge table.** With custom
+  plans the planner still had no statistics for the label tables (filled inside the one
+  indexing transaction, never analyzed) and AGE's `@>` operator has a constant selectivity,
+  so it believed the two endpoint lookups of an edge `MERGE` return hundreds of rows and
+  planned the existence check as a merge join: a sequential scan *and sort of the whole
+  edge table* for every edge. On netty that was 64 000 sort spills — 372 GB of temporary
+  files — and 50–700 ms per statement by the end. `Indexer` now runs with
+  `enable_mergejoin = off` / `enable_hashjoin = off` for the duration of an index run
+  (session-scoped, restored afterwards; read paths untouched): the check becomes one probe of
+  the `start_id` index, flat at a few milliseconds whatever the graph size, and the run
+  writes no temporary files at all (12 000 synthetic symbols: 0 spill files versus one per
+  edge; per-statement time no longer grows with the edge count).
+
 ## [0.3.0] - 2026-09-24
 
 Retrieval hybrid-v4: the whole symbol is searchable, and the task's code fragments, file
@@ -463,7 +620,8 @@ First public release.
 - Docker Compose deployment with PostgreSQL, Apache AGE and pgvector preconfigured.
 - `server.json` manifest describing the stdio server for the official MCP registry.
 
-[Unreleased]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v0.3.0...v1.0.0
 [0.3.0]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v0.2.5...v0.3.0
 [0.2.5]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v0.2.3...v0.2.4

@@ -1,8 +1,11 @@
 # Assets
 
 `social-preview.svg` is the source; `social-preview.png` is the 1280x640 raster GitHub wants
-for the repository social preview (Settings, General, Social preview) and the banner both
-READMEs load.
+for the repository social preview (Settings, General, Social preview).
+
+`architecture-overview.png` (English) and `architecture-overview.tr.png` (Turkish) are the
+banners `README.md` and `README.tr.md` load. Both READMEs reference them by absolute
+`raw.githubusercontent.com` URL so the image also renders on PyPI; keep the filenames stable.
 
 Edit the SVG, then regenerate the PNG:
 
