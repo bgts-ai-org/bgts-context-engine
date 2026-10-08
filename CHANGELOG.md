@@ -7,6 +7,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-10-08
+
 Java and C# were the weak languages of the 12-repository benchmark
 (`local_bench/multi_repo_bench`: 87.9 and 90.4 file recall at K=50 against 94–98 for the
 others). The causes were general — test symbols filling the lexical pools of test-heavy
@@ -618,7 +620,8 @@ First public release.
 - Docker Compose deployment with PostgreSQL, Apache AGE and pgvector preconfigured.
 - `server.json` manifest describing the stdio server for the official MCP registry.
 
-[Unreleased]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v0.3.0...v1.0.0
 [0.3.0]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v0.2.5...v0.3.0
 [0.2.5]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v0.2.3...v0.2.4

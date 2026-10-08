@@ -5,4 +5,4 @@ specification for details. This package is the provider side of the deterministi
 contains no LLM and produces reproducible context packages.
 """
 
-__version__ = "0.3.0"
+__version__ = "1.0.0"
