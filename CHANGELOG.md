@@ -85,6 +85,9 @@ parse error — and so are the changes; nothing is fitted to the benchmark's tas
 
 ### Changed
 
+- The README banner is the architecture overview diagram: `docs/assets/architecture-overview.png`
+  in `README.md`, `architecture-overview.tr.png` in `README.tr.md`. `social-preview.png` stays
+  the repository social preview.
 - The assembler honours a `detail_level` set on an item (the selector demotes stub files to
   `reference`) and renders an item's `summary` as its reference line; unknown levels fall
   back to the distance rule.
