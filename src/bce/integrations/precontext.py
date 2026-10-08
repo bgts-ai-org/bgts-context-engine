@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import sys
 import time
+from pathlib import Path
 from typing import Any
 
+from bce.core.agent_mode import normalize_agent_mode, workflow_text
 from bce.core.defaults import DEFAULT_MAX_TOKENS, DEFAULT_SNIPPET_LINES
 
 HEADING = "## Code context for this task (bgts-context-engine code graph, computed once)"
@@ -24,11 +26,13 @@ def render_context_markdown(
     snippet_lines: int = DEFAULT_SNIPPET_LINES,
     max_distance: int | None = None,
     max_chars: int | None = None,
+    mode: str | None = None,
 ) -> str:
     """Markdown for the agent from a ``get_context_for_task`` payload.
 
     ``max_distance`` drops items farther than that from the anchors; ``max_chars`` truncates at an
-    item boundary (Claude Code caps hook context at 10 000 characters).
+    item boundary (Claude Code caps hook context at 10 000 characters). With ``mode`` the block
+    ends its header with that agent mode's workflow, so truncation never cuts it.
     """
     cov = payload.get("coverage") or {}
     items = list((payload.get("context") or {}).get("items") or [])
@@ -65,6 +69,25 @@ def render_context_markdown(
             "the other entries do not cover the task.",
             "",
         ]
+    unresolved = [u for u in cov.get("unresolved_identifiers") or [] if u.get("name")]
+    if unresolved:
+        head += [
+            "Not covered: "
+            + "; ".join(
+                f"`{u['name']}` (defined in "
+                + ", ".join(f"`{_strip_repo(f)}`" for f in u.get("defined_in") or [])
+                + ")"
+                for u in unresolved
+            ),
+            "",
+        ]
+    ranked = [str(c.get("path")) for c in payload.get("candidates") or [] if c.get("path")]
+    if ranked:
+        head += ["Also ranked: " + ", ".join(f"`{p}`" for p in ranked), ""]
+    if cov.get("likely_incomplete"):
+        head += ["The engine marks this answer as likely incomplete.", ""]
+    if mode is not None:
+        head += [workflow_text(mode, style="prose"), ""]
     blocks: list[str] = []
     for it in items:
         path = rel(it)
@@ -106,6 +129,21 @@ def render_context_markdown(
     return text + "\n"
 
 
+def _strip_repo(file_id: str) -> str:
+    return file_id.split(":", 1)[1] if ":" in file_id else file_id
+
+
+def resolve_agent_mode(explicit: str | None, project: Path) -> str:
+    """The mode the block states: ``explicit``, else the project's editor MCP config (the switch
+    the server reads), else ``BCE_AGENT_MODE`` from the environment / ``.env``."""
+    from bce.config import get_settings
+    from bce.integrations.agents import project_agent_mode
+
+    return normalize_agent_mode(
+        explicit or project_agent_mode(project) or get_settings().agent_mode
+    )
+
+
 def precontext_for_task(
     task_text: str,
     *,
@@ -114,8 +152,10 @@ def precontext_for_task(
     max_tokens: int = DEFAULT_MAX_TOKENS,
     snippet_lines: int = DEFAULT_SNIPPET_LINES,
     max_chars: int | None = None,
+    mode: str | None = None,
 ) -> dict[str, Any]:
-    """Run ``get_context_for_task`` once and render it. Returns ``text`` plus what was measured.
+    """Run ``get_context_for_task`` once and render it (with ``mode``'s workflow when given).
+    Returns ``text`` plus what was measured.
 
     Imports the storage layer lazily so the CLI can offer the command without paying for it on
     ``--help``.
@@ -137,10 +177,13 @@ def precontext_for_task(
             store=VectorStore(conn),
         )
     payload = result.get("payload") or {}
-    text = render_context_markdown(payload, snippet_lines=snippet_lines, max_chars=max_chars)
+    text = render_context_markdown(
+        payload, snippet_lines=snippet_lines, max_chars=max_chars, mode=mode
+    )
     cov = payload.get("coverage") or {}
     return {
         "text": text,
+        "mode": mode,
         "ms": int((time.perf_counter() - t0) * 1000),
         "confidence": cov.get("confidence"),
         "n_items": len((payload.get("context") or {}).get("items") or []),
@@ -156,17 +199,25 @@ _MIN_PROMPT_CHARS = 20
 
 
 def claude_hook_response(
-    stdin_json: dict[str, Any], *, repo_ids: list[str] | None
+    stdin_json: dict[str, Any], *, repo_ids: list[str] | None, mode: str | None = None
 ) -> dict[str, Any] | None:
     """``UserPromptSubmit`` hook body for Claude Code, or ``None`` when there is nothing to add.
 
-    Fails open: any error is reported on stderr and the prompt goes through without context.
+    The agent mode is ``mode``, else the one the session's project selects in ``.mcp.json`` (the
+    hook JSON carries its ``cwd``). Fails open: any error is reported on stderr and the prompt goes
+    through without context.
     """
     prompt = str(stdin_json.get("prompt") or "").strip()
     if len(prompt) < _MIN_PROMPT_CHARS or prompt.startswith("/"):
         return None
     try:
-        pre = precontext_for_task(prompt, repo_ids=repo_ids, max_chars=CLAUDE_HOOK_MAX_CHARS)
+        project = Path(str(stdin_json.get("cwd") or Path.cwd()))
+        pre = precontext_for_task(
+            prompt,
+            repo_ids=repo_ids,
+            max_chars=CLAUDE_HOOK_MAX_CHARS,
+            mode=resolve_agent_mode(mode, project),
+        )
     except Exception as exc:  # noqa: BLE001 - a hook must never block the prompt
         print(f"bce precontext: skipped ({exc})", file=sys.stderr)
         return None

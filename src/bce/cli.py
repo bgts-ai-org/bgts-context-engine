@@ -433,6 +433,12 @@ def context(
     _echo_json(result["payload"])
 
 
+_MODE_HELP = (
+    "Agent mode whose workflow the block states: hint (starting point) or trust (accept as "
+    "correct). Default: BCE_AGENT_MODE of the project's MCP config, then of the environment"
+)
+
+
 @app.command()
 def precontext(
     task: str | None = typer.Option(
@@ -449,18 +455,33 @@ def precontext(
         help=f"K (default {SELECTED_MAX_CANDIDATES} with the context selector, {DEFAULT_MAX_CANDIDATES} without)",
     ),
     max_tokens: int = typer.Option(DEFAULT_MAX_TOKENS, "--max-tokens", help="Token budget"),
+    mode: str | None = typer.Option(None, "--mode", help=_MODE_HELP),
 ) -> None:
     """The compact "Code context for this task" block an agent starts with (markdown).
 
     With ``--task`` it prints the block. Without it, it acts as a Claude Code ``UserPromptSubmit``
     hook: reads the hook JSON on stdin and prints the ``additionalContext`` response, or nothing
     when the prompt is not a task. It never fails the prompt: errors go to stderr, exit code 0.
+    The block ends its header with the agent mode's workflow; without ``--mode`` the mode is the
+    one the project's MCP config sets (``BCE_AGENT_MODE``).
     """
-    from bce.integrations.precontext import claude_hook_response, precontext_for_task
+    from bce.integrations.precontext import (
+        claude_hook_response,
+        precontext_for_task,
+        resolve_agent_mode,
+    )
 
     if task is not None:
+        try:
+            resolved = resolve_agent_mode(mode, Path.cwd())
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc), param_hint="--mode") from None
         pre = precontext_for_task(
-            task, repo_ids=repo_id or None, max_candidates=max_candidates, max_tokens=max_tokens
+            task,
+            repo_ids=repo_id or None,
+            max_candidates=max_candidates,
+            max_tokens=max_tokens,
+            mode=resolved,
         )
         typer.echo(pre["text"], nl=False)
         return
@@ -469,7 +490,7 @@ def precontext(
     except json.JSONDecodeError as exc:
         typer.echo(f"bce precontext: stdin is not JSON ({exc})", err=True)
         return
-    response = claude_hook_response(payload, repo_ids=repo_id or None)
+    response = claude_hook_response(payload, repo_ids=repo_id or None, mode=mode)
     if response is not None:
         typer.echo(json.dumps(response, ensure_ascii=False))
 
@@ -505,6 +526,18 @@ def _agent_init_common(
     return project, repo_ids, resolve_bce_command(bce_command), resolved_env, template_written
 
 
+def _check_mode(mode: str | None) -> str | None:
+    """Validate ``--mode`` before any file is written; ``None`` keeps the configured mode."""
+    if mode is None:
+        return None
+    from bce.core.agent_mode import normalize_agent_mode
+
+    try:
+        return normalize_agent_mode(mode)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_hint="--mode") from None
+
+
 def _report_setup(result, env_file: Path, template_written: bool) -> None:
     if template_written:
         result.written.insert(0, env_file)
@@ -528,6 +561,10 @@ _INIT_ENV_HELP = (
     "then ./.env; with none of them a commented template is written beside the editor config)"
 )
 _INIT_CMD_HELP = "Executable the editor spawns (default: this bce)"
+_INIT_MODE_HELP = (
+    "Agent mode written as BCE_AGENT_MODE into the MCP server entry: hint (starting point) or "
+    "trust (accept as correct). Default: the mode already configured there, else hint"
+)
 
 
 @app.command(name="cursor-init")
@@ -536,6 +573,7 @@ def cursor_init(
     repo_id: list[str] = typer.Option([], "--repo-id", help=_INIT_REPO_HELP),
     env_file: Path | None = typer.Option(None, "--env-file", help=_INIT_ENV_HELP),
     bce_command: str | None = typer.Option(None, "--bce-command", help=_INIT_CMD_HELP),
+    mode: str | None = typer.Option(None, "--mode", help=_INIT_MODE_HELP),
 ) -> None:
     """Connect a project to the engine for Cursor: .cursor/mcp.json + the agent rule.
 
@@ -543,10 +581,13 @@ def cursor_init(
     """
     from bce.integrations.agents import setup_cursor
 
+    mode = _check_mode(mode)
     project, repo_ids, cmd, env, new = _agent_init_common(
         project, repo_id, env_file, bce_command, ".cursor"
     )
-    _report_setup(setup_cursor(project, repo_ids=repo_ids, bce_cmd=cmd, env_file=env), env, new)
+    _report_setup(
+        setup_cursor(project, repo_ids=repo_ids, bce_cmd=cmd, env_file=env, mode=mode), env, new
+    )
 
 
 @app.command(name="claude-init")
@@ -560,6 +601,7 @@ def claude_init(
         "--hook/--no-hook",
         help="Install the UserPromptSubmit hook that adds the graph's answer to every prompt",
     ),
+    mode: str | None = typer.Option(None, "--mode", help=_INIT_MODE_HELP),
 ) -> None:
     """Connect a project to the engine for Claude Code: .mcp.json, a CLAUDE.md section and, by
     default, the pre-computed context hook in .claude/settings.json.
@@ -569,11 +611,14 @@ def claude_init(
     """
     from bce.integrations.agents import setup_claude
 
+    mode = _check_mode(mode)
     project, repo_ids, cmd, env, new = _agent_init_common(
         project, repo_id, env_file, bce_command, ".claude"
     )
     _report_setup(
-        setup_claude(project, repo_ids=repo_ids, bce_cmd=cmd, env_file=env, hook=hook), env, new
+        setup_claude(project, repo_ids=repo_ids, bce_cmd=cmd, env_file=env, hook=hook, mode=mode),
+        env,
+        new,
     )
 
 
@@ -583,6 +628,7 @@ def opencode_init(
     repo_id: list[str] = typer.Option([], "--repo-id", help=_INIT_REPO_HELP),
     env_file: Path | None = typer.Option(None, "--env-file", help=_INIT_ENV_HELP),
     bce_command: str | None = typer.Option(None, "--bce-command", help=_INIT_CMD_HELP),
+    mode: str | None = typer.Option(None, "--mode", help=_INIT_MODE_HELP),
 ) -> None:
     """Connect a project to the engine for OpenCode: opencode.json (mcp) + an AGENTS.md section.
 
@@ -591,10 +637,13 @@ def opencode_init(
     """
     from bce.integrations.agents import setup_opencode
 
+    mode = _check_mode(mode)
     project, repo_ids, cmd, env, new = _agent_init_common(
         project, repo_id, env_file, bce_command, ".opencode"
     )
-    _report_setup(setup_opencode(project, repo_ids=repo_ids, bce_cmd=cmd, env_file=env), env, new)
+    _report_setup(
+        setup_opencode(project, repo_ids=repo_ids, bce_cmd=cmd, env_file=env, mode=mode), env, new
+    )
 
 
 @app.command()

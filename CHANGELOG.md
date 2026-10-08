@@ -15,6 +15,22 @@ parse error — and so are the changes; nothing is fitted to the benchmark's tas
 
 ### Added
 
+- **Agent mode: a switch between the two workflows the agent benchmark measured.**
+  `BCE_AGENT_MODE` is `hint` (the default: the answer is the starting point; add the files of
+  `coverage.unresolved_identifiers`, search only when `coverage.likely_incomplete` says so) or
+  `trust` (the answer is the set of locations; no searching the tree). `bce serve-mcp` reads it
+  once and states the active workflow in the server instructions, at the end of the
+  `get_context_for_task` description and in every answer's `payload.workflow`; an unknown
+  value fails the start. `cursor-init`, `claude-init` and `opencode-init` write it into the
+  server entry's environment block (`.cursor/mcp.json`, `.mcp.json`, `opencode.json`), which
+  is where the user flips it; a rerun keeps the configured value, `--mode hint|trust`
+  overrides it. The rules and `CLAUDE.md` / `AGENTS.md` sections no longer carry a search
+  policy of their own and point at `payload.workflow` instead, so switching needs no rule
+  rewrite. `bce precontext` (the Claude Code hook) reads the mode from the session's
+  `.mcp.json`, and its block now also lists the uncovered identifiers with their files, the
+  files the selector left out (`Also ranked`) and the likely-incomplete flag. On 600 tasks
+  with the Cursor CLI (`local_bench/agent_mcp_bench`, prompt v4) the two arms scored 92.9 and
+  92.3 % file recall at 59k and 45k tokens per run, against 95.6 % and 264k for the CLI alone.
 - **Context selector: the K ranked candidates are tiered before assembly.** A K=50 answer
   found 94.4 % of the files a change touches but spread them over ~20 files, ~18 of them
   noise, so an agent either read everything or guessed. `get_context_for_task` now runs an

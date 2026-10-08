@@ -176,6 +176,10 @@ class Settings(BaseSettings):
     # tool's schema before using it and tend to chain small calls when many tools are on offer, so a
     # narrow catalog (e.g. "get_context_for_task,find_references") costs fewer model turns.
     mcp_tools: str = ""
+    # How far the agent relies on the get_context_for_task answer (bce.core.agent_mode): "hint"
+    # (empty = default) uses it as the starting point, "trust" takes it as the answer. The init
+    # commands write it into the editor's MCP server entry, which overrides this file.
+    agent_mode: str = ""
 
     @property
     def mcp_tool_allowlist(self) -> frozenset[str] | None:

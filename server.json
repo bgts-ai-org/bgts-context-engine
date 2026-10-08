@@ -103,6 +103,12 @@
           "isSecret": true
         },
         {
+          "name": "BCE_AGENT_MODE",
+          "description": "How the agent uses the get_context_for_task answer: hint (default, starting point; search only when the engine reports a gap) or trust (accept as correct; no searching the tree). Stated in every answer's payload.workflow.",
+          "default": "hint",
+          "choices": ["hint", "trust"]
+        },
+        {
           "name": "BCE_SELECTOR",
           "description": "Optional context selector: off (unset), jev (needs OPENROUTER_API_KEY), decider-4b / decider-2b (needs BCE_SELECTOR_URL).",
           "choices": ["off", "jev", "decider-4b", "decider-2b"]

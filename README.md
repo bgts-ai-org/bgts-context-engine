@@ -127,6 +127,21 @@ output, same or better checks; 14 tasks on a React/TypeScript codebase, same mod
 Cursor's prompt hook cannot add context, so there the rule does that job. `--no-hook`,
 `--repo-id` (repeatable) and `--bce-command` adjust the files; both commands are safe to rerun.
 
+**Two agent modes.** `BCE_AGENT_MODE` sets how far the agent relies on the answer. All three
+init commands write it into the server entry's `env` block (`environment` in
+`opencode.json`); change it there and reload the MCP server to switch:
+
+- `hint` (**starting point**, the default): the agent starts from `payload.files`, adds the
+  files of identifiers the answer does not cover (`coverage.unresolved_identifiers`), and
+  searches only when the engine says the answer is likely incomplete.
+- `trust` (**accept as correct**): `payload.files` is the answer; the agent opens those files
+  and does not search the tree.
+
+The server states the active mode's steps in the tool description and in every answer's
+`payload.workflow`, and the rules tell the agent to follow them, so switching needs no rule
+edit. `--mode hint|trust` picks it at init; a rerun keeps the configured value. Details:
+[docs/mcp.md](docs/mcp.md#agent-mode).
+
 After you add or change the MCP config, **restart Cursor or VS Code** (or Command Palette
 → “Developer: Reload Window”). The server should then show as enabled with eight tools (ten with indexing enabled).
 Setup detail: [docs/mcp.md](docs/mcp.md). The manual equivalents:

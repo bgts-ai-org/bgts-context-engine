@@ -25,6 +25,7 @@ from typing import Any
 
 import psycopg
 
+from bce.core.agent_mode import workflow, workflow_text
 from bce.core.auth.scope import Principal, ScopeFilter
 from bce.core.defaults import DEFAULT_MAX_CANDIDATES, DEFAULT_MAX_TOKENS, SELECTED_MAX_CANDIDATES
 from bce.core.i18n import get_translator
@@ -160,11 +161,15 @@ TOOL_SPECS: dict[str, dict[str, Any]] = {
 
 
 def available_tool_specs(
-    *, allow_write: bool, allowlist: frozenset[str] | None = None
+    *,
+    allow_write: bool,
+    allowlist: frozenset[str] | None = None,
+    agent_mode: str | None = None,
 ) -> dict[str, dict[str, Any]]:
     """The catalog to advertise: write tools are hidden unless ``allow_write`` is set, and an
     ``allowlist`` (``BCE_MCP_TOOLS``) narrows it further. Unknown names in the allowlist raise, so a
-    typo does not silently publish nothing."""
+    typo does not silently publish nothing. With ``agent_mode`` (``BCE_AGENT_MODE``) the
+    ``get_context_for_task`` description ends with that mode's workflow."""
     if allowlist is not None:
         unknown = sorted(allowlist - set(TOOL_SPECS))
         if unknown:
@@ -176,6 +181,12 @@ def available_tool_specs(
         for name, spec in TOOL_SPECS.items()
         if (allow_write or name not in WRITE_TOOLS) and (allowlist is None or name in allowlist)
     }
+    if agent_mode is not None and "get_context_for_task" in specs:
+        spec = specs["get_context_for_task"]
+        specs["get_context_for_task"] = {
+            **spec,
+            "description": f"{spec['description']}\n\n{workflow_text(agent_mode)}",
+        }
     return specs
 
 
@@ -186,11 +197,13 @@ def dispatch_tool(
     *,
     user_id: str | None = None,
     allow_write: bool = False,
+    agent_mode: str | None = None,
 ) -> dict[str, Any]:
     """Route an MCP tool call to the core, using ``conn`` for graph + vector access (single DB).
 
     Write tools only enqueue jobs, so they leave the transaction dirty; the caller decides whether to
-    commit (see :func:`bce.api.mcp.server.build_server`).
+    commit (see :func:`bce.api.mcp.server.build_server`). With ``agent_mode`` a
+    ``get_context_for_task`` answer carries that mode's ``payload.workflow``.
     """
     if name not in TOOL_SPECS:
         raise KeyError(f"unknown tool: {name}")
@@ -225,11 +238,15 @@ def dispatch_tool(
         )
 
     if name == "get_context_for_task":
-        return _compact_context(
+        result = _compact_context(
             get_context_for_task(
                 repository, store=store, scope=scope, locale=locale, **_l3_kwargs(args)
             )
         )
+        payload = result.get("payload")
+        if agent_mode is not None and isinstance(payload, dict):
+            payload["workflow"] = workflow(agent_mode)
+        return result
     if name == "hybrid_search":
         return hybrid_search(
             repository,

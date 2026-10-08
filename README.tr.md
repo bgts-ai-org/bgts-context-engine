@@ -129,6 +129,22 @@ Cursor'ın istem kancası bağlam ekleyemediği için orada bu işi kural yapar.
 `--repo-id` (tekrarlanabilir) ve `--bce-command` dosyaları ayarlar; iki komut da tekrar
 çalıştırılmaya uygundur.
 
+**İki ajan modu.** Ajanın cevaba ne kadar dayanacağını `BCE_AGENT_MODE` belirler. Üç init
+komutu da bu değeri sunucu girdisinin `env` bloğuna yazar (`.cursor/mcp.json`, `.mcp.json`;
+`opencode.json` içinde `environment`). Değeri değiştirip MCP sunucusunu yeniden yükledikten
+sonra ajan diğer akışla çalışır:
+
+- `hint` (**başlangıç**, varsayılan): ajan `payload.files` ile başlar. Kapsanmayan
+  tanımlayıcıların (`coverage.unresolved_identifiers`) dosyalarını ekler; aramaya yalnızca
+  motor cevabın eksik olabileceğini söylediğinde (`coverage.likely_incomplete`) geçer.
+- `trust` (**doğru kabul**): `payload.files` cevabın kendisidir. Ajan bu dosyaları doğrudan
+  açar ve depoda arama yapmaz.
+
+Sunucu aktif modun adımlarını araç açıklamasına ve her cevabın `payload.workflow` alanına
+yazar; kurallar ajana bu adımları izlemesini söyler. Bu yüzden mod değiştirmek kural
+dosyasında değişiklik gerektirmez. `--mode hint|trust` init sırasında modu seçer; tekrar
+çalıştırma mevcut değeri korur. Ayrıntılar: [docs/mcp.md](docs/mcp.md#agent-mode).
+
 MCP yapılandırmasını ekledikten veya değiştirdikten sonra **Cursor veya VS Code'u
 yeniden başlatın** (veya Komut Paleti → “Developer: Reload Window”). Sunucu sekiz araçla
 (indeksleme açıkken on araçla) etkin görünmelidir. Ayrıntı: [docs/mcp.md](docs/mcp.md).

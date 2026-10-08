@@ -182,7 +182,7 @@ def test_cursor_init_merges_mcp_json_and_writes_rule(tmp_path: Path):
     assert cfg["mcpServers"][SERVER_NAME] == {
         "command": "/opt/bce",
         "args": ["serve-mcp", "--env-file", str(env)],
-        "env": {"PYTHONUTF8": "1"},
+        "env": {"PYTHONUTF8": "1", "BCE_AGENT_MODE": "hint"},
     }
     rule = (tmp_path / ".cursor" / "rules" / agents.RULE_FILE).read_text(encoding="utf-8")
     assert rule.startswith("---\n") and "alwaysApply: true" in rule
@@ -264,7 +264,7 @@ def test_opencode_init_merges_opencode_json_and_agents_md(tmp_path: Path):
     assert cfg["mcp"][SERVER_NAME] == {
         "type": "local",
         "command": ["/opt/bce", "serve-mcp", "--env-file", str(env)],
-        "environment": {"PYTHONUTF8": "1"},
+        "environment": {"PYTHONUTF8": "1", "BCE_AGENT_MODE": "hint"},
         "enabled": True,
         "timeout": agents.OPENCODE_MCP_TIMEOUT_MS,
     }
@@ -272,6 +272,7 @@ def test_opencode_init_merges_opencode_json_and_agents_md(tmp_path: Path):
     assert md.startswith("# Agents\n\nKeep me.\n")
     assert md.count(CLAUDE_BEGIN) == 1 and md.count(CLAUDE_END) == 1
     assert "call `get_context_for_task` once" in md and "bce precontext" not in md
+    assert "`BCE_AGENT_MODE` in `opencode.json`" in md
     assert {p.name for p in res.written} == {"opencode.json", "AGENTS.md"}
 
 
