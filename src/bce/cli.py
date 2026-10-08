@@ -13,12 +13,13 @@ Commands:
 - ``precontext``       the compact context block an agent prompt carries (also a Claude Code hook)
 - ``cursor-init``      write .cursor/mcp.json + the agent rule into a project
 - ``claude-init``      write .mcp.json, a CLAUDE.md section and the pre-context hook into a project
+- ``opencode-init``    write opencode.json (mcp) + an AGENTS.md section into a project
 - ``languages``        list supported languages/extensions (no database needed)
 - ``serve``            run the REST API (FastAPI/uvicorn)
 - ``serve-mcp``        run the MCP server over stdio
 
 Read/write commands need a running PostgreSQL (Apache AGE + pgvector); ``languages``,
-``cursor-init`` and ``claude-init`` do not.
+``cursor-init``, ``claude-init`` and ``opencode-init`` do not.
 """
 
 from __future__ import annotations
@@ -474,9 +475,20 @@ def precontext(
 
 
 def _agent_init_common(
-    project: Path, repo_id: list[str], env_file: Path | None, bce_command: str | None
-) -> tuple[Path, list[str], str, Path | None]:
-    from bce.integrations.agents import resolve_bce_command, resolve_env_file
+    project: Path,
+    repo_id: list[str],
+    env_file: Path | None,
+    bce_command: str | None,
+    editor_dir: str,
+) -> tuple[Path, list[str], str, Path, bool]:
+    """Resolve the init inputs. Without an ``.env`` to point at, a commented settings template is
+    written to ``<project>/<editor_dir>/bce.env`` (the last value says whether it was new)."""
+    from bce.integrations.agents import (
+        ENV_TEMPLATE_FILE,
+        resolve_bce_command,
+        resolve_env_file,
+        write_env_template,
+    )
 
     project = project.resolve()
     if not project.is_dir():
@@ -486,17 +498,22 @@ def _agent_init_common(
         resolved_env = resolve_env_file(env_file, project)
     except FileNotFoundError as exc:
         raise typer.BadParameter(str(exc), param_hint="--env-file") from None
-    return project, repo_ids, resolve_bce_command(bce_command), resolved_env
+    template_written = False
+    if resolved_env is None:
+        resolved_env = project / editor_dir / ENV_TEMPLATE_FILE
+        template_written = write_env_template(resolved_env)
+    return project, repo_ids, resolve_bce_command(bce_command), resolved_env, template_written
 
 
-def _report_setup(result, env_file: Path | None) -> None:
+def _report_setup(result, env_file: Path, template_written: bool) -> None:
+    if template_written:
+        result.written.insert(0, env_file)
     for p in result.written:
         typer.echo(f"wrote {p}")
-    if env_file is None:
+    if template_written:
         typer.secho(
-            "No .env found: the MCP server will read BCE_* from the editor's environment. Pass "
-            "--env-file PATH (or run `bce --env-file PATH ...`) to point it at your engine "
-            "configuration.",
+            f"No .env found: wrote a settings template to {env_file}. Fill in the embedding API "
+            "key (or your model server's URL) the index was built with, then reload the editor.",
             err=True,
             fg=typer.colors.YELLOW,
         )
@@ -506,7 +523,10 @@ def _report_setup(result, env_file: Path | None) -> None:
 
 _INIT_PROJECT_HELP = "Project directory to configure (default: current directory)"
 _INIT_REPO_HELP = "Repository id as indexed in the engine (repeatable; default: the directory name)"
-_INIT_ENV_HELP = "The engine .env the MCP server loads (default: --env-file/BCE_ENV_FILE, then <project>/.env, then ./.env)"
+_INIT_ENV_HELP = (
+    "The engine .env the MCP server loads (default: --env-file/BCE_ENV_FILE, then <project>/.env, "
+    "then ./.env; with none of them a commented template is written beside the editor config)"
+)
 _INIT_CMD_HELP = "Executable the editor spawns (default: this bce)"
 
 
@@ -523,8 +543,10 @@ def cursor_init(
     """
     from bce.integrations.agents import setup_cursor
 
-    project, repo_ids, cmd, env = _agent_init_common(project, repo_id, env_file, bce_command)
-    _report_setup(setup_cursor(project, repo_ids=repo_ids, bce_cmd=cmd, env_file=env), env)
+    project, repo_ids, cmd, env, new = _agent_init_common(
+        project, repo_id, env_file, bce_command, ".cursor"
+    )
+    _report_setup(setup_cursor(project, repo_ids=repo_ids, bce_cmd=cmd, env_file=env), env, new)
 
 
 @app.command(name="claude-init")
@@ -547,10 +569,32 @@ def claude_init(
     """
     from bce.integrations.agents import setup_claude
 
-    project, repo_ids, cmd, env = _agent_init_common(project, repo_id, env_file, bce_command)
-    _report_setup(
-        setup_claude(project, repo_ids=repo_ids, bce_cmd=cmd, env_file=env, hook=hook), env
+    project, repo_ids, cmd, env, new = _agent_init_common(
+        project, repo_id, env_file, bce_command, ".claude"
     )
+    _report_setup(
+        setup_claude(project, repo_ids=repo_ids, bce_cmd=cmd, env_file=env, hook=hook), env, new
+    )
+
+
+@app.command(name="opencode-init")
+def opencode_init(
+    project: Path = typer.Option(Path("."), "--project", help=_INIT_PROJECT_HELP),
+    repo_id: list[str] = typer.Option([], "--repo-id", help=_INIT_REPO_HELP),
+    env_file: Path | None = typer.Option(None, "--env-file", help=_INIT_ENV_HELP),
+    bce_command: str | None = typer.Option(None, "--bce-command", help=_INIT_CMD_HELP),
+) -> None:
+    """Connect a project to the engine for OpenCode: opencode.json (mcp) + an AGENTS.md section.
+
+    Merges into existing files (other servers, settings and AGENTS.md content are kept) and is
+    safe to rerun.
+    """
+    from bce.integrations.agents import setup_opencode
+
+    project, repo_ids, cmd, env, new = _agent_init_common(
+        project, repo_id, env_file, bce_command, ".opencode"
+    )
+    _report_setup(setup_opencode(project, repo_ids=repo_ids, bce_cmd=cmd, env_file=env), env, new)
 
 
 @app.command()

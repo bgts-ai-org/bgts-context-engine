@@ -1,8 +1,9 @@
 """Write the editor-side files that connect a project to the engine.
 
 Cursor reads a project ``.cursor/mcp.json`` and ``.cursor/rules/*.mdc``; Claude Code reads a project
-``.mcp.json``, ``CLAUDE.md`` and hooks in ``.claude/settings.json``. Everything here merges into
-existing files (other MCP servers, other hooks and the rest of a ``CLAUDE.md`` are kept) and is
+``.mcp.json``, ``CLAUDE.md`` and hooks in ``.claude/settings.json``; OpenCode reads a project
+``opencode.json`` (its own MCP format) and ``AGENTS.md``. Everything here merges into existing files
+(other MCP servers, other hooks and the rest of a ``CLAUDE.md`` / ``AGENTS.md`` are kept) and is
 idempotent: running the command twice yields the same files.
 """
 
@@ -71,11 +72,51 @@ def resolve_env_file(explicit: Path | None, project: Path) -> Path | None:
     return None
 
 
+#: Name of the settings file the init commands write when no ``.env`` is found.
+ENV_TEMPLATE_FILE = "bce.env"
+
+
+def write_env_template(path: Path) -> bool:
+    """Write the commented settings template to ``path`` unless a file is already there.
+
+    A ``.gitignore`` beside it keeps the keys the user fills in out of version control. Returns
+    whether the template was written.
+    """
+    if path.exists():
+        return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_template(ENV_TEMPLATE_FILE), encoding="utf-8")
+    ignore = path.parent / ".gitignore"
+    lines = ignore.read_text(encoding="utf-8").splitlines() if ignore.is_file() else []
+    if path.name not in lines:
+        ignore.write_text("\n".join([*lines, path.name]) + "\n", encoding="utf-8")
+    return True
+
+
 def mcp_server_entry(bce_cmd: str, env_file: Path | None) -> dict:
     args = ["serve-mcp"]
     if env_file is not None:
         args += ["--env-file", str(env_file)]
     return {"command": bce_cmd, "args": args, "env": {"PYTHONUTF8": "1"}}
+
+
+#: OpenCode applies this per-request MCP timeout (ms) to tool calls too; a cold
+#: ``get_context_for_task`` (embedding + selector round trips) can exceed the client default.
+OPENCODE_MCP_TIMEOUT_MS = 120_000
+
+
+def opencode_mcp_entry(
+    bce_cmd: str, env_file: Path | None, *, timeout_ms: int = OPENCODE_MCP_TIMEOUT_MS
+) -> dict:
+    """The server entry in OpenCode's ``mcp`` format: one command array, ``environment``."""
+    base = mcp_server_entry(bce_cmd, env_file)
+    return {
+        "type": "local",
+        "command": [base["command"], *base["args"]],
+        "environment": base["env"],
+        "enabled": True,
+        "timeout": timeout_ms,
+    }
 
 
 def _template(name: str) -> str:
@@ -267,5 +308,35 @@ def setup_claude(
         )
     res.notes.append(
         "Start a new Claude Code session in the project so it loads the MCP server and CLAUDE.md."
+    )
+    return res
+
+
+OPENCODE_SCHEMA = "https://opencode.ai/config.json"
+
+
+def setup_opencode(
+    project: Path,
+    *,
+    repo_ids: list[str],
+    bce_cmd: str,
+    env_file: Path | None,
+) -> SetupResult:
+    """``opencode.json`` (``mcp`` merged) + a marked section in ``AGENTS.md``."""
+    res = SetupResult()
+    config = project / "opencode.json"
+    if not config.is_file() and (project / "opencode.jsonc").is_file():
+        config = project / "opencode.jsonc"
+    data = _load_json(config)
+    data.setdefault("$schema", OPENCODE_SCHEMA)
+    _dump_json(config, data)
+    merge_mcp_servers(config, opencode_mcp_entry(bce_cmd, env_file), key="mcp")
+    res.written.append(config)
+    agents_md = project / "AGENTS.md"
+    upsert_marked_section(agents_md, render_claude_section(repo_ids, hook=False))
+    res.written.append(agents_md)
+    res.notes.append(
+        "Start opencode in the project (`opencode mcp list` should show "
+        f"{SERVER_NAME} connected); it loads opencode.json and AGENTS.md at startup."
     )
     return res

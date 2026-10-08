@@ -69,6 +69,52 @@
           "description": "Database password.",
           "default": "bce",
           "isSecret": true
+        },
+        {
+          "name": "BCE_ENV_FILE",
+          "description": "Optional .env with every BCE_* setting (written by `bce cursor-init`); values set here override it."
+        },
+        {
+          "name": "BCE_EMBEDDING_PROVIDER",
+          "description": "Encoder the index was built with: voyage (hosted, needs BCE_VOYAGE_API_KEY), openai (your own OpenAI-compatible server, needs BCE_EMBEDDING_BASE_URL) or hashing (offline). Leave unset when BCE_ENV_FILE sets it: environment values win over the file.",
+          "choices": ["voyage", "openai", "hashing"]
+        },
+        {
+          "name": "BCE_EMBEDDING_MODEL",
+          "description": "Embedding model id the index was built with (voyage-code-4, jina-code-embeddings-1.5b, ...)."
+        },
+        {
+          "name": "BCE_EMBEDDING_DIM",
+          "description": "Vector width the index was built with (voyage-code-4: 1024, jina-code-embeddings-1.5b: 1536).",
+          "format": "number"
+        },
+        {
+          "name": "BCE_VOYAGE_API_KEY",
+          "description": "Voyage AI key (provider voyage).",
+          "isSecret": true
+        },
+        {
+          "name": "BCE_EMBEDDING_BASE_URL",
+          "description": "Base URL of the OpenAI-compatible embedding server (provider openai), e.g. http://127.0.0.1:8001/v1."
+        },
+        {
+          "name": "BCE_EMBEDDING_API_KEY",
+          "description": "Bearer token of that server; empty for a server without auth.",
+          "isSecret": true
+        },
+        {
+          "name": "BCE_SELECTOR",
+          "description": "Optional context selector: off (unset), jev (needs OPENROUTER_API_KEY), decider-4b / decider-2b (needs BCE_SELECTOR_URL).",
+          "choices": ["off", "jev", "decider-4b", "decider-2b"]
+        },
+        {
+          "name": "OPENROUTER_API_KEY",
+          "description": "OpenRouter key for BCE_SELECTOR=jev.",
+          "isSecret": true
+        },
+        {
+          "name": "BCE_SELECTOR_URL",
+          "description": "Decider server endpoint for BCE_SELECTOR=decider-4b / decider-2b, e.g. http://<host>:<port>/v1/systemone."
         }
       ]
     }

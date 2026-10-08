@@ -36,13 +36,14 @@ After you add or change MCP config, **restart Cursor or VS Code** (or Command Pa
 “Developer: Reload Window”). The server should appear enabled with eight tools, or ten once
 indexing is enabled (see [Configuration](#configuration)).
 
-### One-command setup: `bce cursor-init`, `bce claude-init`
+### One-command setup: `bce cursor-init`, `bce claude-init`, `bce opencode-init`
 
 Run in the project the agent works on, pointing at the engine's `.env`:
 
 ```bash
 bce --env-file /path/to/engine/.env cursor-init --repo-id my-service
 bce --env-file /path/to/engine/.env claude-init --repo-id my-service
+bce --env-file /path/to/engine/.env opencode-init --repo-id my-service
 ```
 
 | | writes | merged into existing? |
@@ -52,6 +53,8 @@ bce --env-file /path/to/engine/.env claude-init --repo-id my-service
 | `claude-init` | `.mcp.json` — same server entry | yes |
 | | `CLAUDE.md` — a section between `<!-- bgts-context-engine:begin/end -->` markers | yes: rest of the file kept |
 | | `.claude/settings.json` — `UserPromptSubmit` hook running `bce precontext` (skip with `--no-hook`) | yes: other hooks kept |
+| `opencode-init` | `opencode.json` — `mcp` entry (`type: local`, `command` array, `environment`, `timeout` 120000 ms) | yes: other servers and settings kept |
+| | `AGENTS.md` — the `claude-init --no-hook` section between the same markers | yes: rest of the file kept |
 
 Options: `--project DIR` (default `.`), `--repo-id ID` (repeatable; default: the directory
 name — must match the name the repository was indexed under), `--env-file PATH` (default:
@@ -348,6 +351,7 @@ whatever sits in front of the engine must authenticate the user and overwrite th
 | `bce precontext --task T [--repo-id R]` | the compact context block an agent prompt carries; without `--task` it is a Claude Code `UserPromptSubmit` hook |
 | `bce cursor-init [--project DIR] [--repo-id R] [--env-file PATH]` | write `.cursor/mcp.json` + the agent rule into a project |
 | `bce claude-init [--project DIR] [--repo-id R] [--env-file PATH] [--no-hook]` | write `.mcp.json`, a `CLAUDE.md` section and the pre-context hook |
+| `bce opencode-init [--project DIR] [--repo-id R] [--env-file PATH]` | write the `opencode.json` `mcp` entry + an `AGENTS.md` section |
 | `bce bench --cases F [--out F] [--determinism-runs 3]` | benchmark report as JSON |
 | `bce languages` | list supported languages; needs no database |
 | `bce serve [--host] [--port] [--reload] [--no-ui] [--env-file PATH]` | REST API and web UI |

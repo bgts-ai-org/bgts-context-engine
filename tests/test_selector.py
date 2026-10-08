@@ -90,21 +90,78 @@ def test_policy_tiers_full_stub_dropped_and_prunes_symbols():
         "files_full": 2,
         "files_stub": 1,
         "files_dropped": 1,
+        # dropped files stay nameable: the engine ranked them, only the model voted them down
+        "dropped_files": [{"file_id": "r:d.py", "path": "d.py", "file_relevance": 0.01}],
         "symbols_in": 5,
         "symbols_out": 3,
         "symbols_dropped_in_full_files": 1,
         "symbol_pruning": True,
+        "files_pinned": 0,
+        "files_pinned_to_full": 0,
+        "files_demoted_by_budget": 0,
+        "full_bytes": 324,
+        "listing_capped": False,
     }
 
 
-def test_policy_never_empties_a_full_file_and_respects_max_files():
+def test_policy_never_empties_a_full_file_and_caps_only_the_stub_listing():
     groups = group_files(ITEMS)
-    file_p = {"r:a.py": 0.9, "r:b.py": 0.9, "r:c.py": 0.9, "r:d.py": 0.9}
     sym = {"a1": 0.0, "a2": 0.0, "b1": 0.0, "c1": 0.0, "d1": 0.0}
+    # the cut is by probability: four files above the full threshold are all shown in full,
+    # whatever ``max_files`` says
+    file_p = {"r:a.py": 0.9, "r:b.py": 0.9, "r:c.py": 0.9, "r:d.py": 0.9}
     out, stats = apply_policy(ITEMS, groups, file_p, sym, SelectorConfig(max_files=2))
-    assert stats["files_full"] == 2 and stats["files_stub"] == 0 and stats["files_dropped"] == 2
+    assert stats["files_full"] == 4 and stats["files_dropped"] == 0
     # a.py keeps its best symbol although every symbol scored 0
-    assert [it["symbol_id"] for it in out] == ["a1", "b1"]
+    assert [it["symbol_id"] for it in out] == ["a1", "b1", "c1", "d1"]
+    # ...while the stub listing stops at the cap and says so
+    file_p = {"r:a.py": 0.9, "r:b.py": 0.3, "r:c.py": 0.2, "r:d.py": 0.1}
+    out, stats = apply_policy(ITEMS, groups, file_p, sym, SelectorConfig(max_files=2))
+    assert [(it["file_id"], it["tier"]) for it in out] == [("r:a.py", "full"), ("r:b.py", "stub")]
+    assert stats["listing_capped"] is True and stats["files_dropped"] == 2
+
+
+def test_policy_pins_files_the_task_names_against_the_models_vote():
+    groups = group_files(ITEMS)
+    file_p = {"r:a.py": 0.9, "r:b.py": 0.9, "r:c.py": 0.01, "r:d.py": 0.0}
+    cfg = SelectorConfig(pinned_full_limit=1)
+    out, stats = apply_policy(
+        ITEMS, groups, file_p, None, cfg, pinned={"r:c.py", "r:d.py", "r:zzz.py"}
+    )
+    tiers = {it["file_id"]: it["tier"] for it in out}
+    # c.py (the better pinned file) is promoted to full; d.py exceeds the promotion limit but
+    # is still listed; a file not among the items is ignored
+    assert tiers == {"r:a.py": "full", "r:b.py": "full", "r:c.py": "full", "r:d.py": "stub"}
+    assert all(it.get("pinned") for it in out if it["file_id"] in ("r:c.py", "r:d.py"))
+    assert stats["files_pinned"] == 2 and stats["files_pinned_to_full"] == 1
+    assert stats["files_dropped"] == 0 and stats["dropped_files"] == []
+
+
+def test_policy_demotes_least_probable_full_files_over_the_byte_budget():
+    items = [
+        _item("a1", "a.py", 9.0, body="x" * 3000),
+        _item("b1", "b.py", 8.0, body="y" * 3000),
+        _item("c1", "c.py", 7.0, body="z" * 3000),
+        _item("p1", "p.py", 6.0, body="w" * 3000),
+    ]
+    groups = group_files(items)
+    file_p = {"r:a.py": 0.6, "r:b.py": 0.95, "r:c.py": 0.7, "r:p.py": 0.55}
+    cfg = SelectorConfig(full_content_bytes=6500)
+    out, stats = apply_policy(items, groups, file_p, None, cfg, pinned={"r:p.py"})
+    tiers = [(it["file_id"], it["tier"]) for it in out]
+    # a.py (engine's first) and p.py (pinned) are exempt; c.py is the least probable of the
+    # rest and is demoted first (12000 -> 9000 bytes), still over budget so b.py follows
+    # (-> 6000); both are listed as stubs, best first.
+    assert tiers == [
+        ("r:a.py", "full"),
+        ("r:p.py", "full"),
+        ("r:b.py", "stub"),
+        ("r:c.py", "stub"),
+    ]
+    assert stats["files_demoted_by_budget"] == 2 and stats["full_bytes"] == 6000
+    # the budget off: everything above the threshold stays full
+    out, stats = apply_policy(items, groups, file_p, None, SelectorConfig(full_content_bytes=0))
+    assert stats["files_full"] == 4 and stats["files_demoted_by_budget"] == 0
 
 
 def test_policy_round_robins_full_files_so_a_tight_budget_keeps_each_one():
@@ -182,6 +239,49 @@ def test_selector_partial_when_only_symbol_decision_fails():
         JevError("timeout"),
     )
     out, info = Selector(_client(transport)).select(ITEMS, task_text="t")
+    assert info["status"] == "partial" and info["symbol_pruning"] is False
+    assert [it["symbol_id"] for it in out] == ["a1", "a2"]
+
+
+def test_selector_returns_unselected_when_the_file_decision_outlives_the_budget():
+    import threading
+
+    release = threading.Event()
+
+    def transport(url, body, headers, timeout):
+        first = next(iter(json.loads(body)["questions"]))
+        if first.startswith("f"):
+            release.wait(5.0)  # a server that accepted the request and stalls
+        return {"answers": {}, "usage": {}}
+
+    client = JevClient(api_key="k", model="m", url="http://x", timeout=0.2, transport=transport)
+    t0 = __import__("time").perf_counter()
+    out, info = Selector(client).select(ITEMS, task_text="t")
+    elapsed = __import__("time").perf_counter() - t0
+    release.set()
+    # budget = max(1, timeout) + grace
+    assert out == ITEMS and info["status"] == "timeout" and "1.5 s" in info["reason"]
+    assert elapsed < 3.0  # the stalled request was not waited for
+
+
+def test_selector_does_not_wait_for_the_symbol_decision_past_the_budget():
+    import threading
+
+    release = threading.Event()
+
+    def transport(url, body, headers, timeout):
+        first = next(iter(json.loads(body)["questions"]))
+        if first.startswith("s"):
+            release.wait(5.0)
+            return {"answers": {}, "usage": {}}
+        return {
+            "answers": {"f0": {"noul": 0.9}, "f1": {"noul": 0.0}, "f2": {"noul": 0.0}},
+            "usage": {},
+        }
+
+    client = JevClient(api_key="k", model="m", url="http://x", timeout=0.2, transport=transport)
+    out, info = Selector(client).select(ITEMS, task_text="t")
+    release.set()
     assert info["status"] == "partial" and info["symbol_pruning"] is False
     assert [it["symbol_id"] for it in out] == ["a1", "a2"]
 

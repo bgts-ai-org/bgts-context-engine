@@ -1055,6 +1055,77 @@ class GraphRepository:
                 out[suffix] = rows if 0 < len(rows) <= limit else []
         return out
 
+    def files_in_directories(self, dir_ids: list[str], *, limit: int = 60) -> dict[str, list[str]]:
+        """Indexed files directly inside each directory (``"repo:src/a" -> ["repo:src/a/x.py"]``).
+
+        Only files with at least one symbol count (read from ``symbol_fts``); subdirectories are
+        not descended. A directory holding more than ``limit`` files is returned empty: a flat
+        500-file package says nothing about which of them changes together.
+        """
+        if not dir_ids or not self._fts_available():
+            return {}
+        out: dict[str, list[str]] = {}
+        with self.client.conn.cursor() as cur:
+            for dir_id in dir_ids:
+                clean = dir_id.replace("\\", "/").rstrip("/")
+                if not clean:
+                    continue
+                escaped = clean.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                cur.execute(
+                    "SELECT DISTINCT file_id FROM symbol_fts "
+                    "WHERE file_id LIKE %s AND file_id NOT LIKE %s ORDER BY file_id LIMIT %s",
+                    (f"{escaped}/%", f"{escaped}/%/%", int(limit) + 1),
+                )
+                rows = [r[0] for r in cur.fetchall()]
+                out[dir_id] = rows if 0 < len(rows) <= limit else []
+        return out
+
+    def files_by_basename_pattern(
+        self, patterns: list[str], *, repo_ids: list[str] | None = None, limit: int = 8
+    ) -> dict[str, list[str]]:
+        """Indexed files whose *basename* matches each wildcard pattern (``*`` = any run).
+
+        ``*TypeMappingSource.cs`` finds ``.../SqliteTypeMappingSource.cs``,
+        ``.../SqlServerTypeMappingSource.cs`` and ``.../RelationalTypeMappingSource.cs`` - the
+        per-provider variants of one abstraction that a change to it has to follow;
+        ``Immutable*Map.java`` finds the members of a family. Case insensitive; the wildcard
+        never crosses a ``/``; a pattern matching more than ``limit`` files names a family too
+        large to be a change set and is returned empty.
+        """
+        if not patterns or not self._fts_available():
+            return {}
+        out: dict[str, list[str]] = {}
+        with self.client.conn.cursor() as cur:
+            for pattern in patterns:
+                clean = pattern.replace("\\", "/").strip("/")
+                if not clean or "/" in clean or clean.strip("*") == "":
+                    continue
+                escaped = clean.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                like = escaped.replace("*", "%")
+                where = "(file_id ILIKE %s OR file_id ILIKE %s)"
+                params: list[Any] = [f"%/{like}", f"%:{like}"]
+                if repo_ids:
+                    where += " AND repo_id = ANY(%s)"
+                    params.append(repo_ids)
+                # Over-fetch: a middle wildcard may have crossed a ``/`` in SQL; the basename
+                # check below drops those before the family-size rule is applied.
+                params.append(4 * (int(limit) + 1))
+                cur.execute(
+                    f"SELECT DISTINCT file_id FROM symbol_fts WHERE {where} "  # noqa: S608
+                    "ORDER BY file_id LIMIT %s",
+                    params,
+                )
+                rx = re.compile(
+                    "^" + ".*".join(re.escape(p) for p in clean.split("*")) + "$", re.IGNORECASE
+                )
+                rows = [
+                    r[0]
+                    for r in cur.fetchall()
+                    if rx.match(r[0].rsplit("/", 1)[-1].rsplit(":", 1)[-1])
+                ]
+                out[pattern] = rows if 0 < len(rows) <= limit else []
+        return out
+
     def body_mentions(
         self,
         mentions: list[tuple[str, str]],

@@ -110,7 +110,11 @@ indexed), pointing at the engine's `.env`:
 ```bash
 bce --env-file /path/to/engine/.env cursor-init --repo-id my-service   # Cursor
 bce --env-file /path/to/engine/.env claude-init --repo-id my-service   # Claude Code
+bce --env-file /path/to/engine/.env opencode-init --repo-id my-service # OpenCode
 ```
+
+`opencode-init` merges the server into `opencode.json` (OpenCode's `mcp` format) and writes
+the same agent guidance as a marked section of `AGENTS.md`.
 
 `cursor-init` writes `.cursor/mcp.json` (merged into an existing one) and the rule
 `.cursor/rules/bgts-context-engine.mdc`, which tells the agent to call

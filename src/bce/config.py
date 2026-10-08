@@ -143,13 +143,17 @@ class Settings(BaseSettings):
     # (p99 ~5 s for decider-4b on one 32 GB GPU).
     selector_timeout: float | None = None
     # File-level policy: p(file is edited) >= full_threshold -> full content; >= stub_threshold ->
-    # one reference line; below -> dropped. At most ``max_files`` files are listed; the engine's
-    # first file is always kept at full detail.
+    # one reference line; below -> dropped. The cut is by probability; ``max_files`` only caps
+    # the stub listing (a full file is never removed by it). The engine's first file and files
+    # the task text names (pinned) are always kept.
     selector_full_threshold: float = 0.5
-    selector_stub_threshold: float = 0.05
-    selector_max_files: int = 12
+    selector_stub_threshold: float = 0.02
+    selector_max_files: int = 20
     # Symbols inside a full file scored below this (0 unrelated .. 3 must change) are dropped.
     selector_symbol_min_score: float = 1.0
+    # Bytes of symbol text handed over at full detail; beyond it the least probable full files
+    # become stubs (the first and the pinned files never do). 0 disables the budget.
+    selector_full_content_bytes: int = 12_000
 
     # --- Logging (JSON to stdout; optional rotating file sink) ---
     log_level: str = "INFO"

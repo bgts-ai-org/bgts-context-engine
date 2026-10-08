@@ -57,14 +57,28 @@ _EXCERPT_CHARS = 240
 _SYMBOLS_PER_FILE = 12
 _STUB_NAMES = 6
 _MISMATCH_LOGGED: set[tuple[str, str]] = set()
+#: Added to the client's per-request timeout to form the selector's wall-clock budget.
+_BUDGET_GRACE_S = 0.5
 
 
 @dataclass(frozen=True)
 class SelectorConfig:
+    """Tiering policy. The cut is by probability: every file at ``p >= full_threshold`` is shown
+    in full, every file at ``p >= stub_threshold`` is at least listed. ``max_files`` is only a
+    hard cap on the *listing* (the stubs stop when it is reached); it never removes a full file -
+    a fixed cap of 12 was the binding constraint in 46 % of the answers of a 600-change
+    benchmark and cost 2.4x the misses of the uncapped answers. ``full_content_bytes`` bounds the
+    text handed over at full detail: when the full files' bodies exceed it, the least probable
+    full files are demoted to stubs (the engine's first file and pinned files never are).
+    ``pinned_full_limit`` bounds how many files the caller pins into the full tier against the
+    model's vote (the rest of the pinned files are still listed as stubs)."""
+
     full_threshold: float = 0.5
-    stub_threshold: float = 0.05
-    max_files: int = 12
+    stub_threshold: float = 0.02
+    max_files: int = 20
     symbol_min_score: float = 1.0
+    full_content_bytes: int = 12_000
+    pinned_full_limit: int = 6
 
 
 @dataclass
@@ -250,35 +264,71 @@ def _stub_item(g: FileGroup, p: float) -> dict[str, Any]:
     return stub
 
 
+def _content_bytes(item: dict[str, Any]) -> int:
+    body = item.get("body")
+    if body:
+        return len(str(body).encode("utf-8", "ignore"))
+    return len(f"{item.get('signature') or ''}{item.get('docstring') or ''}".encode())
+
+
 def apply_policy(
     items: list[dict[str, Any]],
     groups: list[FileGroup],
     file_p: dict[str, float],
     symbol_score: dict[str, float] | None,
     cfg: SelectorConfig,
+    *,
+    pinned: set[str] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Pure function: ranked items + probabilities -> tiered items (full first, then stubs)."""
+    """Pure function: ranked items + probabilities -> tiered items (full first, then stubs).
+
+    ``pinned`` names files the caller will not let the model drop - typically the files defining
+    an identifier or path the task text spells out (:func:`bce.core.selector.pins.pinned_files`).
+    They enter the full tier ahead of the model's vote (at most ``cfg.pinned_full_limit`` of
+    them, best first; the rest are listed as stubs) and are exempt from the byte budget.
+    """
+    pinned = {str(f) for f in (pinned or ()) if f}
     ranked = sorted(groups, key=lambda g: (-file_p.get(g.file_id, 0.0), g.pos))
 
-    def pick(threshold: float, keep_first: bool) -> list[FileGroup]:
-        chosen: list[FileGroup] = [g for g in groups if g.pos == 0] if keep_first else []
-        for g in ranked:
-            if len(chosen) >= cfg.max_files:
-                break
-            if file_p.get(g.file_id, 0.0) >= threshold and g not in chosen:
-                chosen.append(g)
-        return chosen
+    def p_of(g: FileGroup) -> float:
+        return file_p.get(g.file_id, 0.0)
 
-    full = pick(cfg.full_threshold, keep_first=True)
-    stubs = [g for g in pick(cfg.stub_threshold, keep_first=False) if g not in full]
-    full.sort(key=lambda g: (-file_p.get(g.file_id, 0.0), g.pos))
-    stubs.sort(key=lambda g: (-file_p.get(g.file_id, 0.0), g.pos))
+    # Full tier: the engine's first file, every file above the full threshold, then the pinned
+    # files (bounded). No cap applies here - a probability cut, not a count cut.
+    full: list[FileGroup] = [g for g in groups if g.pos == 0]
+    for g in ranked:
+        if p_of(g) >= cfg.full_threshold and g not in full:
+            full.append(g)
+    pinned_groups = [g for g in ranked if g.file_id in pinned]
+    pinned_promoted = 0
+    for g in pinned_groups:
+        if g in full:
+            continue
+        if pinned_promoted >= cfg.pinned_full_limit:
+            break
+        full.append(g)
+        pinned_promoted += 1
 
-    out: list[dict[str, Any]] = []
-    symbols_dropped = 0
-    per_file: list[list[dict[str, Any]]] = []
-    for g in full:
-        p = file_p.get(g.file_id, 0.0)
+    # Stub tier: everything above the stub threshold, until the listing cap; pinned files that
+    # did not make the full tier are listed regardless of the cap.
+    stubs: list[FileGroup] = []
+    capped = False
+    for g in ranked:
+        if g in full:
+            continue
+        if p_of(g) < cfg.stub_threshold:
+            break
+        if len(full) + len(stubs) >= cfg.max_files:
+            capped = True
+            break
+        stubs.append(g)
+    for g in pinned_groups:
+        if g not in full and g not in stubs:
+            stubs.append(g)
+
+    # Symbol pruning inside the full files, then the byte budget: demote the least probable
+    # full files (never the first file, never a pinned one) while the bodies exceed it.
+    def kept_symbols(g: FileGroup) -> list[dict[str, Any]]:
         kept = list(g.items)
         if symbol_score is not None:
             kept = [
@@ -288,8 +338,37 @@ def apply_policy(
             ]
             if not kept:  # never lose a file the policy decided to show
                 kept = [max(g.items, key=lambda it: float(it.get("score") or 0.0))]
-            symbols_dropped += len(g.items) - len(kept)
             kept.sort(key=lambda it: -symbol_score.get(str(it.get("symbol_id")), 0.0))
+        return kept
+
+    kept_by_file = {g.file_id: kept_symbols(g) for g in full}
+    size_by_file = {
+        fid: sum(_content_bytes(it) for it in kept) for fid, kept in kept_by_file.items()
+    }
+    demoted = 0
+    if cfg.full_content_bytes > 0:
+        demotable = sorted(
+            (g for g in full if g.pos != 0 and g.file_id not in pinned),
+            key=lambda g: (p_of(g), -g.pos),  # least probable first
+        )
+        for g in demotable:
+            if sum(size_by_file.values()) <= cfg.full_content_bytes:
+                break
+            full.remove(g)
+            size_by_file.pop(g.file_id, None)
+            stubs.append(g)
+            demoted += 1
+
+    full.sort(key=lambda g: (-p_of(g), g.pos))
+    stubs.sort(key=lambda g: (-p_of(g), g.pos))
+
+    out: list[dict[str, Any]] = []
+    symbols_dropped = 0
+    per_file: list[list[dict[str, Any]]] = []
+    for g in full:
+        p = p_of(g)
+        kept = kept_by_file[g.file_id]
+        symbols_dropped += len(g.items) - len(kept)
         entries = []
         for it in kept:
             entry = dict(it)
@@ -299,6 +378,8 @@ def apply_policy(
                 entry["symbol_relevance"] = round(
                     symbol_score.get(str(it.get("symbol_id")), 0.0), 2
                 )
+            if g.file_id in pinned:
+                entry["pinned"] = True
             entries.append(entry)
         per_file.append(entries)
     # Round-robin over the full files: the assembler cuts from the bottom when the budget runs out,
@@ -306,17 +387,40 @@ def apply_policy(
     for depth in range(max((len(e) for e in per_file), default=0)):
         out.extend(e[depth] for e in per_file if depth < len(e))
     for g in stubs:
-        out.append(_stub_item(g, file_p.get(g.file_id, 0.0)))
+        stub = _stub_item(g, p_of(g))
+        if g.file_id in pinned:
+            stub["pinned"] = True
+        out.append(stub)
 
+    # The files the policy dropped, best first. They leave the context but not the answer: the
+    # caller lists them as ``candidates`` so an agent has a second ring to check before it searches
+    # the tree itself (the engine ranked them; only the decision model voted them down).
+    dropped = sorted(
+        (g for g in groups if g not in full and g not in stubs),
+        key=lambda g: (-file_p.get(g.file_id, 0.0), g.pos),
+    )
     stats = {
         "files_in": len(groups),
         "files_full": len(full),
         "files_stub": len(stubs),
         "files_dropped": len(groups) - len(full) - len(stubs),
+        "dropped_files": [
+            {
+                "file_id": g.file_id,
+                "path": g.path,
+                "file_relevance": round(file_p.get(g.file_id, 0.0), 3),
+            }
+            for g in dropped
+        ],
         "symbols_in": len(items),
         "symbols_out": len(out),
         "symbols_dropped_in_full_files": symbols_dropped,
         "symbol_pruning": symbol_score is not None,
+        "files_pinned": len(pinned_groups),
+        "files_pinned_to_full": pinned_promoted,
+        "files_demoted_by_budget": demoted,
+        "full_bytes": int(sum(size_by_file.values())),
+        "listing_capped": capped,
     }
     return out, stats
 
@@ -351,10 +455,15 @@ class Selector:
             )
 
     def select(
-        self, items: list[dict[str, Any]], *, task_text: str
+        self,
+        items: list[dict[str, Any]],
+        *,
+        task_text: str,
+        pinned_file_ids: set[str] | None = None,
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-        """Tiered items + a ``coverage.selector`` block. Fail-open: on any error the input items are
-        returned unchanged with ``status: "error"``."""
+        """Tiered items + a ``coverage.selector`` block. Fail-open: on any error or budget overrun
+        the input items are returned unchanged with ``status: "error"`` / ``"timeout"``.
+        ``pinned_file_ids`` are never dropped (see :func:`apply_policy`)."""
         t0 = time.perf_counter()
         info: dict[str, Any] = {"method": self.method, "model": self.client.model, "status": "ok"}
         if not items:
@@ -365,7 +474,15 @@ class Selector:
             sorted({str(it.get("repo_id") or "") for it in items if it.get("repo_id")})
         )
 
-        with cf.ThreadPoolExecutor(max_workers=2) as ex:
+        # Both requests run in parallel under one wall-clock budget (the client's timeout plus a
+        # small grace). The budget is enforced here, not only inside the transport: a server that
+        # accepts the connection and then stalls would otherwise hold the answer until the socket
+        # gives up, and an editor kills the whole MCP call at ~60 s. On budget overrun the ranked
+        # candidates are returned untouched (fail-open) and the pool is shut down without waiting
+        # for the straggler, so the caller never pays for a request it no longer needs.
+        budget = max(1.0, float(self.client.timeout)) + _BUDGET_GRACE_S
+        ex = cf.ThreadPoolExecutor(max_workers=2)
+        try:
             f_files = ex.submit(
                 self.client.decide,
                 file_state(task_text, repo_label, groups),
@@ -377,7 +494,14 @@ class Selector:
                 symbol_questions(items),
             )
             try:
-                file_answers, file_usage, served = f_files.result()
+                file_answers, file_usage, served = f_files.result(timeout=budget)
+            except cf.TimeoutError:
+                logger.warning(
+                    "selector: file decision exceeded the time budget, answer left unselected",
+                    extra={"budget_s": budget},
+                )
+                info.update(status="timeout", reason=f"no answer within {budget:g} s", ms=_ms(t0))
+                return items, info
             except JevError as exc:
                 logger.warning(
                     "selector: file decision failed, answer left unselected",
@@ -386,9 +510,18 @@ class Selector:
                 info.update(status="error", reason=str(exc)[:200], ms=_ms(t0))
                 return items, info
             symbol_score: dict[str, float] | None
+            remaining = max(0.05, budget - (time.perf_counter() - t0))
             try:
-                sym_answers, sym_usage, _ = f_syms.result()
+                sym_answers, sym_usage, _ = f_syms.result(timeout=remaining)
                 symbol_score = parse_symbol_answers(sym_answers, items)
+            except cf.TimeoutError:
+                logger.warning(
+                    "selector: symbol decision exceeded the time budget, files tiered without "
+                    "symbol pruning",
+                    extra={"budget_s": budget},
+                )
+                symbol_score, sym_usage = None, {}
+                info.update(status="partial", reason="symbol decision timed out")
             except JevError as exc:
                 logger.warning(
                     "selector: symbol decision failed, files tiered without symbol pruning",
@@ -396,12 +529,16 @@ class Selector:
                 )
                 symbol_score, sym_usage = None, {}
                 info.update(status="partial", reason=str(exc)[:200])
+        finally:
+            ex.shutdown(wait=False, cancel_futures=True)
 
         if served:
             info["served_model"] = served
             self._check_served(served)
         file_p = parse_file_answers(file_answers, groups)
-        out, stats = apply_policy(items, groups, file_p, symbol_score, self.cfg)
+        out, stats = apply_policy(
+            items, groups, file_p, symbol_score, self.cfg, pinned=pinned_file_ids
+        )
         info.update(stats)
         info["ms"] = _ms(t0)
         tokens = (file_usage.get("input_tokens") or 0) + (sym_usage.get("input_tokens") or 0)
@@ -415,6 +552,7 @@ class Selector:
             "stub_threshold": self.cfg.stub_threshold,
             "max_files": self.cfg.max_files,
             "symbol_min_score": self.cfg.symbol_min_score,
+            "full_content_bytes": self.cfg.full_content_bytes,
         }
         return out, info
 

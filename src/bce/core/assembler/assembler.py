@@ -167,6 +167,7 @@ def assemble(
             "tier",
             "file_relevance",
             "symbol_relevance",
+            "pinned",
         ):
             if item.get(key) is not None:
                 entry[key] = item[key]

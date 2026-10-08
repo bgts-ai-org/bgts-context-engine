@@ -188,6 +188,13 @@ class VectorStore:
                 break
         return out
 
+    def stored_model(self, kind: str = "symbol") -> str | None:
+        """The model id one stored ``kind`` row was embedded with (``None`` for an empty index)."""
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT model FROM embeddings WHERE kind = %s LIMIT 1", (kind,))
+            row = cur.fetchone()
+        return str(row[0]) if row else None
+
     def count(self) -> int:
         with self.conn.cursor() as cur:
             cur.execute("SELECT count(*) FROM embeddings")

@@ -110,7 +110,11 @@ süreç sessiz kalır; IDE kendi kopyasını başlatır.
 ```bash
 bce --env-file /path/to/engine/.env cursor-init --repo-id my-service   # Cursor
 bce --env-file /path/to/engine/.env claude-init --repo-id my-service   # Claude Code
+bce --env-file /path/to/engine/.env opencode-init --repo-id my-service # OpenCode
 ```
+
+`opencode-init`, sunucuyu `opencode.json` dosyasına (OpenCode'un `mcp` biçiminde)
+birleştirir ve aynı ajan yönergesini `AGENTS.md` içinde işaretli bir bölüm olarak yazar.
 
 `cursor-init`, `.cursor/mcp.json` dosyasını (varsa üzerine birleştirerek) ve
 `.cursor/rules/bgts-context-engine.mdc` kuralını yazar. Kural ajana şunları söyler:

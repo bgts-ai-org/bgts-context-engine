@@ -13,11 +13,13 @@ tiers the answer (full / stub / dropped). It never adds a candidate, is fail-ope
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import time
 from typing import Any
 
 from bce.core.assembler import assemble
+from bce.core.assembler.files_summary import files_summary
 from bce.core.auth.scope import ScopeFilter
 from bce.core.coverage import compute_coverage, coverage_message
 from bce.core.defaults import DEFAULT_MAX_CANDIDATES, DEFAULT_MAX_TOKENS, SELECTED_MAX_CANDIDATES
@@ -33,6 +35,7 @@ from bce.core.orchestrator.anchors import (
 from bce.core.orchestrator.profile import RetrievalProfile, active_profile
 from bce.core.orchestrator.text import is_test_symbol
 from bce.core.selector import selector_from_settings
+from bce.core.selector.pins import pinned_files, unresolved_identifiers
 from bce.storage.graph.repository import GraphRepository
 from bce.storage.vector.store import VectorStore
 
@@ -56,6 +59,9 @@ _AUTO_SEMANTIC_OVERFETCH = 4
 #: both be at least ``K`` deep, or a K=50 answer is filled from a 30-deep model list plus graph
 #: neighbours of 15 lexical hits and never sees a candidate the model ranked 35th.
 CHANNEL_WIDTH_PER_CANDIDATE = 2
+#: ``coverage.likely_incomplete``: a selector listing cut by its cap counts as a gap only when the
+#: best file it left out had at least this probability of being edited.
+CAPPED_SIGNAL_RELEVANCE = 0.1
 
 
 def semantic_limit_for(max_candidates: int) -> int:
@@ -85,19 +91,27 @@ def _auto_semantic_or_none(
     repository: GraphRepository | None,
     *,
     limit: int = AUTO_SEMANTIC_LIMIT,
-) -> list[str] | None:
-    """:func:`_auto_semantic_candidates`, degraded to ``None`` when the embedding server cannot be
-    reached. The semantic anchor is one of several signals; losing it lowers coverage/confidence
-    (which the caller sees in the report) but the lexical and structural anchors still produce an
-    answer. Failing the whole tool call instead would leave the agent with nothing, after having
-    waited on a stalled network."""
+) -> tuple[list[str] | None, str | None]:
+    """:func:`_auto_semantic_candidates`, degraded to ``(None, reason)`` when the embedding server
+    cannot be reached or does not match the index. The semantic anchor is one of several signals;
+    losing it lowers coverage/confidence (which the caller sees in the report) but the lexical and
+    structural anchors still produce an answer. Failing the whole tool call instead would leave the
+    agent with nothing, after having waited on a stalled network."""
     try:
-        return _auto_semantic_candidates(store, task_text, repo_ids, repository, limit=limit)
+        return _auto_semantic_candidates(store, task_text, repo_ids, repository, limit=limit), None
     except Exception as exc:
         logger.warning(
             "%s: semantic anchor skipped, embedding query failed", tool, extra={"detail": str(exc)}
         )
-        return None
+        return None, str(exc)[:300]
+
+
+def _savepoint(store: VectorStore):
+    """A savepoint around the vector queries, so a failing one (a query vector of the wrong width,
+    say) leaves the caller's transaction usable for the graph stages that follow."""
+    conn = getattr(store, "conn", None)
+    begin = getattr(conn, "transaction", None)
+    return begin() if callable(begin) else contextlib.nullcontext()
 
 
 def _dedupe(ids: list[str]) -> list[str]:
@@ -131,17 +145,22 @@ def _auto_semantic_candidates(
     Chunk rows of one symbol (migration 0011) collapse to the symbol at its best rank. Test
     symbols are skipped (their file/name is checked via the repository when available, else from
     the symbol id) unless ``include_tests``."""
-    from bce.indexing.embedder.encoder import build_default_encoder
+    from bce.indexing.embedder.encoder import EncoderConfigError, build_default_encoder
 
     encoder = build_default_encoder()
-    vector = encoder.encode_query(task_text)
     rows = max(int(limit), 1) * (1 if include_tests else _AUTO_SEMANTIC_OVERFETCH)
-    ids = _dedupe(
-        [
-            hit["ref_id"]
-            for hit in store.search(vector, limit=rows, repo_ids=repo_ids, kind="symbol")
-        ]
-    )
+    stored_model = getattr(store, "stored_model", None)
+    with _savepoint(store):
+        indexed_with = stored_model("symbol") if callable(stored_model) else None
+        if indexed_with and indexed_with != encoder.model_id:
+            raise EncoderConfigError(
+                f"the index was embedded with {indexed_with!r} but this process encodes queries "
+                f"with {encoder.model_id!r}; set BCE_EMBEDDING_PROVIDER / BCE_EMBEDDING_MODEL / "
+                "BCE_EMBEDDING_DIM to the values the index was built with"
+            )
+        vector = encoder.encode_query(task_text)
+        hits = store.search(vector, limit=rows, repo_ids=repo_ids, kind="symbol")
+    ids = _dedupe([hit["ref_id"] for hit in hits])
 
     meta = (
         bulk.symbols_meta(repository, sorted(set(ids)))
@@ -225,9 +244,10 @@ def get_context_for_task(
         max_candidates = SELECTED_MAX_CANDIDATES if selector is not None else DEFAULT_MAX_CANDIDATES
 
     # D1: automatic semantic anchor when the caller did not pre-compute one (opt-out: auto_semantic).
+    semantic_error: str | None = None
     if semantic_candidates is None and auto_semantic and store is not None:
         stage = time.perf_counter()
-        semantic_candidates = _auto_semantic_or_none(
+        semantic_candidates, semantic_error = _auto_semantic_or_none(
             "get_context_for_task",
             store,
             task_text,
@@ -284,12 +304,15 @@ def get_context_for_task(
 
     stage = time.perf_counter()
     items = _enrich_items(repository, result.candidates, with_body=True)
+    # Files the task text names outright (a path, or an identifier a file defines) are pinned:
+    # the selector may tier them but never drop them, and ``payload.files[].why`` says so.
+    pins = pinned_files(items, task_text)
 
     # Optional: tier the ranked candidates (full / stub / dropped) with the decision-model selector.
     # ``select`` is False for callers that want the raw ranking (benchmarks of the engine alone).
     selection: dict[str, Any] | None = None
     if selector is not None:
-        items, selection = selector.select(items, task_text=task_text)
+        items, selection = selector.select(items, task_text=task_text, pinned_file_ids=set(pins))
         logger.debug(
             "get_context_for_task: selector",
             extra={
@@ -300,8 +323,33 @@ def get_context_for_task(
 
     package = assemble(items, max_tokens=max_tokens)
     coverage = compute_coverage(result, repository)
+    # Files the selector voted out stay visible as ``candidates`` (paths only, no symbols): the
+    # engine ranked them into the top K, so they are the cheapest place to look for what the
+    # context misses. Empty when the selector is off or kept everything.
+    candidates: list[dict[str, Any]] = []
     if selection is not None:
+        candidates = list(selection.pop("dropped_files", None) or [])
         coverage["selector"] = selection
+    if semantic_error is not None:
+        coverage["semantic_error"] = semantic_error
+    # The two signals an agent needs to decide whether to look further (and where): the task's
+    # identifiers the context does not cover - each with the indexed file defining it - and a
+    # single flag folding them with the selector's own failure modes.
+    unresolved = unresolved_identifiers(
+        repository, package.get("items") or [], task_text, repo_ids=repo_ids
+    )
+    coverage["unresolved_identifiers"] = unresolved
+    # The listing cap only matters when it cut a file the model found plausible: a cap reached
+    # with the best dropped file at p=0.03 says the answer is complete, not that it is short.
+    capped_plausible = bool(selection and selection.get("listing_capped")) and any(
+        float(c.get("file_relevance") or 0.0) >= CAPPED_SIGNAL_RELEVANCE for c in candidates[:1]
+    )
+    coverage["likely_incomplete"] = (
+        bool(unresolved)
+        or capped_plausible
+        or (selection is not None and selection.get("status") in ("timeout", "error"))
+    )
+    files = files_summary(package.get("items") or [], ranked=items, pins=pins)
     logger.debug(
         "get_context_for_task: assembled",
         extra={
@@ -319,7 +367,9 @@ def get_context_for_task(
             "commit": commit,
             "task_id": task_id,
             "anchors": result.anchors.anchors,
+            "files": files,
             "context": package,
+            "candidates": candidates,
             "coverage": coverage,
         },
         "message": message,
@@ -360,6 +410,8 @@ def _enrich_items(
                 "is_test": cand.is_test,
                 "score": cand.score,
                 "features": cand.features,
+                "sources": list(getattr(cand, "sources", None) or []),
+                "provenance": getattr(cand, "provenance", None),
                 "design_notes": repository.get_design_notes(cand.symbol_id),
             }
         )
@@ -502,9 +554,10 @@ def suggest_change_sites(
     timings: dict[str, float] = {}
 
     # D1: automatic semantic anchor when the caller did not pre-compute one (opt-out: auto_semantic).
+    semantic_error: str | None = None
     if semantic_candidates is None and auto_semantic and store is not None:
         stage = time.perf_counter()
-        semantic_candidates = _auto_semantic_or_none(
+        semantic_candidates, semantic_error = _auto_semantic_or_none(
             "suggest_change_sites",
             store,
             task_text,
@@ -561,6 +614,8 @@ def suggest_change_sites(
     stage = time.perf_counter()
     sites = _enrich_items(repository, result.candidates)
     coverage = compute_coverage(result, repository)
+    if semantic_error is not None:
+        coverage["semantic_error"] = semantic_error
     timings["enrich_ms"] = _elapsed_ms(stage)
     timings["total_ms"] = _elapsed_ms(t0)
     message = tr.translate("tool.change_sites.count", loc, count=len(sites))

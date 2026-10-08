@@ -31,6 +31,7 @@ from bce.core.i18n import get_translator
 from bce.jobs.store import enqueue_job, get_job, list_jobs
 from bce.storage.graph.client import GraphClient
 from bce.storage.graph.repository import GraphRepository
+from bce.storage.relational.queries import normalize_file_ids, resolve_repo_ids
 from bce.storage.vector.store import VectorStore
 from bce.tools.layer1 import find_references, get_call_graph, resolve_symbol
 from bce.tools.layer2 import hybrid_search
@@ -53,8 +54,14 @@ WRITE_TOOLS = frozenset({"index_repo", "reindex_repo"})
 TOOL_SPECS: dict[str, dict[str, Any]] = {
     "get_context_for_task": {
         "description": (
-            "Primary tool: assemble the code context for a task description, with anchors and a "
-            "coverage/confidence report. Start here for any 'where do I change X' question."
+            "Primary tool: assemble the code context for a task description, with a "
+            "coverage/confidence report. Start here for any 'where do I change X' question. "
+            "payload.files lists every file of the answer (path, tier full|stub, relevance, "
+            "why); payload.context.items carry the symbols and their content; "
+            "payload.candidates are further ranked files the selector left out. "
+            "coverage.unresolved_identifiers names identifiers from the task the answer does "
+            "not cover, each with the indexed file defining it - open those directly; when it "
+            "is empty and coverage.likely_incomplete is false, no further search is needed."
         ),
         "schema": _schema(
             {
@@ -206,10 +213,22 @@ def dispatch_tool(
         if user_id is not None
         else ScopeFilter(Principal.system())
     )
+    # Agents name repositories the way they see them; the index stores the id it was given.
+    for key in ("repo_ids", "component_repo_ids"):
+        if args.get(key):
+            args[key] = resolve_repo_ids(conn, list(args[key]))
+    if args.get("repo_id"):
+        args["repo_id"] = (resolve_repo_ids(conn, [str(args["repo_id"])]) or [args["repo_id"]])[0]
+    if args.get("history_file_ids"):
+        args["history_file_ids"] = normalize_file_ids(
+            list(args["history_file_ids"]), args.get("repo_ids")
+        )
 
     if name == "get_context_for_task":
-        return get_context_for_task(
-            repository, store=store, scope=scope, locale=locale, **_l3_kwargs(args)
+        return _compact_context(
+            get_context_for_task(
+                repository, store=store, scope=scope, locale=locale, **_l3_kwargs(args)
+            )
         )
     if name == "hybrid_search":
         return hybrid_search(
@@ -237,6 +256,21 @@ def dispatch_tool(
             repository, target_symbols=args["target_symbols"], scope=scope, locale=locale
         )
     raise KeyError(f"unhandled tool: {name}")  # pragma: no cover - guarded above
+
+
+def _compact_context(result: dict[str, Any]) -> dict[str, Any]:
+    """Trim the ``get_context_for_task`` envelope for an agent's context window.
+
+    The ``anchors`` map (every anchor symbol id -> its sources) is diagnostic: it was 40-60 % of the
+    answer on large repositories and pushed it past the ~40 KB at which Cursor stops inlining a
+    tool result and writes it to a file the agent must then open. ``coverage.anchor_count`` and
+    ``anchor_sources`` keep the summary; the REST API still returns the full map.
+    """
+    payload = result.get("payload")
+    if isinstance(payload, dict) and "anchors" in payload:
+        anchors = payload.pop("anchors")
+        payload["anchor_count"] = len(anchors) if isinstance(anchors, dict) else None
+    return result
 
 
 #: MCP write tool -> queue job_type (the job types the worker pool understands).

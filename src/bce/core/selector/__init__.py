@@ -121,6 +121,7 @@ def selector_from_settings(settings=None) -> Selector | None:
         stub_threshold=settings.selector_stub_threshold,
         max_files=settings.selector_max_files,
         symbol_min_score=settings.selector_symbol_min_score,
+        full_content_bytes=int(getattr(settings, "selector_full_content_bytes", 12_000)),
     )
     return Selector(client, cfg, method=mode, expect_served=preset.expect_served)
 
