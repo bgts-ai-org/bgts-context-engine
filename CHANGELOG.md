@@ -7,6 +7,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-10-09
+
+### Changed
+
+- The Results cost row in `README.md` and `README.tr.md` shows the percentage cut
+  (−60 % / −67 %, mean −63 %) instead of a dollar figure per 1 000 tasks. The note
+  now says both agents are priced from one OpenRouter GLM 5.3 Flash rate card,
+  without listing the per-token prices. The hero images were regenerated.
+
 ## [1.0.1] - 2026-10-09
 
 ### Changed
@@ -628,7 +637,8 @@ First public release.
 - Docker Compose deployment with PostgreSQL, Apache AGE and pgvector preconfigured.
 - `server.json` manifest describing the stdio server for the official MCP registry.
 
-[Unreleased]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v1.0.2...HEAD
+[1.0.2]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v0.3.0...v1.0.0
 [0.3.0]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v0.2.5...v0.3.0

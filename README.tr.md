@@ -81,7 +81,7 @@ gerekirse ekliyor.
 | Görev başına | Cursor CLI · grok-4.7-high-fast<br>tek başına → BCE ile | OpenCode · GLM 5.3 Flash<br>tek başına → BCE ile | Değişim<br>(iki ajanın ortalaması) |
 | --- | --- | --- | --- |
 | Token | 264k → 59k | 196k → 24k | **−%82** |
-| 1.000 görev faturası | $15.86 → $6.35 | $12.29 → $4.05 | **−%63** |
+| Maliyet | −%60 | −%67 | **−%63** |
 | Araç çağrısı | 17.4 → 2.0 | 11.3 → 1.1 | **−%89** |
 | Model turu | 9.1 → 3.0 | 8.3 → 2.1 | **−%71** |
 | Süre | 65 sn → 42 sn | 132 sn → 83 sn † | **−%37** |
@@ -98,9 +98,9 @@ görevlerde %74 → %81). Ajanın cevabı konum kümesi olarak alıp hiç arama 
 > Hedef precision değil recall: motor ajana dosya listesini olduğu gibi aktarmasını söylüyor,
 > görev başına yaklaşık 15 dosya (tek başına 1.9), bu yüzden precision düşüyor (Cursor CLI
 > %91 → %11). Cursor CLI'ın tek başına koşularında web erişimi açıktı ve ajan bazen
-> değişikliği GitHub'da buldu; bu, o tabanı yukarı çekiyor. Fatura iki ajan için tek fiyat
-> kartıyla hesaplandı (OpenRouter GLM 5.3 Flash: 1M token başına input $0.15, output $0.50,
-> cache read $0.03); Cursor CLI sütunu Cursor'ın kendi faturası değildir. OpenCode'un iki
+> değişikliği GitHub'da buldu; bu, o tabanı yukarı çekiyor. Maliyet iki ajan için tek fiyat
+> kartıyla hesaplandı (OpenRouter'ın GLM 5.3 Flash input, output ve cache read fiyatları);
+> Cursor CLI sütunu Cursor'ın kendi faturası değildir. OpenCode'un iki
 > koşusu, ikisinin de tamamladığı 597 görev üzerinden karşılaştırıldı. † OpenCode'un BCE
 > koşuları boş belleği kalmamış bir makinedeydi (16 GB, %99 dolu); MCP açılışı ve motor
 > çağrısı boş makinenin ortanca değerlerine çekildi, ölçülen ham ortalama 155 sn. Ölçüm
