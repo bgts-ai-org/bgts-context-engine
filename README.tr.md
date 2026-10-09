@@ -1,11 +1,19 @@
 <div align="center">
 
-<img src="https://raw.githubusercontent.com/bgts-ai-org/bgts-context-engine/main/docs/assets/architecture-overview.tr.png" alt="BGTS Context Engine" width="820">
+<img src="https://raw.githubusercontent.com/bgts-ai-org/bgts-context-engine/main/docs/assets/readme-hero.tr.gif" alt="BGTS Context Engine: depoyu tur tur tarayan bir kodlama ajanı ve aynı ajanın BCE'nin kod grafından başlaması" width="820">
 
 **Yapay zekâ kodlama ajanları için deterministik kod-graf bağlamı.**
 
 *"Toplantı webhook'unda login timeout neden tetikleniyor?"* diye sorun; cevabı gerçekten
 veren sekiz sembolü sıralanmış, bütçelenmiş ve yeniden üretilebilir şekilde alın.
+
+[![Token −%82](https://img.shields.io/badge/token-%E2%88%92%2582-39ff88?style=for-the-badge&labelColor=0b0f14)](#sonuçlar)
+[![Maliyet −%63](https://img.shields.io/badge/maliyet-%E2%88%92%2563-f2ac0b?style=for-the-badge&labelColor=0b0f14)](#sonuçlar)
+[![Araç çağrısı −%89](https://img.shields.io/badge/ara%C3%A7_%C3%A7a%C4%9Fr%C4%B1s%C4%B1-%E2%88%92%2589-4d8dff?style=for-the-badge&labelColor=0b0f14)](#sonuçlar)
+[![Süre −%37](https://img.shields.io/badge/s%C3%BCre-%E2%88%92%2537-f1881e?style=for-the-badge&labelColor=0b0f14)](#sonuçlar)
+[![Recall %92.7](https://img.shields.io/badge/recall-%2592.7_korundu-22c55e?style=for-the-badge&labelColor=0b0f14)](#sonuçlar)
+
+<sub>İki kodlama ajanı, 600 gerçek birleşmiş değişiklik, 12 depo, 6 dil — ajan tek başına ile ilk adımı BCE olan aynı ajan karşılaştırması.</sub>
 
 [![PyPI](https://img.shields.io/pypi/v/bgts-context-engine.svg)](https://pypi.org/project/bgts-context-engine/)
 [![Python](https://img.shields.io/pypi/pyversions/bgts-context-engine.svg)](https://pypi.org/project/bgts-context-engine/)
@@ -14,7 +22,7 @@ veren sekiz sembolü sıralanmış, bütçelenmiş ve yeniden üretilebilir şek
 [![MCP](https://img.shields.io/badge/MCP-uyumlu-000000.svg)](docs/mcp.md)
 [![Yıldızlar](https://img.shields.io/github/stars/bgts-ai-org/bgts-context-engine?style=flat&logo=github)](https://github.com/bgts-ai-org/bgts-context-engine/stargazers)
 
-[Hızlı başlangıç](#hızlı-başlangıç) · [Ajanınızdan kullanma](#ajanınızdan-kullanma) · [Nasıl çalışır](#nasıl-çalışır) · [Desteklenen modeller](#desteklenen-modeller) · [Seçici modeller](docs/selector.md) · [Dokümantasyon](#dokümantasyon) · [Site](https://bgts-ai-org.github.io/bce-microsite/) · [English](README.md)
+[Sonuçlar](#sonuçlar) · [Hızlı başlangıç](#hızlı-başlangıç) · [Ajanınızdan kullanma](#ajanınızdan-kullanma) · [Nasıl çalışır](#nasıl-çalışır) · [Desteklenen modeller](#desteklenen-modeller) · [Seçici modeller](docs/selector.md) · [Dokümantasyon](#dokümantasyon) · [Site](https://bgts-ai-org.github.io/bce-microsite/) · [English](README.md)
 
 </div>
 
@@ -49,7 +57,8 @@ ve o aşamayı düzeltebilirsiniz.
 Bu sıralamanın üstünde isteğe bağlı, açıkça işaretlenmiş tek bir olasılıksal adım var:
 sıralanan dosyalardan görevin gerçekten hangilerini değiştirdiğini bir karar modeline soran
 *bağlam seçici*. Ajana bu dosyaları tam, muhtemelen ilgili olanları birer satır olarak verir,
-gerisini atar. 600 gerçek değişiklikte bağlamı %79 küçülttü, recall'dan bir puan verdi.
+gerisini atar. 600 gerçek değişiklikte ajana verilen token'ı 8.310'dan 1.121'e indirdi (−%87),
+recall'dan yaklaşık bir puan verdi (94.4 → 93.3).
 `BCE_SELECTOR` bir model adı (barındırılan Jev ya da kendi GPU'nuzda decider-2b /
 decider-4b) verilene kadar kapalıdır; `--no-select` bayt bayt aynı paketi geri verir.
 
@@ -58,11 +67,44 @@ kurumlar — indeksleme, kurulum, depolarınıza göre ayarlanmış skorlama vey
 ajan yığını konusunda yardım — [BGTS](https://www.bgts.com) ile
 danışmanlık olarak iletişime geçebilir. **opensource-ai@bgts.com** adresine yazın.
 
-<div align="center">
-<video src="https://github.com/user-attachments/assets/b602edaa-1189-480e-ac4d-294c173d0067" width="820" controls playsinline>
-BGTS Context Engine web arayüzünün turu.
-</video>
-</div>
+## Sonuçlar
+
+İki kodlama ajanı aynı 600 görevi koştu. Her görev, bir projenin gerçekten birleştirdiği bir
+değişiklik: altı dilde 12 açık kaynak depo, depo başına 50 görev — flask ve requests
+(Python), express ve axios (JavaScript), nest ve vite (TypeScript), guava ve netty (Java),
+efcore ve PowerShell (C#), gin ve prometheus (Go). Ajana geliştiricinin cümlesi, geçmişi
+silinmiş bir kopyada veriliyor; değişikliğin dokunduğu kaynak dosyaları bulması isteniyor.
+Her görev iki kez koşuldu: ajan **tek başına**, kendi grep, glob ve okuma araçlarıyla; ve ajan
+**ilk adımı BCE olarak** (`BCE_AGENT_MODE=hint`): önce motora soruyor, cevaptan başlıyor,
+gerekirse ekliyor.
+
+| Görev başına | Cursor CLI · grok-4.7-high-fast<br>tek başına → BCE ile | OpenCode · GLM 5.3 Flash<br>tek başına → BCE ile | Değişim<br>(iki ajanın ortalaması) |
+| --- | --- | --- | --- |
+| Token | 264k → 59k | 196k → 24k | **−%82** |
+| 1.000 görev faturası | $15.86 → $6.35 | $12.29 → $4.05 | **−%63** |
+| Araç çağrısı | 17.4 → 2.0 | 11.3 → 1.1 | **−%89** |
+| Model turu | 9.1 → 3.0 | 8.3 → 2.1 | **−%71** |
+| Süre | 65 sn → 42 sn | 132 sn → 83 sn † | **−%37** |
+| Dosya recall'u | %95.6 → %92.9 | %89.2 → %92.5 | **%92.4 → %92.7** |
+
+Ajan depoyu taramayı bırakıyor: kazancın çoğu, grep yaparken her turda yeniden okuduğu
+bağlamdan geliyor (cache read token'ı yaklaşık %90 düşüyor). Daha küçük model recall
+kazanıyor — GLM 5.3 Flash'ın tek başına kaçırdığı dosyaları BCE'nin grafı veriyor (zor
+görevlerde %74 → %81). Ajanın cevabı konum kümesi olarak alıp hiç arama yapmadığı
+`BCE_AGENT_MODE=trust` ile Cursor CLI daha da ileri gitti: 45k token, 1.3 araç çağrısı,
+36 sn, %92.3 recall.
+
+> **Rakamları okurken bunları göz önünde tutun.**
+> Hedef precision değil recall: motor ajana dosya listesini olduğu gibi aktarmasını söylüyor,
+> görev başına yaklaşık 15 dosya (tek başına 1.9), bu yüzden precision düşüyor (Cursor CLI
+> %91 → %11). Cursor CLI'ın tek başına koşularında web erişimi açıktı ve ajan bazen
+> değişikliği GitHub'da buldu; bu, o tabanı yukarı çekiyor. Fatura iki ajan için tek fiyat
+> kartıyla hesaplandı (OpenRouter GLM 5.3 Flash: 1M token başına input $0.15, output $0.50,
+> cache read $0.03); Cursor CLI sütunu Cursor'ın kendi faturası değildir. OpenCode'un iki
+> koşusu, ikisinin de tamamladığı 597 görev üzerinden karşılaştırıldı. † OpenCode'un BCE
+> koşuları boş belleği kalmamış bir makinedeydi (16 GB, %99 dolu); MCP açılışı ve motor
+> çağrısı boş makinenin ortanca değerlerine çekildi, ölçülen ham ortalama 155 sn. Ölçüm
+> düzeneği henüz bu depoda değil — [yol haritasına](#yol-haritası) bakın.
 
 ## Hızlı başlangıç
 
@@ -122,9 +164,10 @@ birleştirir ve aynı ajan yönergesini `AGENTS.md` içinde işaretli bir bölü
 girdilerini doğrulanmış konum say ve onları grep ile arama, listelendi diye bir dosyayı
 düzenleme. `claude-init` ise `.mcp.json`, `CLAUDE.md` içinde işaretli bir bölüm ve
 `bce precontext` komutunu çalıştıran bir `UserPromptSubmit` kancası yazar: kanca her
-istemde grafı bir kez sorgular ve yanıtı ajana ilk turundan önce verir. Ajan
-benchmark'ında ölçülen akış budur (−%20 token, yarıya inen arama çıktısı, eşit veya daha
-iyi kontroller; React/TypeScript bir kod tabanında 14 görev, aynı model ve makine).
+istemde grafı bir kez sorgular ve yanıtı ajana ilk turundan önce verir. React/TypeScript bir
+kod tabanında 14 görevlik önceki bir ölçüm bu kancayı −%20 token, yarıya inen arama çıktısı
+ve eşit veya daha iyi kontrollerle ölçtü; [Sonuçlar](#sonuçlar) bölümündeki 600 görevlik
+rakamlar Cursor CLI ve OpenCode üzerinde MCP akışını ölçüyor.
 Cursor'ın istem kancası bağlam ekleyemediği için orada bu işi kural yapar. `--no-hook`,
 `--repo-id` (tekrarlanabilir) ve `--bce-command` dosyaları ayarlar; iki komut da tekrar
 çalıştırılmaya uygundur.
@@ -139,6 +182,9 @@ sonra ajan diğer akışla çalışır:
   motor cevabın eksik olabileceğini söylediğinde (`coverage.likely_incomplete`) geçer.
 - `trust` (**doğru kabul**): `payload.files` cevabın kendisidir. Ajan bu dosyaları doğrudan
   açar ve depoda arama yapmaz.
+
+Cursor CLI ile 600 görevde `hint` görev başına 59k token ile %92.9 dosya recall'una, `trust`
+45k token ile %92.3'e ulaştı; CLI tek başına %95.6 ve 264k.
 
 Sunucu aktif modun adımlarını araç açıklamasına ve her cevabın `payload.workflow` alanına
 yazar; kurallar ajana bu adımları izlemesini söyler. Bu yüzden mod değiştirmek kural
@@ -254,15 +300,24 @@ Bağlam seçici açıkken ögeler bir de **`tier`** taşır: görevin en muhteme
 
 ## Nasıl çalışır
 
+<div align="center">
+<img src="https://raw.githubusercontent.com/bgts-ai-org/bgts-context-engine/main/docs/assets/architecture-overview.tr.png" alt="BGTS Context Engine mimarisi: depo bir kod grafına dönüşür, embedding'ler giriş noktalarını bulur, sorgu anında motor çapaları atar, grafı genişletir, skorlar, daraltır, isteğe bağlı seçer ve paketi birleştirir" width="820">
+</div>
+
+<details>
+<summary>Aynı hat, metin olarak</summary>
+
 ```
 görev metni
    │
-   ├─ çapalar       dört bağımsız kaynak giriş noktası önerir:
-   │                açık isimler, görev geçmişi, tam metin, vektör
+   ├─ çapalar       yedi bağımsız kaynak giriş noktası önerir:
+   │                açık isimler ve route'lar, dosya yolları, görev geçmişi,
+   │                tam metin, kod kullanımı, vektör, etki
    ├─ genişletme    sabit şekilli graf gezinmesi: çağıranlar 2 hop, çağrılanlar 1,
    │                referanslar, tip hiyerarşisi, aynı dosyadaki kardeşler
-   ├─ skorlama      referans türü, görev sinyali, merkezîlik, mesafe,
-   │                yaprak cezası ve kenar kaynağı üzerinden ağırlıklı toplam
+   ├─ skorlama      çapa gücü, referans türü, görev sinyali, yakınlık, tür önceliği,
+   │                semantik sıra, churn, merkezîlik, yaprak ve test cezaları
+   │                ve kenar kaynağı üzerinden ağırlıklı toplam
    ├─ kapsam        çağıranın göremeyeceği depoları düşür
    ├─ daraltma      en iyi N tanesini tut
    ├─ seçim         isteğe bağlı: bir karar modeli N dosyayı
@@ -271,14 +326,27 @@ görev metni
    └─ kapsama       sonucun ne kadarının güvenilir olduğunu raporla
 ```
 
+</details>
+
 Çağıranlar iki hop, çağrılanlar bir hop uzağa gider; bu bilinçlidir: bir fonksiyonu
-değiştirdiğinizde bozulan şey onun yukarısındadır. En ağır ağırlığı referans türü taşır,
-çünkü bir değere *yazan* yer hatanın yaşadığı yerdir, *okuyan* yer ise genelde yalnızca
-sonuçtur. Merkezîlik derece 20'de doyar, çünkü bir logger her şeye dokunur ve hiçbir şeyi
-açıklamaz.
+değiştirdiğinizde bozulan şey onun yukarısındadır. Yapısal sinyaller içinde en ağır ağırlığı
+referans türü taşır, çünkü bir değere *yazan* yer hatanın yaşadığı yerdir, *okuyan* yer ise
+genelde yalnızca sonuçtur. Merkezîlik derece 20'de doyar, çünkü bir logger her şeye dokunur
+ve hiçbir şeyi açıklamaz.
 
 Formülün tamamı, her ağırlık ve güven eşikleri
 [docs/retrieval.md](docs/retrieval.md) içindedir.
+
+## Web arayüzü
+
+`bce serve`, `/ui/` adresinde gerçek bir getirme çağrısını aşama aşama oynatan bir arayüz
+sunar: çapaların yanması, genişlemenin yayılması, adayların skorlanıp kesilmesi.
+
+<div align="center">
+<video src="https://github.com/user-attachments/assets/b602edaa-1189-480e-ac4d-294c173d0067" width="820" controls playsinline>
+BGTS Context Engine web arayüzünün turu.
+</video>
+</div>
 
 ## Öne çıkanlar
 
@@ -288,9 +356,9 @@ Formülün tamamı, her ağırlık ve güven eşikleri
 - **Yapısı gereği deterministik.** Sıralı gezinme, kararlı eşitlik bozma, sürümlenmiş
   skorlama ağırlıkları. `bce bench` her vakayı tekrar tekrar koşup çıktıyı karşılaştırarak
   bunu doğrular.
-- **İsteğe bağlı olarak token'ın beşte biri.** Bağlam seçici görevin değiştirdiği dosyaları
-  tutar, gerisini birer satırla listeler: 600 gerçek değişiklikte cevap başına 8.310 → 1.714
-  token, dosya recall'u 94.4 → 93.4; hata olursa düz sıralamaya düşer.
+- **İsteğe bağlı olarak token'ın yedide birinden azı.** Bağlam seçici görevin değiştirdiği
+  dosyaları tutar, gerisini birer satırla listeler: 600 gerçek değişiklikte cevap başına
+  8.310 → 1.121 token, Jev ile dosya recall'u 94.4 → 93.3; hata olursa düz sıralamaya düşer.
 - **Altı dil.** Python, JavaScript ve TypeScript yerleşik; Java, C# ve Go `langs` ekiyle.
   [Yeni bir dil eklemek](docs/languages.md#adding-a-language) iki dosyaya dokunur.
 - **Diller arası çağrı kenarları.** React Native ve Expo köprüleri, TypeScript'teki
@@ -393,6 +461,12 @@ demektir. Skorlama ağırlıklarındaki bir değişikliğin gerçekten iyileşti
 öğrenmenin tek dürüst yolu da budur. Biçim ve örnek bir dosya
 [docs/deployment.md](docs/deployment.md#benchmarking) içindedir.
 
+`bce bench` sıralamayı ölçer. [Sonuçlar](#sonuçlar) bölümündeki rakamlar ise bir ajanın bu
+sıralamayla ne yaptığını ölçer: ikinci bir düzenek gerçek ajan CLI'larını (Cursor CLI,
+OpenCode) 12 depoluk görev kümesi üzerinde bir kez tek başına, bir kez de her ajan modu için
+koşturur ve her koşuda token, fatura, araç çağrısı, model turu, süre ve dosya recall'unu
+kaydeder. Bu düzenek ve görev kümesi henüz yayımlanmadı.
+
 ## Yol haritası
 
 Zorluğa göre değil, ne sıklıkta gündeme geldiğine göre sıralı:
@@ -407,9 +481,10 @@ Zorluğa göre değil, ne sıklıkta gündeme geldiğine göre sıralı:
 - **Daha geniş SCIP alımı.** Derleyici seviyesindeki kenarlar sözdiziminden türetilenleri
   yener ve öyle skorlanır; daha fazla araç zinciri, grafın daha büyük kısmının `scip`
   kaynağını taşıması demektir.
-- **Yayımlanmış bir ölçüm kümesi.** Açık depolar üzerinde açık bir görev kümesi, böylece
-  sonuçlar yalnızca kendi koşularınız arasında değil projeler arasında da karşılaştırılabilir
-  olur.
+- **Yayımlanmış bir ölçüm kümesi.** [Sonuçlar](#sonuçlar) bölümünün arkasındaki 12 açık
+  depoda 600 görev ve ajan düzeneği bugün bu deponun dışında koşuyor. Yayımlanmaları,
+  sonuçları yeniden üretilebilir ve yalnızca kendi koşularınız arasında değil projeler
+  arasında da karşılaştırılabilir kılar.
 
 İstekler ve itirazlar
 [issue'lara](https://github.com/bgts-ai-org/bgts-context-engine/issues) — insanların

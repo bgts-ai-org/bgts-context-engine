@@ -47,6 +47,7 @@ pnpm-debug.log*
 # The frontend bundle is built into the Python package at release time and is
 # never committed; see scripts/build_ui.py.
 src/bce/api/rest/static/
+scripts/make_readme_hero.py
 
 # ---------------------------------------------------------------------------
 # Environment and secrets
