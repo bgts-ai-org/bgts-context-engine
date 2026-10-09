@@ -294,10 +294,22 @@ class GraphRepository:
             self.upsert_edge(edge, labels)
 
     def delete_file_subgraph(self, file_id: str) -> None:
-        """Remove a file's symbols and the file node (for incremental re-index, Phase 1)."""
+        """Remove everything a file contributed: its symbols, routes, design notes and file node.
+
+        Routes and design notes are not linked to the file by an edge but carry its ``file_id``;
+        unless they are deleted by that property, a deleted or re-indexed file leaves them behind
+        as orphans. A route id is derived from framework, method and path only, so a route
+        declared identically in two files is one node holding the ``file_id`` of whichever file
+        was upserted last; it goes with that file and comes back when a file declaring it is
+        extracted again.
+        """
         self.client.execute(
             "MATCH (s:Symbol)-[:DEFINED_IN]->(f:File {file_id: $fid}) DETACH DELETE s",
             {"fid": file_id},
+        )
+        self.client.execute("MATCH (r:Route {file_id: $fid}) DETACH DELETE r", {"fid": file_id})
+        self.client.execute(
+            "MATCH (n:DesignNote {file_id: $fid}) DETACH DELETE n", {"fid": file_id}
         )
         self.client.execute("MATCH (f:File {file_id: $fid}) DETACH DELETE f", {"fid": file_id})
         if self._fts_available():
