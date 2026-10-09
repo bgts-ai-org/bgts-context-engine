@@ -81,7 +81,7 @@ starts from the answer and adds to it when it needs to.
 | Per task | Cursor CLI · grok-4.7-high-fast<br>alone → with BCE | OpenCode · GLM 5.3 Flash<br>alone → with BCE | Change<br>(mean of both) |
 | --- | --- | --- | --- |
 | Tokens | 264k → 59k | 196k → 24k | **−82 %** |
-| Cost per 1 000 tasks | $15.86 → $6.35 | $12.29 → $4.05 | **−63 %** |
+| Cost | −60 % | −67 % | **−63 %** |
 | Tool calls | 17.4 → 2.0 | 11.3 → 1.1 | **−89 %** |
 | Model turns | 9.1 → 3.0 | 8.3 → 2.1 | **−71 %** |
 | Wall time | 65 s → 42 s | 132 s → 83 s † | **−37 %** |
@@ -97,9 +97,9 @@ not search at all, Cursor CLI went further: 45k tokens, 1.3 tool calls, 36 s, 92
 > Recall is the target, not precision: the engine tells the agent to pass its file list on,
 > about 15 files per task against 1.9 alone, so precision falls (Cursor CLI 91 → 11 %).
 > Cursor CLI had web access in its alone runs and sometimes found the change on GitHub,
-> which lifts that baseline. Cost is priced with one card for both agents (OpenRouter GLM
-> 5.3 Flash: $0.15 input, $0.50 output, $0.03 cache read per 1M tokens), so the Cursor CLI
-> column is not Cursor's own bill. OpenCode's two runs are compared on the 597 tasks both
+> which lifts that baseline. Cost is priced with one rate card for both agents (OpenRouter's
+> GLM 5.3 Flash rates for input, output and cache read), so the Cursor CLI column is not
+> Cursor's own bill. OpenCode's two runs are compared on the 597 tasks both
 > completed. † OpenCode's runs with BCE were on a machine with no free memory (16 GB, 99 %
 > used); MCP start-up and the engine call are normalised to an idle machine's medians, the
 > raw mean was 155 s. The harness is not in this repository yet — see the
