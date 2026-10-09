@@ -437,16 +437,28 @@ class JavaProvider(LanguageProvider):
         frag = GraphFragment()
         source = ctx.source
         root = tree.root_node
-        stack = [root]
+        stack = [(root, "")]
         while stack:
-            current = stack.pop()
+            current, prefix = stack.pop()
+            if current.type in _TYPE_DECLS:
+                # Nested types have their own mappings, independent of the enclosing type.
+                prefix = ""
+                for ann in self._annotations(current):
+                    if self._annotation_name(ann, source) == "RequestMapping":
+                        prefix = self._annotation_string(ann, source, path_only=True) or ""
+                        break
+            elif (
+                current.type == "class_body" and current.parent.type == "object_creation_expression"
+            ):
+                # These methods do not belong to the enclosing controller.
+                prefix = ""
             for child in current.named_children:
                 if child.type == "method_declaration":
-                    self._spring_route(child, ctx, source, symbol_lines, frag)
-                stack.append(child)
+                    self._spring_route(child, ctx, source, symbol_lines, frag, prefix)
+                stack.append((child, prefix))
         return frag
 
-    def _spring_route(self, method_node, ctx, source, symbol_lines, frag) -> None:
+    def _spring_route(self, method_node, ctx, source, symbol_lines, frag, prefix) -> None:
         handler_line = method_node.start_point[0] + 1
         handler_id = symbol_lines.get(handler_line)
         for ann in self._annotations(method_node):
@@ -457,6 +469,7 @@ class JavaProvider(LanguageProvider):
                 http = self._request_mapping_method(ann, source)
             if http is None:
                 continue
+            path = self._spring_path(prefix, path)
             add_route(
                 frag,
                 repo_id=ctx.repo_id,
@@ -468,6 +481,28 @@ class JavaProvider(LanguageProvider):
                 indexed_at_commit=ctx.indexed_at_commit,
                 handler_symbol_id=handler_id,
             )
+
+    @staticmethod
+    def _spring_path(prefix: str, path: str | None) -> str | None:
+        # Matcher/config-dependent paths retain pre-prefix, method-only extraction.
+        # Inspect both sides before normalization; URL/matrix parsing is out of scope.
+        if (
+            not prefix
+            or any(c in prefix for c in "*?%;")
+            or any(c in (path or "") for c in "%;")
+            or "//" in prefix
+            or "//" in (path or "")
+        ):
+            return path
+        if not prefix.startswith("/"):
+            prefix = f"/{prefix}"
+        if not path:
+            return prefix
+        if prefix.endswith("/") and path.startswith("/"):
+            return prefix + path[1:]
+        if prefix.endswith("/") or path.startswith("/"):
+            return prefix + path
+        return f"{prefix}/{path}"
 
     @staticmethod
     def _annotations(node):
@@ -483,7 +518,8 @@ class JavaProvider(LanguageProvider):
         return node_text(name_node, source) if name_node is not None else ""
 
     @staticmethod
-    def _annotation_string(ann, source) -> str | None:
+    def _annotation_string(ann, source, *, path_only: bool = False) -> str | None:
+        """Read one literal, optionally restricted to Spring path/value arguments."""
         args = ann.child_by_field_name("arguments")
         if args is None:
             return None
@@ -491,6 +527,10 @@ class JavaProvider(LanguageProvider):
         while stack:
             current = stack.pop()
             for child in current.named_children:
+                if path_only and child.type == "element_value_pair":
+                    key = child.child_by_field_name("key")
+                    if key is None or node_text(key, source) not in ("value", "path"):
+                        continue
                 if child.type == "string_literal":
                     return node_text(child, source).strip('"')
                 stack.append(child)

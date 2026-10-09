@@ -83,6 +83,317 @@ def test_java_provider_symbols_routes_calls():
     assert _calls(frag), "expected a CALLS edge list->helper"
 
 
+@pytest.mark.parametrize(
+    "class_mapping, method_mapping, expected_path",
+    [
+        ('@RequestMapping("/payments")', '@GetMapping("/{id}")', "/payments/{id}"),
+        ('@RequestMapping(value = "/payments")', '@GetMapping("/{id}")', "/payments/{id}"),
+        ('@RequestMapping(path = "/payments")', '@GetMapping("/{id}")', "/payments/{id}"),
+        ('@RequestMapping("/payments/")', '@GetMapping("/{id}")', "/payments/{id}"),
+        ('@RequestMapping("payments")', '@GetMapping("{id}")', "/payments/{id}"),
+        ('@RequestMapping("/payments")', "@GetMapping", "/payments"),
+        ('@RequestMapping("/payments")', '@GetMapping("")', "/payments"),
+        ('@RequestMapping("/payments")', '@GetMapping("/")', "/payments/"),
+        ('@RequestMapping("/payments/")', "@GetMapping", "/payments/"),
+        ('@RequestMapping("/payments/")', '@GetMapping("")', "/payments/"),
+        ('@RequestMapping("/payments/")', '@GetMapping("/")', "/payments/"),
+        ('@RequestMapping("/payments")', '@GetMapping("//{id}")', "//{id}"),
+        ('@RequestMapping("/payments/")', '@GetMapping("//{id}")', "//{id}"),
+        ('@RequestMapping("/payments//")', '@GetMapping("/{id}")', "/{id}"),
+        ('@RequestMapping("//payments/")', '@GetMapping("/{id}")', "/{id}"),
+        ('@RequestMapping("/payments//")', '@GetMapping("")', "/"),
+        ('@RequestMapping("/payments")', '@GetMapping("details/")', "/payments/details/"),
+        ('@RequestMapping("/")', "@GetMapping", "/"),
+        ('@RequestMapping("/")', '@GetMapping("/{id}")', "/{id}"),
+        ('@RequestMapping("")', '@GetMapping("/{id}")', "/{id}"),
+        ("@RequestMapping", '@GetMapping("/{id}")', "/{id}"),
+        ("", '@GetMapping("/{id}")', "/{id}"),
+        ("", '@GetMapping("relative")', "relative"),
+        ("", "@GetMapping", "/"),
+    ],
+)
+def test_java_spring_class_request_mapping(class_mapping, method_mapping, expected_path):
+    pytest.importorskip("tree_sitter_java")
+    source = f"""
+{class_mapping}
+class PaymentController {{
+    {method_mapping}
+    Payment getPayment() {{ return null; }}
+}}
+""".encode()
+    frag = _extract("PaymentController.java", source)
+    assert _routes(frag) == {("GET", expected_path, "spring")}
+    route = next(n for n in frag.nodes if n.label is NodeLabel.ROUTE)
+    handler = next(
+        n
+        for n in frag.nodes
+        if n.label is NodeLabel.SYMBOL and n.properties["name"] == "getPayment"
+    )
+    assert route.properties["line"] == 4
+    assert any(
+        e.label is EdgeLabel.ROUTES_TO and e.src_id == route.node_id and e.dst_id == handler.node_id
+        for e in frag.edges
+    )
+
+
+@pytest.mark.parametrize(
+    "prefix, path",
+    [
+        ("/payments//", "/payments/"),
+        ("//", "/"),
+        ("/api//payments", "/details"),
+        ("/payments", "/api//details"),
+        ("payments//", "relative"),
+        ("/payments", "api//details"),
+        ("", "//health"),
+    ],
+)
+def test_java_spring_repeated_slashes_keep_method_path(prefix, path):
+    """Internal double slashes retain base behavior without choosing a matcher."""
+    pytest.importorskip("tree_sitter_java")
+    class_mapping = f'@RequestMapping("{prefix}")' if prefix else ""
+    source = f"""
+{class_mapping}
+class PaymentController {{
+    @GetMapping("{path}")
+    public String handle() {{ return "ok"; }}
+}}
+""".encode()
+    assert _routes(_extract("PaymentController.java", source)) == {("GET", path, "spring")}
+
+
+@pytest.mark.parametrize(
+    "non_path_arg",
+    [
+        'produces = "application/json"',
+        'consumes = "application/json"',
+        'name = "payment-controller"',
+        'headers = "X-Tenant=demo"',
+        'params = "mode=full"',
+        'headers = {"X-Tenant=demo", "X-Version=1"}',
+        'params = {"mode=full", "active=true"}',
+    ],
+)
+@pytest.mark.parametrize(
+    "path_arg, expected_path",
+    [
+        ("", "/{id}"),
+        ('value = "/payments"', "/payments/{id}"),
+        ('path = "/payments"', "/payments/{id}"),
+        ('path = ""', "/{id}"),
+    ],
+)
+def test_java_spring_class_mapping_ignores_non_path_args(non_path_arg, path_arg, expected_path):
+    pytest.importorskip("tree_sitter_java")
+    argument_orders = (
+        [(path_arg, non_path_arg), (non_path_arg, path_arg)] if path_arg else [(non_path_arg,)]
+    )
+    for args in argument_orders:
+        source = f"""
+@RequestMapping({", ".join(args)})
+class PaymentController {{
+    @GetMapping("/{{id}}")
+    Payment getPayment() {{ return null; }}
+}}
+""".encode()
+        frag = _extract("PaymentController.java", source)
+        assert _routes(frag) == {("GET", expected_path, "spring")}
+
+
+@pytest.mark.parametrize(
+    "mapping, expected_method",
+    [
+        ('@GetMapping("/{id}")', "GET"),
+        ('@PostMapping("/{id}")', "POST"),
+        ('@PutMapping("/{id}")', "PUT"),
+        ('@PatchMapping("/{id}")', "PATCH"),
+        ('@DeleteMapping("/{id}")', "DELETE"),
+        ('@RequestMapping(path = "/{id}", method = RequestMethod.GET)', "GET"),
+        ('@RequestMapping("/{id}")', "ANY"),
+    ],
+)
+def test_java_spring_class_prefix_applies_to_method_mappings(mapping, expected_method):
+    pytest.importorskip("tree_sitter_java")
+    source = f"""
+@RequestMapping("/payments")
+class PaymentController {{
+    {mapping}
+    Payment getPayment() {{ return null; }}
+}}
+""".encode()
+    frag = _extract("PaymentController.java", source)
+    assert _routes(frag) == {(expected_method, "/payments/{id}", "spring")}
+
+
+def test_java_spring_class_prefix_is_scoped_to_each_type():
+    pytest.importorskip("tree_sitter_java")
+    source = b"""
+@RequestMapping("/payments")
+class PaymentController {
+    @GetMapping("/{id}")
+    Payment getPayment() { return null; }
+
+    class NestedController {
+        @GetMapping("/nested")
+        String nested() { return "ok"; }
+    }
+
+    @RequestMapping("/refunds")
+    class RefundController {
+        @PostMapping("/{id}")
+        String refund() { return "ok"; }
+    }
+}
+
+class HealthController {
+    @GetMapping("/health")
+    String health() { return "ok"; }
+}
+"""
+    a = _extract("Controllers.java", source)
+    b = _extract("Controllers.java", source)
+    assert _routes(a) == {
+        ("GET", "/payments/{id}", "spring"),
+        ("GET", "/nested", "spring"),
+        ("POST", "/refunds/{id}", "spring"),
+        ("GET", "/health", "spring"),
+    }
+    assert a == b
+
+
+def test_java_spring_class_prefix_stops_at_anonymous_class():
+    pytest.importorskip("tree_sitter_java")
+    source = b"""
+@RestController
+abstract class HealthController {}
+
+@RestController
+@RequestMapping("/outer")
+class Outer {
+    @Bean
+    public HealthController healthController() {
+        return new HealthController() {
+            @GetMapping("/health")
+            public String health() { return "ok"; }
+        };
+    }
+
+    @GetMapping("/status")
+    public String status() { return "ok"; }
+}
+"""
+    frag = _extract("Outer.java", source)
+    assert _routes(frag) == {
+        ("GET", "/health", "spring"),
+        ("GET", "/outer/status", "spring"),
+    }
+    assert frag == _extract("Outer.java", source)
+
+
+@pytest.mark.parametrize(
+    "prefix, path",
+    [
+        ("/payments", "/paym%65nts"),
+        ("/payments", "/payments;version=1"),
+        ("/payments", "/other%20path"),
+        ("/payments", "relative;version=1"),
+        ("/paym%65nts", "/{id}"),
+        ("/payments;version=1", "/{id}"),
+        ("/paym%65nts", ""),
+        ("/payments;version=1", ""),
+        ("/paym%65nts", "/"),
+        ("/payments;version=1", "/"),
+        ("paym%65nts", "relative"),
+        ("payments;version=1", "relative"),
+        ("/paym%65nts", "/payments;version=1"),
+        ("/payments;version=1", "/paym%65nts"),
+    ],
+)
+def test_java_spring_encoded_or_matrix_paths_keep_method_path(prefix, path):
+    """Either side can require parsing outside the class-prefix extractor's scope."""
+    pytest.importorskip("tree_sitter_java")
+    source = f"""
+@RequestMapping("{prefix}")
+class PaymentController {{
+    @GetMapping("{path}")
+    public String handle() {{ return "ok"; }}
+}}
+""".encode()
+    assert _routes(_extract("PaymentController.java", source)) == {("GET", path or "/", "spring")}
+
+
+@pytest.mark.parametrize(
+    "prefix, path",
+    [
+        ("/*", "/payments/{id}"),
+        ("/**", "/payments/{id}"),
+        ("/payments/*", "/{id}"),
+        ("/payments/**", "/{id}"),
+        ("/payments/*", "/payments/{id}"),
+        ("/payments/**", "/payments/{id}"),
+        ("/payments/*", "/payments/a/b"),
+        ("/payments/**", "/payments/a/b"),
+        ("/payments/*", "/payments"),
+        ("/payments/**", "/payments"),
+        ("/payments/*", "/payments/"),
+        ("/payments/*", "/payments/{id}/"),
+        ("/payments/**", "/payments/{id}/"),
+        ("/*", ""),
+        ("/**", ""),
+        ("/payments/*", ""),
+        ("/payments/**", ""),
+        ("/payments/*", "/"),
+        ("/payments/**", "/"),
+        ("/payments/*", "//{id}"),
+        ("/payments/**", "//{id}"),
+        ("/payments//*", "/{id}"),
+        ("/payments//*", "/payments/{id}"),
+        ("payments/*", "{id}"),
+        ("/payments/**", "payments/{id}"),
+    ],
+)
+def test_java_spring_wildcard_class_prefix_keeps_method_path(prefix, path):
+    """Keep base behavior without assuming PathPattern or AntPathMatcher settings."""
+    pytest.importorskip("tree_sitter_java")
+    source = f"""
+@RequestMapping("{prefix}")
+class PaymentController {{
+    @GetMapping("{path}")
+    public String handle() {{ return "ok"; }}
+}}
+""".encode()
+    frag = _extract("PaymentController.java", source)
+    assert _routes(frag) == {("GET", path or "/", "spring")}
+
+
+@pytest.mark.parametrize(
+    "prefix, path",
+    [
+        ("/*.html", "/report"),
+        ("/p?yments", "/{id}"),
+        ("/payments/*/items", "/{id}"),
+        ("/{tenant}/*", "/{id}"),
+        ("/files/{*rest}", "/{id}"),
+        ("/payments/*", "/**"),
+        ("/payments/*", "/p%61yments/{id}"),
+        ("/payments/*", "/payments;version=1/{id}"),
+        ("/*.html", ""),
+        ("/*.html", "relative"),
+    ],
+)
+def test_java_spring_unsupported_wildcard_keeps_method_path(prefix, path):
+    """Fallback preserves pre-prefix extraction; it does not emulate Spring."""
+    pytest.importorskip("tree_sitter_java")
+    source = f"""
+@RequestMapping("{prefix}")
+class PaymentController {{
+    @GetMapping("{path}")
+    public String handle() {{ return "ok"; }}
+}}
+""".encode()
+    assert _routes(_extract("PaymentController.java", source)) == {("GET", path or "/", "spring")}
+
+
 def test_go_provider_symbols_routes_calls():
     pytest.importorskip("tree_sitter_go")
     frag = _extract("main.go", GO_SOURCE)
