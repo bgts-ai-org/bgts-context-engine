@@ -89,6 +89,18 @@ implementation to drift.
 Indexing is two passes over the repository, because cross-file references cannot be
 resolved while looking at one file.
 
+**What a full index reads.** The walker (`bce.indexing.gitsync.local.iter_source_files`)
+visits every file under the root with an extension a language provider claims, in sorted
+order, and leaves out two kinds of directory. The first are tool and build directories,
+matched by name at any depth: `.git`, `.hg`, `.svn`, `node_modules`, `.venv`, `venv`, `env`,
+`__pycache__`, `dist`, `build`, `.mypy_cache`, `.pytest_cache`, `.ruff_cache` and
+`.bce_data`. The second are nested git checkouts — a directory holding a `.git` entry
+(directory or gitlink file), such as a worktree under `.claude/worktrees/`, a submodule or a
+cloned dependency — together with everything below it, because its files belong to another
+commit and would duplicate the repository's symbols. Nested checkouts are only skipped when
+the root is itself inside a git checkout; a plain folder holding several clones is walked in
+full. The full index logs how many nested checkouts it skipped and the first few paths.
+
 **Pass one, per file.** Tree-sitter parses the source; a language provider walks the tree
 and emits `File`, `Symbol`, `Module`, `Route` and `DesignNote` nodes together with every
 edge it can see without leaving the file. References it cannot resolve locally are recorded

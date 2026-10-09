@@ -40,6 +40,9 @@ _BRIDGE_EXTS = (".m", ".mm", ".swift", ".kt", ".js", ".jsx", ".ts", ".tsx")
 
 logger = logging.getLogger("bce.indexing")
 
+#: How many skipped nested checkout paths the full index names in its log line.
+_SKIPPED_CHECKOUTS_LOGGED = 5
+
 
 @dataclass(slots=True)
 class IndexSummary:
@@ -234,7 +237,8 @@ class Indexer:
         fragments: list[GraphFragment] = []
         indexed_paths: list[str] = []
         exts = self.extractor.registry.supported_extensions()
-        for rel, abs_path in iter_source_files(root, exts):
+        skipped_checkouts: list[str] = []
+        for rel, abs_path in iter_source_files(root, exts, skipped_checkouts):
             source = abs_path.read_bytes()
             fragment = self.extractor.extract_file(
                 repo_id=repo_id, path=rel, source=source, indexed_at_commit=commit
@@ -250,6 +254,15 @@ class Indexer:
         self._flush_embeddings()
         self._record_churn(root, repo_id, commit, set(indexed_paths))
 
+        if skipped_checkouts:
+            logger.info(
+                "nested git checkouts skipped",
+                extra={
+                    "repo_id": repo_id,
+                    "count": len(skipped_checkouts),
+                    "paths": skipped_checkouts[:_SKIPPED_CHECKOUTS_LOGGED],
+                },
+            )
         logger.info(
             "extraction pass finished",
             extra={"repo_id": repo_id, "files": files, "commit": commit},
