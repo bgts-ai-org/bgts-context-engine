@@ -2,12 +2,20 @@
 
 <div align="center">
 
-<img src="https://raw.githubusercontent.com/bgts-ai-org/bgts-context-engine/main/docs/assets/architecture-overview.png" alt="BGTS Context Engine" width="820">
+<img src="https://raw.githubusercontent.com/bgts-ai-org/bgts-context-engine/main/docs/assets/readme-hero.gif" alt="BGTS Context Engine: a coding agent searching the repository turn after turn, next to the same agent starting from BCE's code graph" width="820">
 
 **Deterministic code-graph context for AI coding agents.**
 
 Ask *"why does the login timeout fire on the meeting webhook?"* and get the eight symbols
 that actually answer it — ranked, budgeted, and reproducible.
+
+[![Tokens −82%](https://img.shields.io/badge/tokens-%E2%88%9282%25-39ff88?style=for-the-badge&labelColor=0b0f14)](#results)
+[![Cost −63%](https://img.shields.io/badge/cost-%E2%88%9263%25-f2ac0b?style=for-the-badge&labelColor=0b0f14)](#results)
+[![Tool calls −89%](https://img.shields.io/badge/tool_calls-%E2%88%9289%25-4d8dff?style=for-the-badge&labelColor=0b0f14)](#results)
+[![Time −37%](https://img.shields.io/badge/time-%E2%88%9237%25-f1881e?style=for-the-badge&labelColor=0b0f14)](#results)
+[![Recall 92.7%](https://img.shields.io/badge/recall-92.7%25_kept-22c55e?style=for-the-badge&labelColor=0b0f14)](#results)
+
+<sub>Two coding agents, 600 real merged changes, 12 repositories, 6 languages — the agent alone against the same agent with BCE as its first step.</sub>
 
 [![PyPI](https://img.shields.io/pypi/v/bgts-context-engine.svg)](https://pypi.org/project/bgts-context-engine/)
 [![Python](https://img.shields.io/pypi/pyversions/bgts-context-engine.svg)](https://pypi.org/project/bgts-context-engine/)
@@ -16,7 +24,7 @@ that actually answer it — ranked, budgeted, and reproducible.
 [![MCP](https://img.shields.io/badge/MCP-compatible-000000.svg)](docs/mcp.md)
 [![Stars](https://img.shields.io/github/stars/bgts-ai-org/bgts-context-engine?style=flat&logo=github)](https://github.com/bgts-ai-org/bgts-context-engine/stargazers)
 
-[Quick start](#quick-start) · [Use it from your agent](#use-it-from-your-agent) · [How it works](#how-it-works) · [Supported models](#supported-models) · [Selector models](docs/selector.md) · [Documentation](#documentation) · [Website](https://bgts-ai-org.github.io/bce-microsite/) · [Türkçe](README.tr.md)
+[Results](#results) · [Quick start](#quick-start) · [Use it from your agent](#use-it-from-your-agent) · [How it works](#how-it-works) · [Supported models](#supported-models) · [Selector models](docs/selector.md) · [Documentation](#documentation) · [Website](https://bgts-ai-org.github.io/bce-microsite/) · [Türkçe](README.tr.md)
 
 </div>
 
@@ -48,7 +56,8 @@ that stage.
 On top of that ranking sits one optional, clearly marked probabilistic step: a *context
 selector* that asks a decision model which of the ranked files the task actually edits and
 hands the agent those in full, the likely-related ones as one line each, and nothing else.
-On 600 real changes it cut the context by 79 % for one point of recall. It is off until
+On 600 real changes it cut the tokens handed to the agent from 8 310 to 1 121 (−87 %) for
+about one point of recall (94.4 → 93.3). It is off until
 `BCE_SELECTOR` names a model — hosted Jev, or decider-2b / decider-4b on your own GPU — and
 `--no-select` gives back the byte-exact pack.
 
@@ -58,11 +67,43 @@ repositories, or the agent stack around it — can engage
 [BGTS](https://www.bgts.com) for consulting. Write to
 **opensource-ai@bgts.com**.
 
-<div align="center">
-<video src="https://github.com/user-attachments/assets/ac8ddd8f-2148-4d16-8c3a-3ce69d32b9d8" width="820" controls playsinline>
-UI walkthrough of the BGTS Context Engine web interface.
-</video>
-</div>
+## Results
+
+Two coding agents ran the same 600 tasks. Each task is a change a project actually merged,
+50 per repository across 12 open-source repositories in six languages: flask and requests
+(Python), express and axios (JavaScript), nest and vite (TypeScript), guava and netty
+(Java), efcore and PowerShell (C#), gin and prometheus (Go). The agent gets the developer's
+sentence in a copy with the history removed and has to name the source files the change
+touched. Every task ran twice: the agent **alone**, with its own grep, glob and read tools,
+and the agent **with BCE as its first step** (`BCE_AGENT_MODE=hint`): it asks the engine,
+starts from the answer and adds to it when it needs to.
+
+| Per task | Cursor CLI · grok-4.7-high-fast<br>alone → with BCE | OpenCode · GLM 5.3 Flash<br>alone → with BCE | Change<br>(mean of both) |
+| --- | --- | --- | --- |
+| Tokens | 264k → 59k | 196k → 24k | **−82 %** |
+| Cost per 1 000 tasks | $15.86 → $6.35 | $12.29 → $4.05 | **−63 %** |
+| Tool calls | 17.4 → 2.0 | 11.3 → 1.1 | **−89 %** |
+| Model turns | 9.1 → 3.0 | 8.3 → 2.1 | **−71 %** |
+| Wall time | 65 s → 42 s | 132 s → 83 s † | **−37 %** |
+| File recall | 95.6 % → 92.9 % | 89.2 % → 92.5 % | **92.4 → 92.7 %** |
+
+The agent stops searching the tree: most of what it saves is the context it re-reads on
+every turn while it greps (cache-read tokens fall by about 90 %). The weaker model gains recall — BCE's
+graph supplies the files GLM 5.3 Flash missed on its own (hard tasks 74 → 81 %). With
+`BCE_AGENT_MODE=trust`, where the agent takes the answer as the set of locations and does
+not search at all, Cursor CLI went further: 45k tokens, 1.3 tool calls, 36 s, 92.3 % recall.
+
+> **Read the numbers with these in mind.**
+> Recall is the target, not precision: the engine tells the agent to pass its file list on,
+> about 15 files per task against 1.9 alone, so precision falls (Cursor CLI 91 → 11 %).
+> Cursor CLI had web access in its alone runs and sometimes found the change on GitHub,
+> which lifts that baseline. Cost is priced with one card for both agents (OpenRouter GLM
+> 5.3 Flash: $0.15 input, $0.50 output, $0.03 cache read per 1M tokens), so the Cursor CLI
+> column is not Cursor's own bill. OpenCode's two runs are compared on the 597 tasks both
+> completed. † OpenCode's runs with BCE were on a machine with no free memory (16 GB, 99 %
+> used); MCP start-up and the engine call are normalised to an idle machine's medians, the
+> raw mean was 155 s. The harness is not in this repository yet — see the
+> [roadmap](#roadmap).
 
 ## Quick start
 
@@ -122,8 +163,9 @@ the same agent guidance as a marked section of `AGENTS.md`.
 of grepping for them, and not to edit a file just because it was listed. `claude-init`
 writes `.mcp.json`, a marked section in `CLAUDE.md`, and a `UserPromptSubmit` hook
 (`bce precontext`) that runs the graph once per prompt and hands the agent the answer
-before its first turn — the flow the agent benchmark measured (−20 % tokens, half the search
-output, same or better checks; 14 tasks on a React/TypeScript codebase, same model and machine).
+before its first turn. An earlier 14-task benchmark on a React/TypeScript codebase measured
+this hook at −20 % tokens and half the search output with the same or better checks; the
+600-task numbers in [Results](#results) measure the MCP flow on Cursor CLI and OpenCode.
 Cursor's prompt hook cannot add context, so there the rule does that job. `--no-hook`,
 `--repo-id` (repeatable) and `--bce-command` adjust the files; both commands are safe to rerun.
 
@@ -136,6 +178,9 @@ init commands write it into the server entry's `env` block (`environment` in
   searches only when the engine says the answer is likely incomplete.
 - `trust` (**accept as correct**): `payload.files` is the answer; the agent opens those files
   and does not search the tree.
+
+On the 600 tasks with Cursor CLI, `hint` reached 92.9 % file recall at 59k tokens per task and
+`trust` 92.3 % at 45k, against 95.6 % and 264k for the CLI alone.
 
 The server states the active mode's steps in the tool description and in every answer's
 `payload.workflow`, and the rules tell the agent to follow them, so switching needs no rule
@@ -250,15 +295,24 @@ for files that are probably related, and `coverage.selector` says what was cut a
 
 ## How it works
 
+<div align="center">
+<img src="https://raw.githubusercontent.com/bgts-ai-org/bgts-context-engine/main/docs/assets/architecture-overview.png" alt="BGTS Context Engine architecture: the repository becomes a code graph, embeddings find entry points, and at query time the engine drops anchors, expands the graph, scores, narrows, optionally selects, and assembles the pack" width="820">
+</div>
+
+<details>
+<summary>The same pipeline as text</summary>
+
 ```
 task text
    │
-   ├─ anchors       four independent sources nominate entry points:
-   │                explicit names, task history, full-text, vector
+   ├─ anchors       seven independent sources nominate entry points:
+   │                explicit names and routes, file paths, task history,
+   │                full-text, code usage, vector, impact
    ├─ expansion     fixed-shape graph walk: callers 2 hops, callees 1,
    │                references, type hierarchy, same-file siblings
-   ├─ scoring       weighted sum over reference kind, task signal, centrality,
-   │                distance, leaf penalty, edge provenance
+   ├─ scoring       weighted sum over anchor strength, reference kind, task
+   │                signal, proximity, kind prior, semantic rank, churn,
+   │                centrality, leaf and test penalties, edge provenance
    ├─ scope         drop repositories this caller may not see
    ├─ narrowing     keep the top N
    ├─ selection     optional: a decision model tiers the N files into
@@ -267,14 +321,27 @@ task text
    └─ coverage      report how much of this is trustworthy
 ```
 
+</details>
+
 Callers reach two hops and callees only one, on purpose: when you change a function, what
-breaks is upstream of it. Reference kind carries the heaviest weight, because a place that
-*writes* a value is where the bug lives while a place that *reads* it is usually just
-downstream. Centrality saturates at degree 20, because a logger touches everything and
+breaks is upstream of it. Of the structural signals, reference kind weighs the most, because
+a place that *writes* a value is where the bug lives while a place that *reads* it is usually
+just downstream. Centrality saturates at degree 20, because a logger touches everything and
 explains nothing.
 
 The full formula, every weight, and the confidence thresholds are in
 [docs/retrieval.md](docs/retrieval.md).
+
+## Web UI
+
+`bce serve` ships a UI at `/ui/` that replays a real retrieval call stage by stage: anchors
+lighting up, expansion spreading, candidates scored and cut.
+
+<div align="center">
+<video src="https://github.com/user-attachments/assets/ac8ddd8f-2148-4d16-8c3a-3ce69d32b9d8" width="820" controls playsinline>
+UI walkthrough of the BGTS Context Engine web interface.
+</video>
+</div>
 
 ## Features
 
@@ -282,9 +349,9 @@ The full formula, every weight, and the confidence thresholds are in
   `IMPORTS`, HTTP `ROUTES_TO` handlers, and `WHY:` comments bound to what they explain.
 - **Deterministic by construction.** Sorted traversal, stable tiebreaks, versioned scoring
   weights. `bce bench` verifies it by running each case repeatedly and comparing output.
-- **A fifth of the tokens, optionally.** The context selector keeps the files a task edits
-  and lists the rest in one line each: 8 310 → 1 714 tokens per answer on 600 real changes,
-  file recall 94.4 → 93.4, fail-open to the plain ranking.
+- **Under a seventh of the tokens, optionally.** The context selector keeps the files a task
+  edits and lists the rest in one line each: 8 310 → 1 121 tokens per answer on 600 real
+  changes, file recall 94.4 → 93.3 with Jev, fail-open to the plain ranking.
 - **Six languages.** Python, JavaScript and TypeScript built in; Java, C# and Go behind the
   `langs` extra. [Adding one](docs/languages.md#adding-a-language) touches two files.
 - **Cross-language call edges.** React Native and Expo bridges connect
@@ -386,6 +453,12 @@ is. It is also the only honest way to know whether a change to the scoring weigh
 The format and a worked example are in
 [docs/deployment.md](docs/deployment.md#benchmarking).
 
+`bce bench` measures the ranking. The numbers in [Results](#results) measure what an agent
+does with it: a second harness drives real agent CLIs (Cursor CLI, OpenCode) over the
+12-repository task set, once alone and once per agent mode, and records tokens, cost, tool
+calls, model turns, wall time and file recall per run. That harness and its task set are
+not published yet.
+
 ## Roadmap
 
 Ordered by how often it comes up, not by difficulty:
@@ -400,8 +473,10 @@ Ordered by how often it comes up, not by difficulty:
   [docs/languages.md](docs/languages.md#adding-a-language).
 - **Wider SCIP ingestion.** Compiler-grade edges beat syntax-derived ones and are scored as
   such; more toolchains means more of the graph carries `scip` provenance.
-- **A published benchmark corpus.** An open task set over public repositories, so results
-  are comparable between projects rather than only between your own runs.
+- **A published benchmark corpus.** The 600 tasks over 12 public repositories and the agent
+  harness behind [Results](#results) run outside this repository today. Publishing them makes
+  the results reproducible and comparable between projects rather than only between your own
+  runs.
 
 Requests and disagreements belong in
 [issues](https://github.com/bgts-ai-org/bgts-context-engine/issues) — what people
