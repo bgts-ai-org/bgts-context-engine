@@ -153,10 +153,17 @@ süreç sessiz kalır; IDE kendi kopyasını başlatır.
 bce --env-file /path/to/engine/.env cursor-init --repo-id my-service   # Cursor
 bce --env-file /path/to/engine/.env claude-init --repo-id my-service   # Claude Code
 bce --env-file /path/to/engine/.env opencode-init --repo-id my-service # OpenCode
+bce --env-file /path/to/engine/.env codex-init --repo-id my-service    # Codex
+bce --env-file /path/to/engine/.env copilot-init --repo-id my-service  # GitHub Copilot
 ```
 
 `opencode-init`, sunucuyu `opencode.json` dosyasına (OpenCode'un `mcp` biçiminde)
 birleştirir ve aynı ajan yönergesini `AGENTS.md` içinde işaretli bir bölüm olarak yazar.
+`codex-init`, sunucu tablosunu `.codex/config.toml` dosyasına ekler (diğer tablolar ve
+yorumlar korunur) ve aynı `AGENTS.md` bölümünü yazar; Codex bu dosyayı projeye güven
+verdikten sonra yükler. `copilot-init`, Copilot CLI ile VS Code'un birlikte okuduğu taşınabilir
+`.mcp.json` dosyasını (Claude Code'un kullandığı girdinin aynısı) ve yönergeyi
+`.github/copilot-instructions.md` içinde işaretli bir bölüm olarak yazar.
 
 `cursor-init`, `.cursor/mcp.json` dosyasını (varsa üzerine birleştirerek) ve
 `.cursor/rules/bgts-context-engine.mdc` kuralını yazar. Kural ajana şunları söyler:
@@ -169,12 +176,12 @@ kod tabanında 14 görevlik önceki bir ölçüm bu kancayı −%20 token, yarı
 ve eşit veya daha iyi kontrollerle ölçtü; [Sonuçlar](#sonuçlar) bölümündeki 600 görevlik
 rakamlar Cursor CLI ve OpenCode üzerinde MCP akışını ölçüyor.
 Cursor'ın istem kancası bağlam ekleyemediği için orada bu işi kural yapar. `--no-hook`,
-`--repo-id` (tekrarlanabilir) ve `--bce-command` dosyaları ayarlar; iki komut da tekrar
+`--repo-id` (tekrarlanabilir) ve `--bce-command` dosyaları ayarlar; tüm init komutları tekrar
 çalıştırılmaya uygundur.
 
-**İki ajan modu.** Ajanın cevaba ne kadar dayanacağını `BCE_AGENT_MODE` belirler. Üç init
-komutu da bu değeri sunucu girdisinin `env` bloğuna yazar (`.cursor/mcp.json`, `.mcp.json`;
-`opencode.json` içinde `environment`). Değeri değiştirip MCP sunucusunu yeniden yükledikten
+**İki ajan modu.** Ajanın cevaba ne kadar dayanacağını `BCE_AGENT_MODE` belirler. Tüm init
+komutları bu değeri sunucu girdisinin `env` bloğuna yazar (`.cursor/mcp.json`, `.mcp.json`,
+`.codex/config.toml`; `opencode.json` içinde `environment`). Değeri değiştirip MCP sunucusunu yeniden yükledikten
 sonra ajan diğer akışla çalışır:
 
 - `hint` (**başlangıç**, varsayılan): ajan `payload.files` ile başlar. Kapsanmayan

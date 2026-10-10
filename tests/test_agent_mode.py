@@ -25,6 +25,8 @@ from bce.integrations.agents import (
     render_claude_section,
     render_cursor_rule,
     setup_claude,
+    setup_codex,
+    setup_copilot,
     setup_cursor,
     setup_opencode,
 )
@@ -134,10 +136,37 @@ def test_opencode_init_writes_the_mode_into_environment(tmp_path: Path):
     assert _mode_in(tmp_path / "opencode.json", "mcp", "environment") == TRUST
 
 
+def test_codex_init_writes_the_mode_and_keeps_a_switched_one(tmp_path: Path):
+    import tomllib
+
+    cfg = tmp_path / ".codex" / "config.toml"
+
+    def mode() -> str:
+        return tomllib.loads(cfg.read_text(encoding="utf-8"))["mcp_servers"][SERVER_NAME]["env"][
+            "BCE_AGENT_MODE"
+        ]
+
+    res = setup_codex(tmp_path, repo_ids=["r"], bce_cmd="bce", env_file=None)
+    assert mode() == HINT
+    assert any("Agent mode: hint" in n and "config.toml" in n for n in res.notes)
+    cfg.write_text(cfg.read_text(encoding="utf-8").replace('"hint"', '"trust"'), encoding="utf-8")
+    setup_codex(tmp_path, repo_ids=["r"], bce_cmd="bce", env_file=None)
+    assert mode() == TRUST  # a rerun does not reset it
+    setup_codex(tmp_path, repo_ids=["r"], bce_cmd="bce", env_file=None, mode="hint")
+    assert mode() == HINT  # an explicit --mode does
+
+
+def test_copilot_init_writes_the_mode_into_mcp_json(tmp_path: Path):
+    setup_copilot(tmp_path, repo_ids=["r"], bce_cmd="bce", env_file=None, mode="trust")
+    assert _mode_in(tmp_path / ".mcp.json") == TRUST
+
+
 def test_project_agent_mode_reads_the_editor_configs(tmp_path: Path):
     assert project_agent_mode(tmp_path) is None
+    setup_codex(tmp_path, repo_ids=["r"], bce_cmd="bce", env_file=None, mode="hint")
+    assert project_agent_mode(tmp_path) == HINT
     setup_opencode(tmp_path, repo_ids=["r"], bce_cmd="bce", env_file=None, mode="trust")
-    assert project_agent_mode(tmp_path) == TRUST
+    assert project_agent_mode(tmp_path) == TRUST  # opencode.json before .codex/config.toml
     setup_claude(tmp_path, repo_ids=["r"], bce_cmd="bce", env_file=None, hook=False, mode="hint")
     assert project_agent_mode(tmp_path) == HINT  # .mcp.json first
 

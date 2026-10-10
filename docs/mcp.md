@@ -36,7 +36,7 @@ After you add or change MCP config, **restart Cursor or VS Code** (or Command Pa
 “Developer: Reload Window”). The server should appear enabled with eight tools, or ten once
 indexing is enabled (see [Configuration](#configuration)).
 
-### One-command setup: `bce cursor-init`, `bce claude-init`, `bce opencode-init`
+### One-command setup: `bce cursor-init`, `claude-init`, `opencode-init`, `codex-init`, `copilot-init`
 
 Run in the project the agent works on, pointing at the engine's `.env`:
 
@@ -44,17 +44,32 @@ Run in the project the agent works on, pointing at the engine's `.env`:
 bce --env-file /path/to/engine/.env cursor-init --repo-id my-service
 bce --env-file /path/to/engine/.env claude-init --repo-id my-service
 bce --env-file /path/to/engine/.env opencode-init --repo-id my-service
+bce --env-file /path/to/engine/.env codex-init --repo-id my-service
+bce --env-file /path/to/engine/.env copilot-init --repo-id my-service
 ```
 
 | | writes | merged into existing? |
 | --- | --- | --- |
 | `cursor-init` | `.cursor/mcp.json` — server entry with the absolute path of this `bce`, `serve-mcp --env-file …`, `PYTHONUTF8=1`, `BCE_AGENT_MODE` | yes: other servers kept |
 | | `.cursor/rules/bgts-context-engine.mdc` — `alwaysApply` rule | overwritten (ours) |
-| `claude-init` | `.mcp.json` — same server entry | yes |
+| `claude-init` | `.mcp.json` — same server entry, with `type: "stdio"` | yes |
 | | `CLAUDE.md` — a section between `<!-- bgts-context-engine:begin/end -->` markers | yes: rest of the file kept |
 | | `.claude/settings.json` — `UserPromptSubmit` hook running `bce precontext` (skip with `--no-hook`) | yes: other hooks kept |
 | `opencode-init` | `opencode.json` — `mcp` entry (`type: local`, `command` array, `environment`, `timeout` 120000 ms) | yes: other servers and settings kept |
 | | `AGENTS.md` — the `claude-init --no-hook` section between the same markers | yes: rest of the file kept |
+| `codex-init` | `.codex/config.toml` — `[mcp_servers.bgts-context-engine]` table (`command`, `args`, `env`, `startup_timeout_sec` 60, `tool_timeout_sec` 120) | yes: other tables and comments kept |
+| | `AGENTS.md` — the same section as `opencode-init` | yes: rest of the file kept |
+| `copilot-init` | `.mcp.json` — the `claude-init` entry; Copilot CLI and VS Code both read this file | yes: other servers kept |
+| | `.github/copilot-instructions.md` — the `claude-init --no-hook` section between the same markers | yes: rest of the file kept |
+
+Codex loads a project `.codex/config.toml` only after you trust the project (`codex` asks on
+first start; `codex mcp list` then shows the server). Copilot CLI loads a project `.mcp.json`
+only in a trusted folder; in prompt mode (`copilot -p`) an untrusted folder needs
+`GITHUB_COPILOT_PROMPT_MODE_WORKSPACE_MCP=true`. Claude Code and Copilot share `.mcp.json`,
+and OpenCode and Codex share the `AGENTS.md` section, so the last init run writes the one
+copy. Codex's defaults (10 s to start, 60 s per tool call) are raised because the server
+loads its encoder at start-up and a cold `get_context_for_task` can take longer than a
+minute.
 
 Options: `--project DIR` (default `.`), `--repo-id ID` (repeatable; default: the directory
 name — must match the name the repository was indexed under), `--env-file PATH` (default:
@@ -80,11 +95,11 @@ switch:
 "env": { "PYTHONUTF8": "1", "BCE_AGENT_MODE": "hint" }
 ```
 
-(`environment` in `opencode.json`). Change the value and reload the MCP server; rerunning
+(`environment` in `opencode.json`; `env = { … }` in `.codex/config.toml`). Change the value and reload the MCP server; rerunning
 an init command keeps it. The server reads the mode once at startup and states that mode's
 steps in three places the agent sees: the server instructions, the end of the
 `get_context_for_task` description, and `payload.workflow` (`mode`, `label`, `steps`) in
-every answer. The rule and the `CLAUDE.md` / `AGENTS.md` section carry no search policy of
+every answer. The rule and the `CLAUDE.md` / `AGENTS.md` / `copilot-instructions.md` section carry no search policy of
 their own; they tell the agent to follow `payload.workflow`, so a switch needs no rewrite.
 Under Claude Code the `bce precontext` hook reads the mode from the session's `.mcp.json`
 and ends its block with the same steps. An unknown value fails the server start.
@@ -391,6 +406,8 @@ whatever sits in front of the engine must authenticate the user and overwrite th
 | `bce cursor-init [--project DIR] [--repo-id R] [--env-file PATH] [--mode M]` | write `.cursor/mcp.json` + the agent rule into a project |
 | `bce claude-init [--project DIR] [--repo-id R] [--env-file PATH] [--no-hook] [--mode M]` | write `.mcp.json`, a `CLAUDE.md` section and the pre-context hook |
 | `bce opencode-init [--project DIR] [--repo-id R] [--env-file PATH] [--mode M]` | write the `opencode.json` `mcp` entry + an `AGENTS.md` section |
+| `bce codex-init [--project DIR] [--repo-id R] [--env-file PATH] [--mode M]` | write the `.codex/config.toml` `mcp_servers` table + an `AGENTS.md` section |
+| `bce copilot-init [--project DIR] [--repo-id R] [--env-file PATH] [--mode M]` | write `.mcp.json` + a `.github/copilot-instructions.md` section |
 | `bce bench --cases F [--out F] [--determinism-runs 3]` | benchmark report as JSON |
 | `bce languages` | list supported languages; needs no database |
 | `bce serve [--host] [--port] [--reload] [--no-ui] [--env-file PATH]` | REST API and web UI |

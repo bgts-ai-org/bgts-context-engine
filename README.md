@@ -152,10 +152,16 @@ indexed), pointing at the engine's `.env`:
 bce --env-file /path/to/engine/.env cursor-init --repo-id my-service   # Cursor
 bce --env-file /path/to/engine/.env claude-init --repo-id my-service   # Claude Code
 bce --env-file /path/to/engine/.env opencode-init --repo-id my-service # OpenCode
+bce --env-file /path/to/engine/.env codex-init --repo-id my-service    # Codex
+bce --env-file /path/to/engine/.env copilot-init --repo-id my-service  # GitHub Copilot
 ```
 
 `opencode-init` merges the server into `opencode.json` (OpenCode's `mcp` format) and writes
-the same agent guidance as a marked section of `AGENTS.md`.
+the same agent guidance as a marked section of `AGENTS.md`. `codex-init` adds the server
+table to `.codex/config.toml` (other tables and comments are kept) and writes the same
+`AGENTS.md` section; Codex loads it once you trust the project. `copilot-init` writes the
+portable `.mcp.json` that Copilot CLI and VS Code both read (the same entry Claude Code
+uses) and the guidance as a marked section of `.github/copilot-instructions.md`.
 
 `cursor-init` writes `.cursor/mcp.json` (merged into an existing one) and the rule
 `.cursor/rules/bgts-context-engine.mdc`, which tells the agent to call
@@ -167,11 +173,12 @@ before its first turn. An earlier 14-task benchmark on a React/TypeScript codeba
 this hook at −20 % tokens and half the search output with the same or better checks; the
 600-task numbers in [Results](#results) measure the MCP flow on Cursor CLI and OpenCode.
 Cursor's prompt hook cannot add context, so there the rule does that job. `--no-hook`,
-`--repo-id` (repeatable) and `--bce-command` adjust the files; both commands are safe to rerun.
+`--repo-id` (repeatable) and `--bce-command` adjust the files; every init command is safe to
+rerun.
 
-**Two agent modes.** `BCE_AGENT_MODE` sets how far the agent relies on the answer. All three
-init commands write it into the server entry's `env` block (`environment` in
-`opencode.json`); change it there and reload the MCP server to switch:
+**Two agent modes.** `BCE_AGENT_MODE` sets how far the agent relies on the answer. Every init
+command writes it into the server entry's `env` block (`environment` in `opencode.json`);
+change it there and reload the MCP server to switch:
 
 - `hint` (**starting point**, the default): the agent starts from `payload.files`, adds the
   files of identifiers the answer does not cover (`coverage.unresolved_identifiers`), and

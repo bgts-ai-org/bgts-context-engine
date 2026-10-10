@@ -7,6 +7,27 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`bce codex-init` and `bce copilot-init`: one-command setup for Codex and GitHub Copilot.**
+  `codex-init` adds a `[mcp_servers.bgts-context-engine]` table to the project's
+  `.codex/config.toml` (`startup_timeout_sec` 60 and `tool_timeout_sec` 120 instead of
+  Codex's 10 / 60 s), replacing an earlier copy of that table and keeping every other line,
+  comments included; it refuses to write when the server is defined in a form it cannot
+  replace (inline table, dotted keys). It writes the same `AGENTS.md` section as
+  `opencode-init`. `copilot-init` writes the portable `.mcp.json` that Copilot CLI and VS
+  Code both read and the agent guidance as a marked section of
+  `.github/copilot-instructions.md`. Both write `BCE_AGENT_MODE` into the server's `env`
+  (default `hint`, a rerun keeps the configured value, `--mode` overrides it), and
+  `bce precontext` also reads the mode from `.codex/config.toml`. Checked with Codex CLI
+  0.162.1 (`codex mcp list`/`get`) and Copilot CLI 1.0.83 (`copilot mcp list`/`get`) in a
+  trusted folder.
+
+### Changed
+
+- `claude-init` writes `"type": "stdio"` in the `.mcp.json` entry, so the one entry is valid
+  for both Claude Code and Copilot.
+
 ## [1.0.2] - 2026-10-09
 
 ### Changed

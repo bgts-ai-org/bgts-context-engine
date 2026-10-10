@@ -14,12 +14,14 @@ Commands:
 - ``cursor-init``      write .cursor/mcp.json + the agent rule into a project
 - ``claude-init``      write .mcp.json, a CLAUDE.md section and the pre-context hook into a project
 - ``opencode-init``    write opencode.json (mcp) + an AGENTS.md section into a project
+- ``codex-init``       write .codex/config.toml (mcp_servers) + an AGENTS.md section into a project
+- ``copilot-init``     write .mcp.json + a .github/copilot-instructions.md section into a project
 - ``languages``        list supported languages/extensions (no database needed)
 - ``serve``            run the REST API (FastAPI/uvicorn)
 - ``serve-mcp``        run the MCP server over stdio
 
-Read/write commands need a running PostgreSQL (Apache AGE + pgvector); ``languages``,
-``cursor-init``, ``claude-init`` and ``opencode-init`` do not.
+Read/write commands need a running PostgreSQL (Apache AGE + pgvector); ``languages`` and the
+``*-init`` commands do not.
 """
 
 from __future__ import annotations
@@ -643,6 +645,55 @@ def opencode_init(
     )
     _report_setup(
         setup_opencode(project, repo_ids=repo_ids, bce_cmd=cmd, env_file=env, mode=mode), env, new
+    )
+
+
+@app.command(name="codex-init")
+def codex_init(
+    project: Path = typer.Option(Path("."), "--project", help=_INIT_PROJECT_HELP),
+    repo_id: list[str] = typer.Option([], "--repo-id", help=_INIT_REPO_HELP),
+    env_file: Path | None = typer.Option(None, "--env-file", help=_INIT_ENV_HELP),
+    bce_command: str | None = typer.Option(None, "--bce-command", help=_INIT_CMD_HELP),
+    mode: str | None = typer.Option(None, "--mode", help=_INIT_MODE_HELP),
+) -> None:
+    """Connect a project to the engine for Codex: .codex/config.toml (mcp_servers) + an AGENTS.md
+    section.
+
+    Merges into existing files (other tables, comments and AGENTS.md content are kept) and is
+    safe to rerun.
+    """
+    from bce.integrations.agents import setup_codex
+
+    mode = _check_mode(mode)
+    project, repo_ids, cmd, env, new = _agent_init_common(
+        project, repo_id, env_file, bce_command, ".codex"
+    )
+    _report_setup(
+        setup_codex(project, repo_ids=repo_ids, bce_cmd=cmd, env_file=env, mode=mode), env, new
+    )
+
+
+@app.command(name="copilot-init")
+def copilot_init(
+    project: Path = typer.Option(Path("."), "--project", help=_INIT_PROJECT_HELP),
+    repo_id: list[str] = typer.Option([], "--repo-id", help=_INIT_REPO_HELP),
+    env_file: Path | None = typer.Option(None, "--env-file", help=_INIT_ENV_HELP),
+    bce_command: str | None = typer.Option(None, "--bce-command", help=_INIT_CMD_HELP),
+    mode: str | None = typer.Option(None, "--mode", help=_INIT_MODE_HELP),
+) -> None:
+    """Connect a project to the engine for GitHub Copilot (CLI and VS Code): .mcp.json + a
+    .github/copilot-instructions.md section.
+
+    Merges into existing files (other servers and instructions are kept) and is safe to rerun.
+    """
+    from bce.integrations.agents import setup_copilot
+
+    mode = _check_mode(mode)
+    project, repo_ids, cmd, env, new = _agent_init_common(
+        project, repo_id, env_file, bce_command, ".github"
+    )
+    _report_setup(
+        setup_copilot(project, repo_ids=repo_ids, bce_cmd=cmd, env_file=env, mode=mode), env, new
     )
 
 

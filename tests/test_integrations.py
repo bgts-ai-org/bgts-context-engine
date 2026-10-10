@@ -1,5 +1,5 @@
-"""Editor integrations: ``bce cursor-init`` / ``claude-init`` / ``opencode-init`` files and the
-pre-context block."""
+"""Editor integrations: ``bce cursor-init`` / ``claude-init`` / ``opencode-init`` /
+``codex-init`` / ``copilot-init`` files and the pre-context block."""
 
 from __future__ import annotations
 
@@ -19,6 +19,8 @@ from bce.integrations.agents import (
     merge_claude_hook,
     render_cursor_rule,
     setup_claude,
+    setup_codex,
+    setup_copilot,
     setup_cursor,
     setup_opencode,
     upsert_marked_section,
@@ -291,6 +293,146 @@ def test_opencode_init_cli_without_env_points_mcp_at_the_template(tmp_path: Path
     cfg = json.loads((tmp_path / "opencode.json").read_text(encoding="utf-8"))
     assert cfg["mcp"][SERVER_NAME]["command"] == ["bce", "serve-mcp", "--env-file", str(env)]
     assert env.is_file()
+
+
+_CODEX_USER_CONFIG = """\
+# my settings
+model = "gpt-5"
+
+[mcp_servers.other]
+command = "other-server"
+args = ["--x"]
+
+[mcp_servers.bgts-context-engine]
+command = "old-bce"
+args = ["serve-mcp"]
+
+[mcp_servers.bgts-context-engine.env]
+BCE_AGENT_MODE = "trust"
+
+[profiles.fast]
+model = "gpt-5-mini"  # keep me
+"""
+
+
+def test_codex_init_merges_config_toml_and_agents_md(tmp_path: Path):
+    import tomllib
+
+    (tmp_path / ".codex").mkdir()
+    (tmp_path / ".codex" / "config.toml").write_text(_CODEX_USER_CONFIG, encoding="utf-8")
+    (tmp_path / "AGENTS.md").write_text("# Agents\n\nKeep me.\n", encoding="utf-8")
+    env = tmp_path / "dir with space" / "engine.env"
+
+    for _ in range(2):  # second run must not duplicate anything
+        res = setup_codex(
+            tmp_path, repo_ids=["cortex-web"], bce_cmd=r"C:\Tools\bce.exe", env_file=env
+        )
+
+    text = (tmp_path / ".codex" / "config.toml").read_text(encoding="utf-8")
+    assert text.startswith("# my settings\n") and 'model = "gpt-5-mini"  # keep me' in text
+    assert text.count(f"[mcp_servers.{SERVER_NAME}]") == 1 and "old-bce" not in text
+    cfg = tomllib.loads(text)
+    assert cfg["model"] == "gpt-5" and cfg["profiles"] == {"fast": {"model": "gpt-5-mini"}}
+    assert cfg["mcp_servers"]["other"] == {"command": "other-server", "args": ["--x"]}
+    assert cfg["mcp_servers"][SERVER_NAME] == {
+        "command": r"C:\Tools\bce.exe",
+        "args": ["serve-mcp", "--env-file", str(env)],
+        "env": {"PYTHONUTF8": "1", "BCE_AGENT_MODE": "trust"},  # the configured mode is kept
+        "startup_timeout_sec": agents.CODEX_STARTUP_TIMEOUT_SEC,
+        "tool_timeout_sec": agents.CODEX_TOOL_TIMEOUT_SEC,
+    }
+    md = (tmp_path / "AGENTS.md").read_text(encoding="utf-8")
+    assert md.startswith("# Agents\n\nKeep me.\n")
+    assert md.count(CLAUDE_BEGIN) == 1 and md.count(CLAUDE_END) == 1
+    assert "call `get_context_for_task` once" in md and "bce precontext" not in md
+    assert "`BCE_AGENT_MODE` in `.codex/config.toml`" in md
+    assert {p.name for p in res.written} == {"config.toml", "AGENTS.md"}
+
+
+def test_codex_init_refuses_a_definition_it_cannot_replace(tmp_path: Path):
+    cfg = tmp_path / ".codex" / "config.toml"
+    cfg.parent.mkdir()
+    original = f'mcp_servers.{SERVER_NAME} = {{ command = "x" }}\n'
+    cfg.write_text(original, encoding="utf-8")
+    with pytest.raises(ValueError, match="cannot replace|merged cleanly"):
+        setup_codex(tmp_path, repo_ids=["r"], bce_cmd="bce", env_file=None)
+    assert cfg.read_text(encoding="utf-8") == original  # left untouched
+    cfg.write_text("[broken\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="not valid TOML"):
+        setup_codex(tmp_path, repo_ids=["r"], bce_cmd="bce", env_file=None)
+
+
+def test_codex_init_cli_without_env_points_mcp_at_the_template(tmp_path: Path, monkeypatch):
+    import tomllib
+
+    from typer.testing import CliRunner
+
+    from bce.cli import app
+
+    monkeypatch.delenv("BCE_ENV_FILE", raising=False)
+    monkeypatch.chdir(tmp_path)
+    out = CliRunner().invoke(
+        app, ["codex-init", "--project", str(tmp_path), "--bce-command", "bce"]
+    )
+    assert out.exit_code == 0, out.output
+    env = tmp_path / ".codex" / agents.ENV_TEMPLATE_FILE
+    cfg = tomllib.loads((tmp_path / ".codex" / "config.toml").read_text(encoding="utf-8"))
+    assert cfg["mcp_servers"][SERVER_NAME]["args"] == ["serve-mcp", "--env-file", str(env)]
+    assert env.is_file()
+
+
+def test_copilot_init_merges_mcp_json_and_instructions(tmp_path: Path):
+    (tmp_path / ".mcp.json").write_text(
+        json.dumps({"mcpServers": {"other": {"type": "http", "url": "http://h"}}}),
+        encoding="utf-8",
+    )
+    (tmp_path / ".github").mkdir()
+    (tmp_path / ".github" / "copilot-instructions.md").write_text(
+        "# Copilot\n\nKeep me.\n", encoding="utf-8"
+    )
+    env = tmp_path / "engine.env"
+
+    for _ in range(2):  # second run must not duplicate anything
+        res = setup_copilot(tmp_path, repo_ids=["cortex-web"], bce_cmd="/opt/bce", env_file=env)
+
+    cfg = json.loads((tmp_path / ".mcp.json").read_text(encoding="utf-8"))
+    assert cfg["mcpServers"]["other"] == {"type": "http", "url": "http://h"}  # kept
+    assert cfg["mcpServers"][SERVER_NAME] == {
+        "type": "stdio",
+        "command": "/opt/bce",
+        "args": ["serve-mcp", "--env-file", str(env)],
+        "env": {"PYTHONUTF8": "1", "BCE_AGENT_MODE": "hint"},
+    }
+    md = (tmp_path / ".github" / "copilot-instructions.md").read_text(encoding="utf-8")
+    assert md.startswith("# Copilot\n\nKeep me.\n")
+    assert md.count(CLAUDE_BEGIN) == 1 and md.count(CLAUDE_END) == 1
+    assert "call `get_context_for_task` once" in md and "`BCE_AGENT_MODE` in `.mcp.json`" in md
+    assert {p.name for p in res.written} == {".mcp.json", "copilot-instructions.md"}
+
+
+def test_copilot_and_claude_share_one_mcp_json_entry(tmp_path: Path):
+    setup_copilot(tmp_path, repo_ids=["r"], bce_cmd="bce", env_file=None, mode="trust")
+    first = json.loads((tmp_path / ".mcp.json").read_text(encoding="utf-8"))
+    setup_claude(tmp_path, repo_ids=["r"], bce_cmd="bce", env_file=None, hook=False)
+    assert json.loads((tmp_path / ".mcp.json").read_text(encoding="utf-8")) == first
+
+
+def test_copilot_init_cli_without_env_points_mcp_at_the_template(tmp_path: Path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from bce.cli import app
+
+    monkeypatch.delenv("BCE_ENV_FILE", raising=False)
+    monkeypatch.chdir(tmp_path)
+    out = CliRunner().invoke(
+        app, ["copilot-init", "--project", str(tmp_path), "--bce-command", "bce"]
+    )
+    assert out.exit_code == 0, out.output
+    env = tmp_path / ".github" / agents.ENV_TEMPLATE_FILE
+    cfg = json.loads((tmp_path / ".mcp.json").read_text(encoding="utf-8"))
+    assert cfg["mcpServers"][SERVER_NAME]["args"] == ["serve-mcp", "--env-file", str(env)]
+    assert env.is_file()
+    assert (tmp_path / ".github" / ".gitignore").read_text(encoding="utf-8").strip() == "bce.env"
 
 
 def test_env_template_is_written_once_and_gitignored(tmp_path: Path):
