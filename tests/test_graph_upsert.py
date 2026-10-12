@@ -108,3 +108,34 @@ def test_imports_edge_with_unknown_endpoints_keeps_the_unlabelled_match() -> Non
     assert _edge_queries(client)[1].startswith(
         "MATCH (a:File {gid: $src}), (b:Module {gid: $dst}) MERGE (a)-[r:IMPORTS]->(b)"
     )
+
+
+def test_delete_file_subgraph_removes_every_node_the_file_owns() -> None:
+    """Routes and design notes hang off a file by ``file_id`` alone, not by an edge; a deleted or
+    re-indexed file must not leave them behind as orphans."""
+    from bce.indexing.extractor import Extractor
+
+    source = b"""const express = require("express");
+const app = express();
+// WHY: health must stay unauthenticated for the load balancer
+function health(req, res) { res.send("ok"); }
+app.get("/health", health);
+"""
+    frag = Extractor().extract_file(
+        repo_id="r", path="server.js", source=source, indexed_at_commit="c"
+    )
+    assert frag is not None
+    file_id = "r:server.js"
+    owned = {
+        node.label
+        for node in frag.nodes
+        if node.properties.get("file_id") == file_id or node.node_id == file_id
+    }
+    assert owned == {NodeLabel.FILE, NodeLabel.SYMBOL, NodeLabel.ROUTE, NodeLabel.DESIGN_NOTE}
+
+    client = _RecordingClient()
+    GraphRepository(client).delete_file_subgraph(file_id)  # type: ignore[arg-type]
+
+    deletes = [q for q, p in client.queries if "DETACH DELETE" in q and p == {"fid": file_id}]
+    for label in owned:
+        assert any(f":{label} " in q or f":{label})" in q for q in deletes), (label, deletes)
