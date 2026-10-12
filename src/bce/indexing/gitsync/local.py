@@ -30,14 +30,23 @@ _SKIP_DIRS = {
 
 
 def iter_source_files(
-    root: str | Path, supported_exts: tuple[str, ...]
+    root: str | Path,
+    supported_exts: tuple[str, ...],
+    skipped_checkouts: list[str] | None = None,
 ) -> Iterator[tuple[str, Path]]:
     """Yield ``(relative_posix_path, absolute_path)`` for files with a supported extension.
 
     Iteration order is sorted for determinism. ``supported_exts`` come from the language registry.
+    When ``root`` is inside a git checkout, directories that are checkouts of their own (they hold
+    a ``.git`` entry) are skipped with everything below them; a root that is not a checkout - a
+    plain folder holding several clones - is walked in full. The relative paths of the skipped
+    checkouts are appended, sorted, to ``skipped_checkouts`` when one is given.
     """
     root_path = Path(root).resolve()
     exts = tuple(e.lower() for e in supported_exts)
+    skip_nested = _is_inside_checkout(root_path)
+    nested_repo_cache: dict[Path, bool] = {}
+    skipped: set[str] = set()
     for path in sorted(root_path.rglob("*")):
         if not path.is_file():
             continue
@@ -45,8 +54,39 @@ def iter_source_files(
             continue
         if not path.name.lower().endswith(exts):
             continue
+        if skip_nested:
+            checkout = _nested_checkout_of(path.parent, root_path, nested_repo_cache)
+            if checkout is not None:
+                skipped.add(checkout.relative_to(root_path).as_posix())
+                continue
         rel = path.relative_to(root_path).as_posix()
         yield rel, path
+    if skipped_checkouts is not None:
+        skipped_checkouts.extend(sorted(skipped))
+
+
+def _is_inside_checkout(root_path: Path) -> bool:
+    """True if ``root_path`` or one of its ancestors holds a ``.git`` entry."""
+    return any((d / ".git").exists() for d in (root_path, *root_path.parents))
+
+
+def _nested_checkout_of(
+    directory: Path, root_path: Path, cache: dict[Path, Path | None]
+) -> Path | None:
+    """Return the outermost git checkout below ``root_path`` containing ``directory``, if any.
+
+    A nested checkout (a worktree under ``.claude/worktrees/``, a submodule, a stray clone) has
+    a ``.git`` entry - a directory or a gitlink file - and belongs to a different commit, so its
+    files would duplicate every symbol of the repository being indexed.
+    """
+    if directory == root_path:
+        return None
+    if directory in cache:
+        return cache[directory]
+    outer = _nested_checkout_of(directory.parent, root_path, cache)
+    result = outer or (directory if (directory / ".git").exists() else None)
+    cache[directory] = result
+    return result
 
 
 def current_commit(root: str | Path) -> str:
