@@ -9,6 +9,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **MCP over streamable HTTP: `bce serve-mcp --transport http [--host] [--port] [--path]`.**
+  The stdio tool catalog served by uvicorn (stateless sessions), so one engine serves agents
+  in other processes or containers. Requests need `Authorization: Bearer <token>`
+  (`BCE_MCP_HTTP_TOKEN`, comma-separated for rotation, compared in constant time); `GET
+  /healthz` is open. Without a token the server binds to loopback only and refuses any other
+  host at startup, and on loopback it rejects non-loopback `Host` / `Origin` headers against
+  DNS rebinding; `BCE_MCP_HTTP_ALLOWED_HOSTS` / `_ORIGINS` enforce the check with a token.
 - **`bce codex-init` and `bce copilot-init`: one-command setup for Codex and GitHub Copilot.**
   `codex-init` adds a `[mcp_servers.bgts-context-engine]` table to the project's
   `.codex/config.toml` (`startup_timeout_sec` 60 and `tool_timeout_sec` 120 instead of

@@ -18,7 +18,7 @@ Commands:
 - ``copilot-init``     write .mcp.json + a .github/copilot-instructions.md section into a project
 - ``languages``        list supported languages/extensions (no database needed)
 - ``serve``            run the REST API (FastAPI/uvicorn)
-- ``serve-mcp``        run the MCP server over stdio
+- ``serve-mcp``        run the MCP server over stdio or streamable HTTP
 
 Read/write commands need a running PostgreSQL (Apache AGE + pgvector); ``languages`` and the
 ``*-init`` commands do not.
@@ -957,19 +957,42 @@ def serve(
 @app.command(name="serve-mcp")
 def serve_mcp(
     env_file: Path | None = typer.Option(None, "--env-file", help=_ENV_FILE_HELP),
+    transport: str = typer.Option(
+        "stdio", "--transport", help="stdio (the agent spawns the server) or http"
+    ),
+    host: str = typer.Option(
+        "127.0.0.1", "--host", help="HTTP bind host; off loopback needs BCE_MCP_HTTP_TOKEN"
+    ),
+    port: int = typer.Option(8765, "--port", help="HTTP bind port"),
+    path: str = typer.Option("/mcp", "--path", help="HTTP endpoint path"),
 ) -> None:
-    """Run the MCP server over stdio (agent-native surface). Requires the 'mcp' package.
+    """Run the MCP server (agent-native surface) over stdio or HTTP. Requires the 'mcp' package.
 
     ``--env-file`` is accepted here as well as before the command name, because an editor's MCP
     config spawns this command directly and reads more naturally with the option after it.
     """
     import asyncio
 
+    if transport not in ("stdio", "http"):
+        raise typer.BadParameter("must be 'stdio' or 'http'", param_hint="--transport")
+    if not path.startswith("/"):
+        raise typer.BadParameter("must start with '/'", param_hint="--path")
     _load_env_file(env_file)
 
-    from bce.api.mcp.server import run_stdio
+    if transport == "stdio":
+        from bce.api.mcp.server import run_stdio
 
-    asyncio.run(run_stdio())
+        asyncio.run(run_stdio())
+        return
+
+    from bce.api.mcp.http import HttpSecurityError
+    from bce.api.mcp.server import run_http
+
+    try:
+        asyncio.run(run_http(host=host, port=port, path=path))
+    except HttpSecurityError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=2) from exc
 
 
 def main() -> None:

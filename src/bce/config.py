@@ -180,6 +180,14 @@ class Settings(BaseSettings):
     # (empty = default) uses it as the starting point, "trust" takes it as the answer. The init
     # commands write it into the editor's MCP server entry, which overrides this file.
     agent_mode: str = ""
+    # --- MCP over HTTP (bce serve-mcp --transport http; bce.api.mcp.http) ---
+    # Comma-separated bearer tokens (several, to rotate one without downtime). Without one the
+    # server binds to loopback only.
+    mcp_http_token: str = ""
+    # Comma-separated Host / Origin values the server accepts ("name:*" allows any port). Empty:
+    # loopback names when serving loopback without a token, otherwise no check.
+    mcp_http_allowed_hosts: str = ""
+    mcp_http_allowed_origins: str = ""
 
     @property
     def mcp_tool_allowlist(self) -> frozenset[str] | None:

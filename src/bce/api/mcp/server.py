@@ -1,6 +1,7 @@
 """MCP server wiring (optional ``mcp`` SDK).
 
-Binds the SDK-independent tool catalog (:mod:`bce.api.mcp.tools`) to a real MCP server. The ``mcp``
+Binds the SDK-independent tool catalog (:mod:`bce.api.mcp.tools`) to a real MCP server, served over
+stdio (:func:`run_stdio`) or streamable HTTP (:func:`run_http`, :mod:`bce.api.mcp.http`). The ``mcp``
 package is an optional dependency; importing this module without it raises a clear error only when
 you actually try to build/run the server, so the rest of the package (and tests) stay importable.
 
@@ -9,7 +10,7 @@ core, and returns the deterministic envelope as JSON text content. Read tools ro
 tools enqueue a job and commit.
 
 Dispatch is synchronous (psycopg queries, and an HTTP call to the embedding provider), so it runs on a
-worker thread rather than on the event loop that drives the stdio transport.
+worker thread rather than on the event loop that drives the transport.
 
 Indexing over MCP is opt-in via ``BCE_MCP_ALLOW_WRITE``. When it is on, this process also runs a job
 worker pool, so queued indexing progresses without a separate ``bce serve``; the queue claims rows
@@ -116,22 +117,15 @@ def _warm_encoder() -> None:  # pragma: no cover - SDK runtime
         )
 
 
-async def run_stdio(name: str = "bgts-context-engine") -> None:  # pragma: no cover - SDK runtime
-    """Run the MCP server over stdio (the common agent transport)."""
-    from mcp.server.stdio import stdio_server
-
+def _start(name: str) -> tuple[Any, Any]:  # pragma: no cover - SDK runtime
+    """Build the server, warm the encoder and, with writes on, start the job workers."""
     from bce.api.mcp.tools import MCP_JOB_TYPES
     from bce.config import get_settings
-    from bce.core.logging import setup_logging
-
-    # stdout carries the protocol, so logs go to stderr, which editors surface as server logs.
-    setup_logging(stream=sys.stderr)
-
-    server = build_server(name)
-    _warm_encoder()
     from bce.core.agent_mode import normalize_agent_mode
     from bce.core.selector import describe_selector
 
+    server = build_server(name)
+    _warm_encoder()
     log = logging.getLogger("bce.api.mcp")
     log.info("context selector: %s", describe_selector())
     log.info("agent mode: %s", normalize_agent_mode(get_settings().agent_mode))
@@ -141,9 +135,64 @@ async def run_stdio(name: str = "bgts-context-engine") -> None:  # pragma: no co
 
         pool = JobWorkerPool(job_types=MCP_JOB_TYPES)
         pool.start()
+    return server, pool
+
+
+async def run_stdio(name: str = "bgts-context-engine") -> None:  # pragma: no cover - SDK runtime
+    """Run the MCP server over stdio (the common agent transport)."""
+    from mcp.server.stdio import stdio_server
+
+    from bce.core.logging import setup_logging
+
+    # stdout carries the protocol, so logs go to stderr, which editors surface as server logs.
+    setup_logging(stream=sys.stderr)
+
+    server, pool = _start(name)
     try:
         async with stdio_server() as (read, write):
             await server.run(read, write, server.create_initialization_options())
+    finally:
+        if pool is not None:
+            pool.stop()
+
+
+async def run_http(
+    host: str = "127.0.0.1",
+    port: int = 8765,
+    path: str = "/mcp",
+    name: str = "bgts-context-engine",
+) -> None:  # pragma: no cover - SDK runtime
+    """Run the MCP server over streamable HTTP (:mod:`bce.api.mcp.http` states the security)."""
+    import uvicorn
+
+    from bce.api.mcp.http import build_http_app, check_bind, parse_list
+    from bce.config import get_settings
+    from bce.core.logging import setup_logging
+
+    setup_logging()
+    settings = get_settings()
+    tokens = parse_list(settings.mcp_http_token)
+    check_bind(host, tokens)  # before the encoder warms up, so a refused bind fails fast
+    server, pool = _start(name)
+    app = build_http_app(
+        server,
+        host=host,
+        path=path,
+        tokens=tokens,
+        allowed_hosts=parse_list(settings.mcp_http_allowed_hosts),
+        allowed_origins=parse_list(settings.mcp_http_allowed_origins),
+    )
+    logging.getLogger("bce.api.mcp").info(
+        "MCP over HTTP on http://%s:%d%s (auth: %s)",
+        host,
+        port,
+        path,
+        "bearer token" if tokens else "none, loopback only",
+    )
+    try:
+        await uvicorn.Server(
+            uvicorn.Config(app, host=host, port=port, log_level="warning", lifespan="on")
+        ).serve()
     finally:
         if pool is not None:
             pool.stop()

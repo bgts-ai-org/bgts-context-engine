@@ -187,6 +187,8 @@ The variables that matter for MCP:
 | `BCE_MCP_ALLOW_WRITE` | `false` by default; `true` adds the two indexing tools |
 | `BCE_MCP_TOOLS` | comma-separated names to advertise (default: all). Agents fetch a tool's schema before first use and chain small calls when many tools are offered, so a narrow catalog such as `get_context_for_task,find_references` costs fewer model turns. Unknown names fail at startup. |
 | `BCE_AGENT_MODE` | `hint` (default) or `trust`: the workflow every answer states in `payload.workflow`; see [Agent mode](#agent-mode). The init commands set it in the MCP config, which overrides the `.env` |
+| `BCE_MCP_HTTP_TOKEN` | `--transport http` only: comma-separated bearer tokens; without one the server binds to loopback only. See [Over HTTP](#over-http) |
+| `BCE_MCP_HTTP_ALLOWED_HOSTS` / `_ORIGINS` | `--transport http` only: accepted `Host` / `Origin` headers (`name:*` = any port) |
 | `BCE_SELECTOR` | context selector for `get_context_for_task`: `off` (default, the raw ranking), `jev`, `decider-2b` or `decider-4b`. See [docs/selector.md](selector.md) |
 | `OPENROUTER_API_KEY` | Jev's key when `BCE_SELECTOR=jev` |
 | `BCE_SELECTOR_URL` | the decider server (`http://<host>:<port>/v1/systemone`), or TypeSafe's own API for Jev |
@@ -207,6 +209,40 @@ If the status stays disconnected, the editor cannot resolve `bce`. Confirm `wher
 The database must be reachable and at least one repository indexed. The stdio server runs
 as the system principal and can see every indexed repository, so run one process per trust
 boundary.
+
+### Over HTTP
+
+`bce serve-mcp --transport http` serves the same tools over MCP streamable HTTP, so one
+long-running engine can serve agents in other processes or containers (a benchmark sidecar,
+a team server):
+
+```bash
+BCE_MCP_HTTP_TOKEN=$(openssl rand -hex 32) bce serve-mcp --transport http --host 0.0.0.0 --port 8765
+```
+
+The client points at the URL and sends the token, e.g. in `.cursor/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "bgts-context-engine": {
+      "url": "http://bce-host:8765/mcp",
+      "headers": { "Authorization": "Bearer <token>" }
+    }
+  }
+}
+```
+
+- Every request except `GET /healthz` needs `Authorization: Bearer <token>`; a miss is a 401.
+  `BCE_MCP_HTTP_TOKEN` takes several comma-separated tokens, so one can be rotated without
+  downtime.
+- Without a token the server binds to loopback only: any other `--host` fails at startup.
+  On loopback it then accepts only loopback `Host` and `Origin` headers, so a web page cannot
+  reach it through DNS rebinding. With a token, set `BCE_MCP_HTTP_ALLOWED_HOSTS` /
+  `BCE_MCP_HTTP_ALLOWED_ORIGINS` to enforce the same check (`name:*` allows any port).
+- The catalog is the stdio one, read-only unless `BCE_MCP_ALLOW_WRITE` is on, and the server
+  sees every indexed repository, as over stdio.
+- There is no TLS: put a reverse proxy in front of anything that leaves a private network.
 
 ## Tools
 
@@ -412,6 +448,7 @@ whatever sits in front of the engine must authenticate the user and overwrite th
 | `bce languages` | list supported languages; needs no database |
 | `bce serve [--host] [--port] [--reload] [--no-ui] [--env-file PATH]` | REST API and web UI |
 | `bce serve-mcp [--env-file PATH]` | MCP over stdio; needs `[mcp]`, PATH-visible `bce`, IDE restart |
+| `bce serve-mcp --transport http [--host 127.0.0.1] [--port 8765] [--path /mcp]` | MCP over streamable HTTP; off loopback needs `BCE_MCP_HTTP_TOKEN` |
 | `bce --env-file PATH <command>` | load configuration from an explicit `.env` (any command) |
 | `bce --version` | version, for bug reports |
 
