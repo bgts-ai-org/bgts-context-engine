@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from bce.domain.enums import NodeLabel
+import re
+
+from bce.domain.enums import EdgeLabel, NodeLabel
 from bce.storage.relational.migrator import MIGRATIONS_DIR, split_sql_statements
 
 
@@ -30,6 +32,37 @@ def test_graph_label_index_migration_covers_every_vertex_label() -> None:
     assert "USING gin (properties) WITH (fastupdate = off)" in sql
     assert "|| '_properties_gin'" in sql
     assert "create_vlabel('code_graph'::cstring, label::cstring)" in sql
+
+
+def test_graph_edge_label_migration_splits_into_three_statements() -> None:
+    sql = (MIGRATIONS_DIR / "0014_graph_edge_labels.sql").read_text(encoding="utf-8-sig")
+    statements = split_sql_statements(sql)
+    # LOAD 'age'; SET LOCAL search_path; one DO block. The splitter must keep the DO body whole.
+    assert len(statements) == 3, [s[:40] for s in statements]
+    assert statements[-1].rstrip().endswith("$$")
+    assert statements[-1].count("$$") == 2
+
+
+def test_graph_edge_label_migration_skips_labels_the_database_already_has() -> None:
+    sql = (MIGRATIONS_DIR / "0014_graph_edge_labels.sql").read_text(encoding="utf-8-sig")
+    body = sql[sql.index("DO $$") :]
+    # create_elabel raises on an existing label (databases indexed before the migration), so the
+    # call has to stay behind a check on this graph and this label, as create_vlabel does in 0008.
+    assert "g.name = 'code_graph' AND l.name = label" in body
+    assert "create_elabel('code_graph'::cstring, label::cstring)" in body
+    assert body.index("IF NOT EXISTS") < body.index("create_elabel")
+
+
+def test_every_edge_label_is_created_up_front_by_a_migration() -> None:
+    created: set[str] = set()
+    for path in MIGRATIONS_DIR.glob("*.sql"):
+        sql = path.read_text(encoding="utf-8-sig")
+        if "create_elabel" in sql:
+            for array in re.findall(r"ARRAY\[([^\]]*)\]", sql):
+                created |= set(re.findall(r"'([A-Z_]+)'", array))
+    # A label that is missing is created lazily again (the bug 0014 fixes). An applied migration
+    # is never rerun, so a label added to EdgeLabel later needs a migration of its own.
+    assert created == {label.value for label in EdgeLabel}
 
 
 def test_fts_identifier_parts_migration_splits_and_rebuilds_the_document() -> None:
