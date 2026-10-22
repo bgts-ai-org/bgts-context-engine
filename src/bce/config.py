@@ -117,6 +117,9 @@ class Settings(BaseSettings):
     retrieval_semantic_guard_ranks: int | None = None
     retrieval_semantic_reserve_share: float | None = None
     retrieval_semantic_rank_scale: float | None = None
+    # Expansion evidence: "hops" (default) or "ppr" (personalized PageRank re-weighting of the
+    # walked subgraph; behind this flag until an A/B run decides). Unset keeps the profile's.
+    retrieval_expansion: str | None = None
 
     # --- Context selector (post-ranking tiering of the K candidates, see bce.core.selector) ---
     # The decision model that tiers the ranked answer: "off" (default: raw ranking), "jev"
@@ -145,10 +148,12 @@ class Settings(BaseSettings):
     # File-level policy: p(file is edited) >= full_threshold -> full content; >= stub_threshold ->
     # one reference line; below -> dropped. The cut is by probability; ``max_files`` only caps
     # the stub listing (a full file is never removed by it). The engine's first file and files
-    # the task text names (pinned) are always kept.
+    # the task text names (pinned) are always kept. The listing keeps what is plausible (p >=
+    # 0.25, at most 6 files in all): a long tail of improbable stubs was read by agents as a
+    # reading list. 0.02 / 20 restore the wide listing.
     selector_full_threshold: float = 0.5
-    selector_stub_threshold: float = 0.02
-    selector_max_files: int = 20
+    selector_stub_threshold: float = 0.25
+    selector_max_files: int = 6
     # Symbols inside a full file scored below this (0 unrelated .. 3 must change) are dropped.
     selector_symbol_min_score: float = 1.0
     # Bytes of symbol text handed over at full detail; beyond it the least probable full files
@@ -176,10 +181,18 @@ class Settings(BaseSettings):
     # tool's schema before using it and tend to chain small calls when many tools are on offer, so a
     # narrow catalog (e.g. "get_context_for_task,find_references") costs fewer model turns.
     mcp_tools: str = ""
+    # The tool set the MCP server advertises when BCE_MCP_TOOLS names none (bce.api.mcp.tools):
+    # "minimal" (empty = default) is get_context_for_task + inspect_symbol_graph with short
+    # schemas; "full" adds hybrid_search and the symbol_id-based graph tools.
+    mcp_toolset: str = ""
     # How far the agent relies on the get_context_for_task answer (bce.core.agent_mode): "hint"
     # (empty = default) uses it as the starting point, "trust" takes it as the answer. The init
     # commands write it into the editor's MCP server entry, which overrides this file.
     agent_mode: str = ""
+    # The get_context_for_task answer an MCP client receives when its call names no view
+    # (bce.core.render): "compact" (empty = default) is the Markdown answer with the token budget
+    # applied to the whole text; "locate" the same without code; "debug" the full JSON envelope.
+    mcp_view: str = ""
     # --- MCP over HTTP (bce serve-mcp --transport http; bce.api.mcp.http) ---
     # Comma-separated bearer tokens (several, to rotate one without downtime). Without one the
     # server binds to loopback only.

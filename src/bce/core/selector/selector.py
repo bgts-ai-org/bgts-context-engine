@@ -30,6 +30,12 @@ stubs). The model is not bit-deterministic (probabilities jitter
 by ~0.01 between identical calls); the flips this causes sit at the stub boundary, on files the
 change never touched, and the recall moved by <= 0.6 points across three repeated runs.
 
+The defaults list less than that fit: stubs need ``p >= 0.25`` and the listing stops at 6 files
+in all. Agents given the ~11-file answer above opened the listed files as a reading list; an
+answer of the full files plus the few plausible ones is read as what it is. ``stub_threshold``
+0.02 / ``max_files`` 20 (``BCE_SELECTOR_STUB_THRESHOLD`` / ``BCE_SELECTOR_MAX_FILES``) restore the
+fitted listing.
+
 The selector is fail-open: any error or timeout returns the ranked candidates untouched, and the
 ``coverage.selector`` block says so. It never adds a candidate the engine did not rank.
 """
@@ -74,8 +80,8 @@ class SelectorConfig:
     model's vote (the rest of the pinned files are still listed as stubs)."""
 
     full_threshold: float = 0.5
-    stub_threshold: float = 0.02
-    max_files: int = 20
+    stub_threshold: float = 0.25
+    max_files: int = 6
     symbol_min_score: float = 1.0
     full_content_bytes: int = 12_000
     pinned_full_limit: int = 6
