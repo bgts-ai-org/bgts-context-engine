@@ -76,6 +76,8 @@ deploy/certs/*
 repos_cache/
 reports/
 local_bench/
+output/
+tmp/
 
 # ---------------------------------------------------------------------------
 # Editors and operating systems
