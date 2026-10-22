@@ -37,6 +37,7 @@ RULE_FILE = "bgts-context-engine.mdc"
 CLAUDE_BEGIN = "<!-- bgts-context-engine:begin -->"
 CLAUDE_END = "<!-- bgts-context-engine:end -->"
 HOOK_MARKER = "bce precontext"  # identifies our hook entry when merging settings
+PRECONTEXT_PATH = "/v1/precontext"  # ... and our curl hook (bce.integrations.precontext)
 
 
 @dataclass
@@ -202,21 +203,20 @@ def render_cursor_rule(repo_ids: list[str]) -> str:
 def render_claude_section(repo_ids: list[str], *, hook: bool, mcp_config: str = ".mcp.json") -> str:
     if hook:
         hook_paragraph = (
-            '- Every prompt you receive is accompanied by a "Code context for this task" system\n'
-            "  reminder: the result of `get_context_for_task` for the prompt text, computed once by\n"
-            "  the `bce precontext` hook before you saw it. Start from those files and lines; read\n"
-            "  them before searching the tree."
+            '- Every prompt you receive is accompanied by a "BCE context" system reminder: the\n'
+            "  answer of `get_context_for_task` for the prompt text, computed once by the\n"
+            "  `bce precontext` hook before you saw it. Start from those files and lines before\n"
+            "  searching the tree."
         )
         workflow_source = (
-            'the "Workflow" lines of the code context block, and `payload.workflow` when you call '
-            "the tool"
+            'the "Workflow" section of the context block, and of the answer when you call the tool'
         )
     else:
         hook_paragraph = (
             "- Before searching the tree for a task, call `get_context_for_task` once with the full\n"
             "  task text. Make it your first action, not something you try after a round of grep."
         )
-        workflow_source = "`payload.workflow`"
+        workflow_source = 'its "Workflow" section (`payload.workflow` with `view: "debug"`)'
     return _template("claude_section.md").format(
         hook_paragraph=hook_paragraph,
         mcp_config=mcp_config,
@@ -388,8 +388,8 @@ def _pick_mode(explicit: str | None, config: Path, res: SetupResult, current: st
             )
             mode = DEFAULT_AGENT_MODE
     res.notes.append(
-        f"Agent mode: {mode} ({LABELS[mode]}). Switch it with {AGENT_MODE_VAR} (hint | trust) in "
-        f"{config}, then reload the MCP server."
+        f"Agent mode: {mode} ({LABELS[mode]}). {AGENT_MODE_VAR} in {config} switches it (then "
+        f"reload the MCP server); trust only suits benchmarks of the engine's localisation."
     )
     return mode
 
@@ -412,13 +412,22 @@ def upsert_marked_section(path: Path, section: str) -> None:
     path.write_text(new, encoding="utf-8")
 
 
-def merge_claude_hook(settings_path: Path, command: str, *, timeout: int = 30) -> None:
-    """Add (or replace) our ``UserPromptSubmit`` hook in a Claude Code settings file."""
+def merge_claude_hook(
+    settings_path: Path,
+    command: str,
+    *,
+    timeout: int = 30,
+    event: str = "UserPromptSubmit",
+    markers: tuple[str, ...] = (HOOK_MARKER, PRECONTEXT_PATH),
+    matcher: str | None = None,
+) -> None:
+    """Add (or replace) our ``event`` hook in a Claude Code settings file; an existing hook is
+    ours when its command contains one of ``markers``."""
     data = _load_json(settings_path)
     hooks = data.get("hooks")
     if not isinstance(hooks, dict):
         hooks = {}
-    entries = hooks.get("UserPromptSubmit")
+    entries = hooks.get(event)
     if not isinstance(entries, list):
         entries = []
     ours = {"type": "command", "command": command, "timeout": timeout}
@@ -428,12 +437,12 @@ def merge_claude_hook(settings_path: Path, command: str, *, timeout: int = 30) -
         if not isinstance(inner, list):
             continue
         for i, h in enumerate(inner):
-            if isinstance(h, dict) and HOOK_MARKER in str(h.get("command", "")):
+            if isinstance(h, dict) and any(m in str(h.get("command", "")) for m in markers):
                 inner[i] = ours
                 replaced = True
     if not replaced:
-        entries.append({"hooks": [ours]})
-    hooks["UserPromptSubmit"] = entries
+        entries.append({**({"matcher": matcher} if matcher else {}), "hooks": [ours]})
+    hooks[event] = entries
     data["hooks"] = hooks
     _dump_json(settings_path, data)
 
@@ -487,10 +496,22 @@ def setup_claude(
     env_file: Path | None,
     hook: bool,
     mode: str | None = None,
+    hook_server: str | None = None,
+    hook_token_env: str | None = None,
+    edit_hook: bool = True,
 ) -> SetupResult:
     """``.mcp.json`` (merged) + a marked section in ``CLAUDE.md`` + optionally the
     ``UserPromptSubmit`` hook in ``.claude/settings.json``. The hook reads the mode from
-    ``.mcp.json`` on every prompt, so the one switch covers both."""
+    ``.mcp.json`` on every prompt, so the one switch covers both. With ``hook_server`` the hook
+    asks that server (``POST /v1/precontext``) with ``curl`` instead of running ``bce precontext``
+    against the database; the server's ``BCE_AGENT_MODE`` then decides the mode, and the token,
+    when the server needs one, is read from the environment variable ``hook_token_env``.
+    ``edit_hook`` adds the ``PostToolUse`` hook that flags edited files as newer than the index
+    (:mod:`bce.integrations.edit_hook`)."""
+    from bce.integrations.edit_hook import HOOK_MARKER as EDIT_MARKER
+    from bce.integrations.edit_hook import MATCHER as EDIT_MATCHER
+    from bce.integrations.precontext import remote_hook_command
+
     res = SetupResult()
     mcp_path = project / ".mcp.json"
     mode = _pick_mode(mode, mcp_path, res, configured_agent_mode(mcp_path))
@@ -499,20 +520,42 @@ def setup_claude(
     claude_md = project / "CLAUDE.md"
     upsert_marked_section(claude_md, render_claude_section(repo_ids, hook=hook))
     res.written.append(claude_md)
-    if hook:
+    settings = project / ".claude" / "settings.json"
+    if hook and hook_server:
+        command = remote_hook_command(hook_server, repo_ids=repo_ids, token_env=hook_token_env)
+        merge_claude_hook(settings, command, timeout=90)
+        res.notes.append(
+            f"The UserPromptSubmit hook asks {hook_server} for the graph's answer before every "
+            "prompt (curl, no local install); it fails open, so an unreachable server only means "
+            "no context. The server's BCE_AGENT_MODE sets the workflow it states."
+        )
+    elif hook:
         parts = [_shell_quote(bce_cmd)]
         if env_file is not None:
             parts += ["--env-file", _shell_quote(str(env_file))]
         parts.append("precontext")
         for r in repo_ids:
             parts += ["--repo-id", _shell_quote(r)]
-        settings = project / ".claude" / "settings.json"
         merge_claude_hook(settings, " ".join(parts))
-        res.written.append(settings)
         res.notes.append(
             "The UserPromptSubmit hook runs `bce precontext` before every prompt (~2 s) and adds the "
             "graph's answer as context; it fails open, so a database outage only means no context."
         )
+    if edit_hook:
+        merge_claude_hook(
+            settings,
+            f"{_shell_quote(bce_cmd)} edit-hook",
+            timeout=10,
+            event="PostToolUse",
+            markers=(EDIT_MARKER, " edit-hook"),
+            matcher=EDIT_MATCHER,
+        )
+        res.notes.append(
+            "The PostToolUse hook notes, after the first edit of each file, that BCE's line "
+            "numbers for that file predate the edit (needs no database)."
+        )
+    if hook or edit_hook:
+        res.written.append(settings)
     res.notes.append(
         "Start a new Claude Code session in the project so it loads the MCP server and CLAUDE.md."
     )

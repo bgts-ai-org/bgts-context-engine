@@ -104,7 +104,7 @@
         },
         {
           "name": "BCE_AGENT_MODE",
-          "description": "How the agent uses the get_context_for_task answer: hint (default, starting point; search only when the engine reports a gap) or trust (accept as correct; no searching the tree). Stated in every answer's payload.workflow.",
+          "description": "How the agent uses the get_context_for_task answer: hint (default, starting point; work from the shown code, search as usual for what it lacks) or trust (localize-only, for benchmarks; no searching the tree). Stated in every answer's Workflow section.",
           "default": "hint",
           "choices": ["hint", "trust"]
         },
