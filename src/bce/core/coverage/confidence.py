@@ -41,6 +41,9 @@ GOD_NODE_DEGREE = 20
 STRONG_ANCHOR_STRENGTH = 0.6
 #: Below this an anchor is "weak" (typically one common lexical term).
 WEAK_ANCHOR_STRENGTH = 0.35
+#: Sources that only back what another source found (a generic name the task uses), so they do
+#: not make an anchor corroborated.
+SUPPORTING_SOURCES = frozenset({"name"})
 
 
 class ConfidenceLevel(StrEnum):
@@ -70,7 +73,7 @@ def compute_coverage(result: RetrievalResult, repository: Any | None = None) -> 
         return float(s)
 
     def is_corroborated(sid: str) -> bool:
-        srcs = sources_of.get(sid, [])
+        srcs = [s for s in sources_of.get(sid, []) if s not in SUPPORTING_SOURCES]
         return len(srcs) >= 2 or "explicit" in srcs or "history" in srcs
 
     strong_anchor_count = sum(
@@ -250,6 +253,7 @@ def coverage_message(coverage: dict[str, Any], locale: str) -> str:
         "high": "coverage.high",
         "medium": "coverage.medium",
         "low": "coverage.low",
+        "unsupported": "coverage.unsupported",
     }.get(level, "coverage.medium")
     return tr.translate(
         key,

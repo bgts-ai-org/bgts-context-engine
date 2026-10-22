@@ -120,13 +120,15 @@ def link_fragments(
     fragments: list[GraphFragment],
     *,
     scip_resolution=None,
+    stats: dict[str, int] | None = None,
 ) -> GraphFragment:
     """Resolve all unresolved refs across ``fragments`` into a single edge fragment.
 
     Also maps Module nodes onto the repo file that defines them (``file_id`` property + a
     ``Module -[IMPORTS]-> File`` edge), which is what makes transitive file-dependency walks
     possible. When a ``scip_resolution`` is supplied, edges it confirms are elevated to
-    ``provenance='scip'``.
+    ``provenance='scip'``. ``stats``, when given, receives the counts of cross-file references
+    seen (``refs``) and resolved (``resolved``) for the index report.
     """
     link_data = [f.link_data for f in fragments if f.link_data is not None]
     link_data.sort(key=lambda ld: ld.file_id)
@@ -146,6 +148,10 @@ def link_fragments(
             if label is None:
                 continue
             target = _resolve(ref, bindings, wildcard_modules, package, table, suffix_table)
+            if stats is not None:
+                stats["refs"] = stats.get("refs", 0) + 1
+                if target is not None and target != ref.src_symbol_id:
+                    stats["resolved"] = stats.get("resolved", 0) + 1
             if target is None or target == ref.src_symbol_id:
                 continue
             provenance = Provenance.TREESITTER
