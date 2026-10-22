@@ -10,10 +10,16 @@
 | Java | `.java` | `tree-sitter-java` | `pip install "bgts-context-engine[langs]"` |
 | C# | `.cs` | `tree-sitter-c-sharp` | `[langs]` |
 | Go | `.go` | `tree-sitter-go` | `[langs]` |
+| Rust | `.rs` | `tree-sitter-rust` | `[langs]` |
+| C / C++ | `.c`, `.h`, `.cc`, `.cpp`, `.cxx`, `.c++`, `.hpp`, `.hh`, `.hxx`, `.h++`, `.ipp` | `tree-sitter-cpp` | `[langs]` |
 
 `bce languages` lists what the running installation actually has; it needs no database.
 The optional providers are registered only if their grammar imports successfully, so a
-missing grammar degrades to "that language is not indexed" rather than an error.
+missing grammar degrades to "that language is not indexed" rather than an error. The indexer
+also counts the code files no provider handles: `bce doctor` shows per repository how many
+files of each language were parsed, and a `get_context_for_task` answer over a repository
+whose code is less than 95 % parsed says which languages are missing (`coverage.index`); under
+20 % its confidence is `unsupported`.
 
 ## What each provider extracts
 
@@ -76,6 +82,35 @@ base list, so every entry becomes `INHERITS`.
 `type_spec` over an `interface_type` becomes `interface`, other type specs become `type`.
 Go has no inheritance, so no `INHERITS` or `IMPLEMENTS` is emitted; satisfying an interface
 is structural and not visible in the syntax of either party.
+
+**Rust.** A file's package is its module path inside the crate (`crates/nu-protocol/src/value/
+mod.rs` → `nu_protocol.value`; `lib.rs`, `main.rs` and `mod.rs` name their directory).
+Functions become `function`; `struct` and `union` become `class`, `trait` becomes
+`interface`, `enum` `enum`, `type` `type`, `const` and `static` `constant`, `macro_rules!`
+`macro`. Methods of an `impl` block are `method`s of the implemented type, addressed as
+`Type.method`, and `impl Trait for Type` becomes `IMPLEMENTS`. `use` trees - groups, `as`
+renames, globs, `crate::` / `self::` / `super::` - become import bindings, so
+`Engine::start()` resolves across files. Calls inside macro arguments (`println!("{}",
+helper(x))`) are found; a macro call itself resolves only to a macro of the same file.
+`///` and `/** */` comments are docstrings.
+
+**C and C++.** One grammar (`tree-sitter-cpp`) parses both. A header and its source share a
+package (the path without its extension), so `parser::depth()` defined out of line in
+`parser.cpp` is the method declared in `parser.h`. Classes, structs and unions become
+`class`, enums `enum`, `typedef` / `using` aliases `type` (an anonymous `typedef struct` is
+named by the typedef), `#define` constants `constant` and function-like macros `macro`;
+functions defined in a namespace, a class body, an `extern "C"` block or under
+`#if` / `#ifdef` are indexed, prototypes and `extern` declarations are not. Base classes
+become `INHERITS`. `#include "x.h"` binds to the file relative to the includer and to any
+file ending in that path; `#include <vector>` (no extension) is the standard library and binds
+nothing.
+
+**Module outlines (every language).** A file with at least three lines of top-level code
+outside its declarations - constants, configuration tables, registrations, `module.exports`
+- also gets a `module` symbol named after the file (`__init__.py`, `index.ts`, `mod.rs` and
+`lib.rs` are named after their directory). Its text is the file's top level with every
+declaration body folded to its header and a `⋯ a-b` marker, so the answer can show where in
+a file the module-level change goes; it ranks below any symbol of the same file.
 
 ## HTTP routes
 

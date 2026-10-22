@@ -38,9 +38,10 @@ class LanguageRegistry:
 
 
 def build_default_registry() -> LanguageRegistry:
-    """Default registry: Python + JS/TS always; Java/C#/Go when their grammars are installed.
+    """Default registry: Python + JS/TS always; Java/C#/Go/Rust/C++ when their grammars are
+    installed.
 
-    Java/C#/Go grammars are optional (``pip install -e '.[langs]'``). Each optional provider is
+    Those grammars are optional (``pip install -e '.[langs]'``). Each optional provider is
     registered only if its grammar import succeeds, so a minimal install still works and the set of
     supported languages is a deterministic function of the environment.
     """
@@ -65,6 +66,8 @@ _OPTIONAL_PROVIDERS = (
     ("bce.indexing.parser.languages.java_provider", "JavaProvider"),
     ("bce.indexing.parser.languages.csharp_provider", "CSharpProvider"),
     ("bce.indexing.parser.languages.go_provider", "GoProvider"),
+    ("bce.indexing.parser.languages.rust_provider", "RustProvider"),
+    ("bce.indexing.parser.languages.cpp_provider", "CppProvider"),
 )
 
 

@@ -83,6 +83,8 @@ langs = [
     "tree-sitter-java>=0.21",
     "tree-sitter-c-sharp>=0.21",
     "tree-sitter-go>=0.21",
+    "tree-sitter-rust>=0.21",
+    "tree-sitter-cpp>=0.21",
 ]
 
 [project.scripts]
