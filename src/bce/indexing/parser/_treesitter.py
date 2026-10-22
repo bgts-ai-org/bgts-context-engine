@@ -54,6 +54,27 @@ SEARCH_TEXT_MAX_CHARS = 24_000
 _DOC_COMMENT_MAX_GAP_LINES = 1
 
 
+def span_properties(node: Any, line: int | None = None) -> dict[str, int]:
+    """Where a declaration's text sits in its file, for numbered evidence spans.
+
+    ``end_line`` is the last line of the declaration (1-based, inclusive) and ``col`` the column
+    its first line starts at, so the stored search text (which begins at the declaration, without
+    the indentation before it) can be shown with the file's own line numbers and indentation.
+    ``text_line`` is set only when the text starts on another line than the symbol's ``line``
+    (a Java/C# field whose annotation precedes the declarator).
+    """
+    if node is None:
+        return {}
+    start = node.start_point[0] + 1
+    end = node.end_point[0] + 1
+    if node.end_point[1] == 0 and end > start:
+        end -= 1  # the node's text ends with the newline (``#define``): it ends on the line before
+    props = {"end_line": end, "col": node.start_point[1]}
+    if line is not None and line != start:
+        props["text_line"] = start
+    return props
+
+
 def body_snippet(node: Any, source: bytes, max_chars: int = BODY_SNIPPET_MAX_CHARS) -> str | None:
     """Trimmed body text for the node property (deterministic char-based truncation)."""
     if node is None:

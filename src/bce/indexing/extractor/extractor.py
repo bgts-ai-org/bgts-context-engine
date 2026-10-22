@@ -14,6 +14,7 @@ from __future__ import annotations
 from bce.domain.enums import EdgeLabel, NodeLabel, Provenance
 from bce.domain.models import GraphFragment
 from bce.indexing.extractor.designnote import extract_design_notes
+from bce.indexing.extractor.module import module_fragment
 from bce.indexing.parser.base import ParseContext
 from bce.indexing.parser.registry import LanguageRegistry, build_default_registry
 from bce.indexing.parser.scip import ScipResolution
@@ -29,11 +30,16 @@ class Extractor:
         registry: LanguageRegistry | None = None,
         *,
         scip_resolution: ScipResolution | None = None,
+        module_symbols: bool = True,
     ) -> None:
         self.registry = registry or build_default_registry()
         # Optional repo-level exact resolution (feature 3). When present, relationship edges it
         # confirms are elevated to Provenance.SCIP; otherwise behaviour is unchanged.
         self.scip_resolution = scip_resolution
+        #: Add each file's ``kind="module"`` outline symbol (:mod:`bce.indexing.extractor.module`).
+        self.module_symbols = module_symbols
+        #: Whether the parser reported syntax errors in the last file extracted (index report).
+        self.last_parse_error = False
 
     def supports(self, path: str) -> bool:
         return self.registry.get_for_path(path) is not None
@@ -68,6 +74,7 @@ class Extractor:
         ctx.package = provider.derive_package(ctx)
 
         tree = provider.parse(source)
+        self.last_parse_error = bool(getattr(getattr(tree, "root_node", None), "has_error", False))
         fragment = provider.extract(tree, ctx)
 
         symbol_lines = self._symbol_lines(fragment)
@@ -81,6 +88,18 @@ class Extractor:
                 symbol_lines=[(line, sid) for line, sid in symbol_lines.items()],
             )
         )
+        if self.module_symbols:
+            fragment.extend(
+                module_fragment(
+                    fragment,
+                    source=source,
+                    file_id=file_id,
+                    path=path,
+                    language=provider.language,
+                    package=ctx.package,
+                    indexed_at_commit=indexed_at_commit,
+                )
+            )
         if self.scip_resolution is not None:
             self._elevate_provenance(fragment)
         return fragment.deduped()

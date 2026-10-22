@@ -316,12 +316,20 @@ def demote_redundant_containers(
         return list(ranked)
 
     member_ids = [c.symbol_id.split("#", 1)[0] for c in ranked[:horizon]]
+    # A module's members are the other symbols of its file.
+    member_files = {
+        c.file_id for c in ranked[:horizon] if c.file_id and (c.kind or "").lower() != "module"
+    }
     out = list(ranked)
     for cand in out:
         if not cand.is_container:
             continue
-        prefix = member_prefix_of(cand.symbol_id)
-        if prefix and any(mid.startswith(prefix) for mid in member_ids):
+        if (cand.kind or "").lower() == "module":
+            redundant = cand.file_id in member_files
+        else:
+            prefix = member_prefix_of(cand.symbol_id)
+            redundant = bool(prefix) and any(mid.startswith(prefix) for mid in member_ids)
+        if redundant:
             cand.score = round(cand.score - penalty, 6)
             cand.features = {**cand.features, "container_member_penalty": penalty}
     return sorted(out, key=lambda c: (-c.score, c.symbol_id))
