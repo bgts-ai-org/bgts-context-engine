@@ -180,11 +180,12 @@ rerun.
 command writes it into the server entry's `env` block (`environment` in `opencode.json`);
 change it there and reload the MCP server to switch:
 
-- `hint` (**starting point**, the default): the agent starts from `payload.files`, adds the
-  files of identifiers the answer does not cover (`coverage.unresolved_identifiers`), and
-  searches only when the engine says the answer is likely incomplete.
-- `trust` (**accept as correct**): `payload.files` is the answer; the agent opens those files
-  and does not search the tree.
+- `hint` (**starting point**, the default): the agent designs the change from the code the
+  answer shows, reads only the ranges it leaves out, opens the files of identifiers the answer
+  does not cover, and searches as usual for anything else; the answer's "Gaps" section lists
+  what the engine knows it lacks.
+- `trust` (**localize-only, for benchmarks**): the answer's files are the set of locations; the
+  agent opens those files and does not search the tree. It measures the engine alone.
 
 On the 600 tasks with Cursor CLI, `hint` reached 92.9 % file recall at 59k tokens per task and
 `trust` 92.3 % at 45k, against 95.6 % and 264k for the CLI alone.
@@ -359,8 +360,10 @@ UI walkthrough of the BGTS Context Engine web interface.
 - **Under a seventh of the tokens, optionally.** The context selector keeps the files a task
   edits and lists the rest in one line each: 8 310 → 1 121 tokens per answer on 600 real
   changes, file recall 94.4 → 93.3 with Jev, fail-open to the plain ranking.
-- **Six languages.** Python, JavaScript and TypeScript built in; Java, C# and Go behind the
-  `langs` extra. [Adding one](docs/languages.md#adding-a-language) touches two files.
+- **Eight languages.** Python, JavaScript and TypeScript built in; Java, C#, Go, Rust and
+  C/C++ behind the `langs` extra. [Adding one](docs/languages.md#adding-a-language) touches
+  two files. `bce doctor` reports how much of each repository's code the index parsed, and an
+  answer says so when part of it is in a language no installed parser handles.
 - **Cross-language call edges.** React Native and Expo bridges connect
   `NativeModules.Foo.bar()` in TypeScript to `bar` in Objective-C, Swift or Kotlin — a hole
   no single parser can see.
@@ -475,7 +478,7 @@ Ordered by how often it comes up, not by difficulty:
   [SECURITY.md](SECURITY.md).
 - **Streamable HTTP transport for MCP.** Today the MCP surface is stdio only, so the server
   runs next to the agent. Remote transport makes one index serve a team.
-- **More languages.** Rust, Kotlin and PHP are the most requested. The provider interface is
+- **More languages.** Kotlin and PHP are the most requested. The provider interface is
   the contribution path with the least friction — see
   [docs/languages.md](docs/languages.md#adding-a-language).
 - **Wider SCIP ingestion.** Compiler-grade edges beat syntax-derived ones and are scored as

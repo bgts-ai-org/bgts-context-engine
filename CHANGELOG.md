@@ -9,6 +9,44 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Compact evidence answer.** `get_context_for_task` returns Markdown by default
+  (`view=compact`; `locate` drops the code, `debug` is the JSON envelope; `BCE_MCP_VIEW`
+  sets the default, REST takes `?view=`). Primary edit targets come as whole declarations
+  with the file's own line numbers (`1344→code`), windowed around what the task names when
+  long, classes as skeletons; each span heading carries its range, its state (`complete`,
+  `partial`, `truncated`, `skeleton`, `outline`, `snippet`), a content hash and its role
+  (`edit` / `dependency`). `max_tokens` applies to the final text, header included.
+  `bce precontext` and the Claude Code hook render the same text.
+- **Related tests and Gaps.** Up to two existing test files of the edit targets (through the
+  graph's call/reference edges and each language's test-file naming) with their test symbols
+  and line ranges; a Gaps section with what the index is known not to cover
+  (`unknown_identifiers`, `unsupported_paths`, `truncated_evidence`, `missing_tests`,
+  `semantic_degraded`) and `coverage.state`.
+- **`inspect_symbol_graph` (MCP), `bce inspect`, `POST /v1/inspect-symbol-graph`.** One
+  tool for `definition`, `callers`, `callees`, `references` and `impact` (from a unified diff
+  or `path:L10-L20` ranges: the touched symbols, what calls / references / extends them, the
+  tests to run). `BCE_MCP_TOOLSET=minimal` (default) advertises it with
+  `get_context_for_task` only; `full` adds the other tools.
+- **Hook from a server.** `POST /v1/precontext` on `bce serve` and `bce serve-mcp
+  --transport http`; `bce precontext --server URL` and `bce claude-init --hook-server URL`
+  (a `curl` hook) use it. `claude-init` also installs a `PostToolUse` hook (`bce edit-hook`,
+  `--no-edit-hook` to skip) that tells the agent once per file that an edited file is newer
+  than the index.
+- **Rust and C/C++ providers** (`[langs]` extra: `tree-sitter-rust`, `tree-sitter-cpp`), see
+  [docs/languages.md](docs/languages.md).
+- **Module outline symbols.** A file with top-level code outside its declarations gets a
+  `module` symbol whose text is the file's top level with declaration bodies folded.
+- **Index quality report: `bce doctor`, `bce index --report`.** The indexer counts every code
+  file per language, parsed or not, and stores the report (migration 0014,
+  `repo_index_stats`): parse errors, symbols, resolved cross-file references, SCIP,
+  embeddings. Answers over a repository less than 95 % parsed say which languages are missing
+  (`coverage.index`, a Gaps line); under 20 % their confidence is `unsupported`. The report is
+  also in the index job result and the REST index responses.
+- **`BCE_RETRIEVAL_EXPANSION=ppr` (experimental).** Personalized-PageRank re-weighting of the
+  expansion evidence; off by default.
+- **Stage timings.** The `get_context_for_task` envelope carries `timings` (milliseconds per
+  pipeline stage, beside the payload); `view=debug` returns it, `bce context --view debug`
+  prints it on stderr and the MCP `mcp tool call` log line records it with the render time.
 - **MCP over streamable HTTP: `bce serve-mcp --transport http [--host] [--port] [--path]`.**
   The stdio tool catalog served by uvicorn (stateless sessions), so one engine serves agents
   in other processes or containers. Requests need `Authorization: Bearer <token>`
@@ -34,6 +72,20 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - `claude-init` writes `"type": "stdio"` in the `.mcp.json` entry, so the one entry is valid
   for both Claude Code and Copilot.
+- Selector defaults: stub threshold 0.02 → 0.25, at most 6 files (`BCE_SELECTOR_*` restore
+  the old values).
+- The agent guidance (`hint` mode) designs the change from the shown code, reads only the
+  ranges the answer leaves out and searches as usual for anything else; `trust` is labelled
+  localize-only.
+- An explicit name matching more than eight symbols is narrowed by the folders and files the
+  task names instead of being dropped, and otherwise only supports what other sources found.
+- Re-index to get the new symbol ranges, module outlines, Rust / C / C++ symbols and the
+  index report.
+- Faster `get_context_for_task`, same answers: the query embedding is requested on a worker
+  thread while the explicit, path, lexical and usage anchors are looked up, and recent query
+  vectors are kept per process; word pairs are matched without ranking and a body fragment's
+  scan stops once it is generic. On a 60k-symbol repository the anchors took 9.3 s before and
+  about 8 s after; on the 14 development tasks the median call fell by about a sixth.
 
 ## [1.0.2] - 2026-10-09
 

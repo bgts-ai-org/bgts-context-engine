@@ -54,7 +54,7 @@ bce --env-file /path/to/engine/.env copilot-init --repo-id my-service
 | | `.cursor/rules/bgts-context-engine.mdc` — `alwaysApply` rule | overwritten (ours) |
 | `claude-init` | `.mcp.json` — same server entry, with `type: "stdio"` | yes |
 | | `CLAUDE.md` — a section between `<!-- bgts-context-engine:begin/end -->` markers | yes: rest of the file kept |
-| | `.claude/settings.json` — `UserPromptSubmit` hook running `bce precontext` (skip with `--no-hook`) | yes: other hooks kept |
+| | `.claude/settings.json` — `UserPromptSubmit` hook running `bce precontext` (skip with `--no-hook`; `--hook-server URL` asks a server with `curl` instead), and a `PostToolUse` hook (`bce edit-hook`, skip with `--no-edit-hook`) | yes: other hooks kept |
 | `opencode-init` | `opencode.json` — `mcp` entry (`type: local`, `command` array, `environment`, `timeout` 120000 ms) | yes: other servers and settings kept |
 | | `AGENTS.md` — the `claude-init --no-hook` section between the same markers | yes: rest of the file kept |
 | `codex-init` | `.codex/config.toml` — `[mcp_servers.bgts-context-engine]` table (`command`, `args`, `env`, `startup_timeout_sec` 60, `tool_timeout_sec` 120) | yes: other tables and comments kept |
@@ -85,8 +85,8 @@ server offers both. `BCE_AGENT_MODE` picks one:
 
 | `BCE_AGENT_MODE` | | the agent… |
 | --- | --- | --- |
-| `hint` (default) | starting point | starts from `payload.files`, adds the `defined_in` files of every `coverage.unresolved_identifiers` entry, and stops when that list is empty and `coverage.likely_incomplete` is false. Only when the engine says the answer is likely incomplete does it look at `payload.candidates` and run a few targeted greps |
-| `trust` | accept as correct | takes `payload.files` (`full` and `stub`) as the set of locations, opens them directly and does not search the tree; it says so when they do not cover the task |
+| `hint` (default) | starting point | designs the change from the code under "Primary edit targets", reads only the ranges the answer leaves out (never whole files), opens the files "Gaps" names for uncovered identifiers, and searches as usual for anything else it needs; "Gaps" lists what the engine knows the answer lacks |
+| `trust` | localize-only, for benchmarks | takes the answer's files (primary and related) as the set of locations, opens them directly and does not search the tree; it says so when they do not cover the task. It measures the engine's localisation alone |
 
 The init commands write the mode into the server entry's environment block, which is the
 switch:
@@ -126,6 +126,19 @@ prompts under 20 characters and slash commands), and prints the context block ca
 Claude Code's 10 000-character limit. It fails open: an unreachable database means a
 prompt without context, never a blocked prompt. `bce precontext --task "…"` prints the same
 block for inspection.
+
+A client without database access (a container, a laptop against a team server) can get the
+block from a server instead: `POST /v1/precontext` on `bce serve` and on `bce serve-mcp
+--transport http` (same bearer token) takes the hook JSON and answers with the hook response,
+applying the character cap itself; the server's `BCE_AGENT_MODE` sets the workflow unless the
+request passes `?mode=`. `bce precontext --server URL [--token T]` forwards the hook there, and
+`bce claude-init --hook-server URL [--hook-token-env VAR]` writes a plain `curl` hook, so the
+client needs no install at all.
+
+Once the agent edits a file, the line numbers and code the engine shows for it are those of
+the indexed text. The `PostToolUse` hook (`bce edit-hook`, no database) notes that once per
+file and session, after the first `Edit`/`Write`/`MultiEdit`/`NotebookEdit`; it records the
+edits in `.bce/session_edits`.
 
 ### Manual configuration
 
@@ -185,7 +198,9 @@ The variables that matter for MCP:
 | `BCE_EMBEDDING_BASE_URL` | the server URL when the provider is `openai` |
 | `BCE_EMBEDDING_API_KEY` | `openai` only; leave empty for a local server that does not check one |
 | `BCE_MCP_ALLOW_WRITE` | `false` by default; `true` adds the two indexing tools |
-| `BCE_MCP_TOOLS` | comma-separated names to advertise (default: all). Agents fetch a tool's schema before first use and chain small calls when many tools are offered, so a narrow catalog such as `get_context_for_task,find_references` costs fewer model turns. Unknown names fail at startup. |
+| `BCE_MCP_TOOLSET` | `minimal` (default): `get_context_for_task` + `inspect_symbol_graph` with short schemas (about 300 tokens together); `full`: also `hybrid_search` and the `symbol_id`-based graph tools. Every advertised schema is in the agent's context on every turn |
+| `BCE_MCP_TOOLS` | comma-separated names to advertise instead of the toolset (default: empty, the toolset decides). Unknown names fail at startup. |
+| `BCE_MCP_VIEW` | the `get_context_for_task` answer when a call names no `view`: `compact` (default), `locate` or `debug` |
 | `BCE_AGENT_MODE` | `hint` (default) or `trust`: the workflow every answer states in `payload.workflow`; see [Agent mode](#agent-mode). The init commands set it in the MCP config, which overrides the `.env` |
 | `BCE_MCP_HTTP_TOKEN` | `--transport http` only: comma-separated bearer tokens; without one the server binds to loopback only. See [Over HTTP](#over-http) |
 | `BCE_MCP_HTTP_ALLOWED_HOSTS` / `_ORIGINS` | `--transport http` only: accepted `Host` / `Origin` headers (`name:*` = any port) |
@@ -246,14 +261,17 @@ The client points at the URL and sends the token, e.g. in `.cursor/mcp.json`:
 
 ## Tools
 
-Eight read-only tools (narrow the catalog with `BCE_MCP_TOOLS`), plus two indexing tools when `BCE_MCP_ALLOW_WRITE=true`. Every one
-accepts an optional `locale` and returns the same envelope.
+By default (`BCE_MCP_TOOLSET=minimal`) two read-only tools: `get_context_for_task` and
+`inspect_symbol_graph`. `BCE_MCP_TOOLSET=full` adds the other retrieval tools below;
+`BCE_MCP_ALLOW_WRITE=true` adds the indexing tools. Every one accepts an optional `locale` and
+returns the same envelope.
 
 ### Retrieval
 
 | Tool | Required | Optional | Returns |
 | --- | --- | --- | --- |
 | `get_context_for_task` | `task_text` | see below | `anchors`, `context`, `coverage` |
+| `inspect_symbol_graph` | `query` | `mode` (`definition`), `repo_ids`, `max_tokens` | Markdown (JSON with `view=debug`); see below |
 | `hybrid_search` | `query` | `repo_ids`, `limit` (10, max 100) | `candidates`, `model`, `weights_version` |
 | `resolve_symbol` | `name` | `repo_id` | `matches`, `indexed_at_commit` |
 | `find_references` | `symbol_id` | | `references` with file, line, edge type, `ref_kind`, provenance |
@@ -266,6 +284,22 @@ reads similarly — the failure mode pure vector search is prone to.
 
 `resolve_symbol` turns a name from a bug report into the `symbol_id` the graph tools take.
 Those tools either find the answer or say they did not.
+
+### `inspect_symbol_graph`
+
+One graph question about one symbol, asked the way an agent has it in hand, answered with code
+it can open:
+
+- `query`: a name (`check_token`), a member (`Session.refresh`, `Session::refresh`), a position
+  (`app/auth.py:42`), or for `mode=impact` a unified diff or `path:L10-L20` ranges.
+- `mode`: `definition` (the numbered declaration; long ones windowed, classes as skeletons),
+  `callers` / `references` (each calling symbol with the lines around the call), `callees`, or
+  `impact` (the symbols the change touches, the symbols that call, reference or extend them -
+  two hops - and the tests to run).
+
+A name several production symbols share answers with the candidates, each as a `path:line`
+query that names one of them. The same tool is `bce inspect QUERY --mode MODE` on the command
+line and `POST /v1/inspect-symbol-graph` over REST.
 
 ### Indexing
 
@@ -348,6 +382,15 @@ programmatically. The stdio server does not supply one.
 `message` is human-readable prose for logs and UIs, translated according to `locale`, and
 should not be parsed.
 
+A `get_context_for_task` envelope also carries `timings`: the wall time of each stage in
+milliseconds (`encode`, the query embedding's provider round trip, 0 when it came from the
+per-process cache; `semantic`, the nearest-symbol search plus any wait for that embedding;
+`anchors`, which includes it; `expand`, `candidates`, `score`, `narrow` and `retrieve`, which
+spans them; `enrich`, `selector`, `assemble`, `identifiers`, `evidence`, `tests`, `gaps`;
+`total`). It sits beside the payload because it differs from run to run. `view=debug` returns
+it, `bce context --view debug` prints it on stderr, and the MCP server adds it, with `render`
+(the Markdown rendering), to its `mcp tool call` log line.
+
 A `get_context_for_task` payload contains:
 
 - **`anchors`** — `symbol_id` → the sources that nominated it (`explicit`, `history`,
@@ -361,9 +404,14 @@ A `get_context_for_task` payload contains:
   only if the full tier does not cover the task), `file_relevance` (the model's probability
   that the task edits the file) and, on full items, `symbol_relevance` (0 unrelated … 3 must
   change).
-- **`coverage`** — the trust report, ending in `confidence` of `high`, `medium` or `low`.
+- **`coverage`** — the trust report, ending in `confidence` of `high`, `medium` or `low`, or
+  `unsupported` when the index parses less than 20 % of the repository's code files.
   See [docs/retrieval.md](retrieval.md#7-coverage-and-confidence). Treat `low` as a signal
-  to ask a clarifying question rather than to start editing. `coverage.selector` is present
+  to ask a clarifying question rather than to start editing, and `unsupported` as "search
+  natively". `coverage.index` (from the index report, see `bce doctor`) gives the code files,
+  the parsed ones, their `ratio` and the `unparsed` languages with their main directories;
+  `partial` (under 95 % parsed) sets `coverage.state` to `unknown` and adds a Gaps line.
+  `coverage.selector` is present
   when the selector ran: `method` (`jev`, `decider-2b`, `decider-4b`), `served_model`,
   `status` (`ok`, `partial`, `error` — the items are then the raw ranking), tier counts, `ms`
   and, for Jev, `cost_usd`.
@@ -371,6 +419,16 @@ A `get_context_for_task` payload contains:
   **`candidates`** — files the selector left out (paths only). `coverage.unresolved_identifiers`
   names identifiers of the task the answer does not cover, each with the files defining it;
   `coverage.likely_incomplete` folds that with the selector's failure modes.
+  `coverage.gaps` holds what the index is known not to cover: `unknown_identifiers` (names
+  the task's prose uses that no indexed symbol has), `unsupported_paths` (source files the task
+  names that have no indexed symbols, `reason` `language` or `missing`; docs and configs are
+  not reported), `truncated_evidence`, `missing_tests` and `semantic_degraded`;
+  `coverage.state` is `unknown` when the task names a source file in a language no installed
+  parser handles or the semantic channel did not contribute, else `known`.
+- **`evidence`** — the code spans the compact view shows, with `start`/`end`, `complete`,
+  `content_hash` and the commit they were indexed at; **`tests`** — up to two existing test
+  files of the edit targets (found through the graph's call/reference edges and the language's
+  test-file naming), each with its test symbols and their line ranges.
 - **`workflow`** — MCP only: the [agent mode](#agent-mode) and its numbered steps.
 
 ## REST endpoints
@@ -432,15 +490,18 @@ whatever sits in front of the engine must authenticate the user and overwrite th
 | Command | |
 | --- | --- |
 | `bce migrate` | apply pending migrations |
-| `bce index --repo P --name N` | full-index a local repository |
+| `bce index --repo P --name N [--report]` | full-index a local repository; `--report` prints the index quality report |
+| `bce doctor [--repo N] [--json]` | database, migrations, parsers, embedding and retrieval settings, and each repository's index report (code files per language and how many were parsed, parse errors, symbols, resolved cross-file references, SCIP); exits 1 when the database is unreachable or migrations are pending |
 | `bce index-remote --url U [--name N] [--branch B]` | clone and index a remote repository |
 | `bce reindex --repo P --name N [--since C] [--to HEAD]` | incremental re-index from git diff |
 | `bce resolve-symbol --name N [--repo R]` | Layer 1 from the shell |
 | `bce find-references --symbol-id S` | Layer 1 from the shell |
 | `bce context --task T [--max-tokens 1500] [--max-candidates K] [--no-select]` | Layer 3 from the shell; K defaults to 50 with the context selector, 20 without; `--no-select` skips the selector and returns the raw ranking |
-| `bce precontext --task T [--repo-id R] [--mode M]` | the compact context block an agent prompt carries; without `--task` it is a Claude Code `UserPromptSubmit` hook |
+| `bce precontext --task T [--repo-id R] [--mode M]` | the compact context block an agent prompt carries; without `--task` it is a Claude Code `UserPromptSubmit` hook (`--server URL [--token T]`: computed by that server) |
 | `bce cursor-init [--project DIR] [--repo-id R] [--env-file PATH] [--mode M]` | write `.cursor/mcp.json` + the agent rule into a project |
-| `bce claude-init [--project DIR] [--repo-id R] [--env-file PATH] [--no-hook] [--mode M]` | write `.mcp.json`, a `CLAUDE.md` section and the pre-context hook |
+| `bce claude-init [--project DIR] [--repo-id R] [--env-file PATH] [--no-hook] [--hook-server URL] [--no-edit-hook] [--mode M]` | write `.mcp.json`, a `CLAUDE.md` section, the pre-context hook and the edited-file hook |
+| `bce inspect QUERY [--mode M] [--repo R]` | the `inspect_symbol_graph` answer (`-` reads a diff from stdin) |
+| `bce edit-hook` | the Claude Code `PostToolUse` hook that flags edited files as newer than the index |
 | `bce opencode-init [--project DIR] [--repo-id R] [--env-file PATH] [--mode M]` | write the `opencode.json` `mcp` entry + an `AGENTS.md` section |
 | `bce codex-init [--project DIR] [--repo-id R] [--env-file PATH] [--mode M]` | write the `.codex/config.toml` `mcp_servers` table + an `AGENTS.md` section |
 | `bce copilot-init [--project DIR] [--repo-id R] [--env-file PATH] [--mode M]` | write `.mcp.json` + a `.github/copilot-instructions.md` section |
