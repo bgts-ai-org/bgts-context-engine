@@ -7,12 +7,11 @@ about. Two consumers use that:
   a named identifier (or are the named path) are pinned so the decision model cannot drop them
   (measured: of the expected files the model voted out, the median probability was 0.04 while
   the task text named them outright).
-* :func:`unresolved_identifiers` - after assembly, the named identifiers that the context does
-  not cover, each with the indexed files that define it. This is the one signal an agent needs
-  to decide whether to look further: an empty list means every name the task used is in hand;
-  a non-empty one says exactly which file to open next, without a search. Names the index does
-  not know at all (a variable, a name the task is about to introduce) are *not* reported -
-  searching for them is what the agent must not be sent to do.
+* :func:`identifier_gaps` - after assembly, the named identifiers that the context does not
+  cover: ``unresolved`` ones each with the indexed files that define it (open those, no search
+  needed), and ``unknown`` ones the index has no symbol for at all (a name the task is about to
+  introduce, or code in a file or language the index does not cover). Both are gaps the agent
+  is told about; only it can tell which unknown name is worth a search.
 
 Pure string matching over the items; one bulk name lookup against the repository for the
 unresolved set. Deterministic.
@@ -20,6 +19,7 @@ unresolved set. Deterministic.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from bce.core.orchestrator import bulk
@@ -43,6 +43,8 @@ _PROSE_CAPS = frozenset(
 _DEFINED_IN_LIMIT = 3
 #: Unresolved identifiers reported in total (a long PR description can name dozens).
 _UNRESOLVED_LIMIT = 8
+#: Identifiers unknown to the index reported in total.
+_UNKNOWN_LIMIT = 5
 
 
 def task_identifiers(task_text: str) -> list[str]:
@@ -54,6 +56,36 @@ def task_identifiers(task_text: str) -> list[str]:
         if name not in out:
             out.append(name)
     return out
+
+
+_FENCE_RE = re.compile(r"```.*?(?:```|\Z)", re.S)
+#: Product and language names written in identifier case in prose.
+_PROSE_NAMES = frozenset(
+    {
+        "javascript", "typescript", "github", "gitlab", "bitbucket", "pypi", "macos", "nodejs",
+        "postgresql", "mysql", "sqlite", "mongodb", "graphql", "openapi", "websocket", "youtube",
+        "powershell", "vscode", "intellij", "jetbrains", "dockerfile", "kubernetes", "webpack",
+        "eslint", "prettier", "jquery", "reactjs", "nextjs", "vuejs", "angularjs", "dotnet",
+    }
+)  # fmt: skip
+
+
+def _worth_reporting_unknown(prose: str, name: str) -> bool:
+    """Whether a name no indexed symbol has is a gap worth telling the agent about.
+
+    Only names the task's prose uses as a name of their own. Not: the names an issue's
+    reproduction snippet defines, a member written after a dot (``chain.from_iterable``,
+    ``x.setter``: it belongs to something else), a markup tag of the prompt
+    (``<issue_description>``), an all-caps word without an underscore (a file name or emphasis,
+    ``AUTHORS``), a product name (``JavaScript``) or a test name (the user's own test, or one to
+    write) - none of them is code the index should have had.
+    """
+    if name.isupper() and "_" not in name:
+        return False
+    if name.lower() in _PROSE_NAMES or is_test_symbol(None, name, None):
+        return False
+    # a name right after a backslash is the tail of an escape (``\nThe`` in a JSON-quoted text)
+    return re.search(rf"(?<![\w.</\\]){re.escape(name)}(?![\w>])", prose) is not None
 
 
 def _basename_stem(file_id: str) -> str:
@@ -122,26 +154,32 @@ def _covered(items: list[dict[str, Any]], name: str) -> bool:
     return False
 
 
-def unresolved_identifiers(
+def identifier_gaps(
     repository: Any, items: list[dict[str, Any]], task_text: str, *, repo_ids: list[str] | None
-) -> list[dict[str, Any]]:
-    """Task identifiers the context does not cover, each with the indexed files defining it.
+) -> dict[str, list[Any]]:
+    """Task identifiers the context does not cover: ``{"unresolved": [...], "unknown": [...]}``.
 
-    ``[{"name": "SqliteTypeMappingSource", "defined_in": ["efcore:src/.../X.cs"]}]``. Only
-    names the index knows are reported; the list is bounded (:data:`_UNRESOLVED_LIMIT`).
+    ``unresolved`` is ``[{"name": "SqliteTypeMappingSource", "defined_in": ["efcore:..."]}]``:
+    names the index defines outside the answer, with their (non-test) files. ``unknown`` lists
+    names with no symbol in scope at all that the task's prose uses as names
+    (:func:`_worth_reporting_unknown`). A name defined in more than :data:`PIN_MAX_FILES` files
+    is too common to point anywhere and is in neither list. Both lists are bounded.
     Repositories without name resolution (unit-test fakes) yield nothing.
     """
+    empty: dict[str, list[Any]] = {"unresolved": [], "unknown": []}
     missing = [n for n in task_identifiers(task_text) if not _covered(items, n)]
     if not missing:
-        return []
+        return empty
     try:
         resolved = bulk.resolve_names(repository, missing)
     except (NotImplementedError, AttributeError):
-        return []
+        return empty
     scope = set(repo_ids or ())
-    out: list[dict[str, Any]] = []
+    prose = _FENCE_RE.sub(" ", task_text or "")
+    out: dict[str, list[Any]] = {"unresolved": [], "unknown": []}
     for name in missing:
         files: list[str] = []
+        in_scope = False
         for row in resolved.get(name) or []:
             fid = str(row.get("file_id") or "")
             rid = row.get("repo_id") or (fid.split(":", 1)[0] if ":" in fid else None)
@@ -149,12 +187,25 @@ def unresolved_identifiers(
                 continue
             if scope and rid and rid not in scope:
                 continue
+            in_scope = True
             if is_test_symbol(row.get("symbol_id"), row.get("name"), fid):
                 continue
             files.append(fid)
+        if not in_scope:
+            if len(out["unknown"]) < _UNKNOWN_LIMIT and _worth_reporting_unknown(prose, name):
+                out["unknown"].append(name)
+            continue
         if not files or len(files) > PIN_MAX_FILES:
-            continue  # unknown to the index, or a name too common to point anywhere
-        out.append({"name": name, "defined_in": sorted(files)[:_DEFINED_IN_LIMIT]})
-        if len(out) >= _UNRESOLVED_LIMIT:
-            break
+            continue  # only tests define it, or a name too common to point anywhere
+        if len(out["unresolved"]) < _UNRESOLVED_LIMIT:
+            out["unresolved"].append(
+                {"name": name, "defined_in": sorted(files)[:_DEFINED_IN_LIMIT]}
+            )
     return out
+
+
+def unresolved_identifiers(
+    repository: Any, items: list[dict[str, Any]], task_text: str, *, repo_ids: list[str] | None
+) -> list[dict[str, Any]]:
+    """The ``unresolved`` part of :func:`identifier_gaps`."""
+    return identifier_gaps(repository, items, task_text, repo_ids=repo_ids)["unresolved"]
