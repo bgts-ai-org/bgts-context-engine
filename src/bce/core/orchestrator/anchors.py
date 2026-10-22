@@ -23,8 +23,9 @@ flat "is anchor" bonus, and coverage (section 8) reads it to judge anchor agreem
 
 An explicit name is only as good as it is *specific*. A PR body that mentions ``MongoDbService``
 names one thing; a body that mentions ``Content`` or ``Id`` names a dozen properties that have
-nothing to do with each other. Explicit evidence is therefore divided by ``sqrt(matches)`` and
-dropped past :data:`EXPLICIT_MAX_MATCHES`, a qualified ``Type.member`` reference is resolved
+nothing to do with each other. Explicit evidence is therefore divided by ``sqrt(matches)`` and,
+past :data:`EXPLICIT_MAX_MATCHES`, only backs what other sources found unless the task's paths
+narrow the name down; a qualified ``Type.member`` reference is resolved
 inside its type, and a member echoing its container's name (a C# constructor, a partial-class
 helper) counts as secondary: the author named the type.
 
@@ -38,18 +39,21 @@ from __future__ import annotations
 
 import math
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from bce.core.orchestrator import bulk
 from bce.core.orchestrator.profile import RetrievalProfile
 from bce.core.orchestrator.text import (
     body_literals,
+    content_tokens,
     explicit_references,
     file_mentions,
     is_test_symbol,
     mention_terms,
     phrase_terms,
     query_terms,
+    split_identifier,
 )
 from bce.core.scoring.engine import DECLARING_KINDS
 from bce.storage.graph.repository import GraphRepository
@@ -79,9 +83,11 @@ MATCH_TIER_WEIGHT: dict[str, float] = {"a": 1.0, "b": 0.9, "c": 0.6, "d": 0.35}
 PHRASE_BONUS_WEIGHT = 1.0
 
 #: Beyond this many matches a name is generic ("Id", "Content", "Handle"): it names nothing in
-#: particular, so it stops counting as an explicit reference at all. Seeding one weak anchor per
-#: match instead would put dozens of unrelated symbols in the pool for every such word; the
-#: lexical channel still picks the word up if it carries any signal.
+#: particular, so it stops nominating anchors. Seeding one weak anchor per match would put
+#: dozens of unrelated symbols in the pool for every such word. Two things survive the cap: the
+#: matches inside a directory or file the task also names keep explicit strength as if the name
+#: had been narrowed to them, and every other match is corroboration for a symbol some other
+#: source found, worth ``cap / log2(2 + matches)`` (0.29 at 9 matches, 0.2 at 30; tag ``name``).
 EXPLICIT_MAX_MATCHES = 8
 #: A ``Type.member`` reference whose type is not in the graph falls back to the bare member name
 #: only while that name stays this unambiguous.
@@ -93,6 +99,7 @@ EXPLICIT_CONTAINER_MEMBER_SCALE = 0.5
 #: Per-source evidence caps (strength contributed when the source is fully confident).
 SOURCE_STRENGTH: dict[str, float] = {
     "explicit": 1.0,
+    "name": 1.0,
     "jira": 0.9,
     "history": 0.7,
     "lexical": 0.8,
@@ -200,7 +207,7 @@ def find_anchors(
     component_repo_ids: list[str] | None = None,
     repo_ids: list[str] | None = None,
     lexical_terms: list[str] | None = None,
-    semantic_candidates: list[str] | None = None,
+    semantic_candidates: list[str] | Callable[[], list[str] | None] | None = None,
     include_tests: bool = False,
     profile: RetrievalProfile | None = None,
     lexical_pool: int = LEXICAL_POOL,
@@ -210,7 +217,9 @@ def find_anchors(
     """Combine the anchor sources deterministically. Callers supply pre-fetched metadata.
 
     ``semantic_candidates`` must be in the model's rank order (best first); rank decides the
-    semantic evidence strength. ``include_tests`` admits test symbols from lexical/semantic/usage.
+    semantic evidence strength. It may also be a callable returning that list, called once when
+    the semantic source is reached, so the caller's embedding request runs while the sources
+    before it do. ``include_tests`` admits test symbols from lexical/semantic/usage.
     ``profile`` supplies the model-specific rank scale (default: the voyage constants).
     ``lexical_pool`` / ``lexical_limit`` widen the lexical channel for long answers: rows fetched
     per term and anchors kept (defaults: :data:`LEXICAL_POOL`, :data:`LEXICAL_ANCHOR_LIMIT`);
@@ -223,7 +232,10 @@ def find_anchors(
     # Source 1a: explicit symbol names (exact name resolution, identifier-looking tokens only).
     references = [(None, name) for name in sorted(set(explicit_symbols or []))]
     references += explicit_references(task_text)
-    for sid, strength in _explicit_anchors(repository, references):
+    named, generic_names = _explicit_anchors(
+        repository, references, hints=path_hints(task_text), repo_ids=repo_ids
+    )
+    for sid, strength in named:
         result.add(sid, "explicit", strength)
 
     # Source 1b: explicit route paths -> handler symbols (feature 1 as anchor source).
@@ -269,6 +281,8 @@ def find_anchors(
         result.add(sid, "usage", strength)
 
     # Source 4b: semantic candidates (lowest priority; caller supplies the model's ranked list).
+    if callable(semantic_candidates):
+        semantic_candidates = semantic_candidates()
     scale = profile.semantic_rank_scale if profile is not None else SEMANTIC_RANK_SCALE
     for sid, rank, strength in _semantic_anchors(
         repository, semantic_candidates, include_tests, scale=scale
@@ -284,25 +298,40 @@ def find_anchors(
     ):
         result.add(sid, "impact", strength)
 
+    # Source 1d: a generic name the task uses backs the matches other sources already found.
+    for sid in sorted(generic_names):
+        if sid in result.anchors:
+            result.add(sid, "name", generic_names[sid])
+
     return result
 
 
 def _explicit_anchors(
-    repository: GraphRepository, references: list[tuple[str | None, str]]
-) -> list[tuple[str, float]]:
+    repository: GraphRepository,
+    references: list[tuple[str | None, str]],
+    *,
+    hints: set[str] | frozenset[str] = frozenset(),
+    repo_ids: list[str] | None = None,
+) -> tuple[list[tuple[str, float]], dict[str, float]]:
     """Resolve ``(container, name)`` references, discounting ambiguous and container-echo matches.
 
-    Strength is ``cap / sqrt(matches)``: a unique name is full evidence, a name shared by four
-    symbols is half, and a name shared by more than :data:`EXPLICIT_MAX_MATCHES` is dropped
-    because the task cannot have meant all of them.
+    Returns ``(anchors, generic)``. Anchor strength is ``cap / sqrt(matches)``: a unique name is
+    full evidence, a name shared by four symbols is half. A name shared by more than
+    :data:`EXPLICIT_MAX_MATCHES` symbols (of ``repo_ids``, when given) cannot have meant all of
+    them: the matches whose directory or file name is one of the task's ``hints``
+    (:func:`path_hints`) are taken as the ones meant when few enough remain, and otherwise every
+    match goes to ``generic`` at ``cap / log2(2 + matches)``, to be used as corroboration only.
     """
     if not references:
-        return []
+        return [], {}
     resolved = bulk.resolve_names(repository, sorted({name for _, name in references}))
     cap = SOURCE_STRENGTH["explicit"]
     best: dict[str, float] = {}
+    generic: dict[str, float] = {}
     for container, name in sorted(references, key=lambda ref: (ref[1], ref[0] or "")):
         matches = [m for m in (resolved.get(name) or []) if m.get("symbol_id")]
+        if repo_ids:
+            matches = [m for m in matches if _in_repos(m.get("file_id"), repo_ids)]
         if not matches:
             continue
         if container:
@@ -312,9 +341,18 @@ def _explicit_anchors(
             elif len(matches) > EXPLICIT_QUALIFIED_FALLBACK:
                 # "Foo.bar" with no Foo in the graph: taking every bar() is a guess, not a name.
                 continue
+        target = best
         if len(matches) > EXPLICIT_MAX_MATCHES:
-            continue
-        strength = cap / math.sqrt(len(matches))
+            own = {name.lower(), *split_identifier(name)}
+            hinted = [m for m in matches if _path_words(m.get("file_id")) & (hints - own)]
+            if hinted and len(hinted) <= EXPLICIT_MAX_MATCHES:
+                matches = hinted
+                strength = cap / math.sqrt(len(matches))
+            else:
+                target = generic
+                strength = cap / math.log2(2 + len(matches))
+        else:
+            strength = cap / math.sqrt(len(matches))
         declaring = {
             m["symbol_id"] for m in matches if (m.get("kind") or "").lower() in DECLARING_KINDS
         }
@@ -323,8 +361,33 @@ def _explicit_anchors(
             evidence = strength
             if declaring and sid not in declaring:
                 evidence *= EXPLICIT_CONTAINER_MEMBER_SCALE
-            best[sid] = max(best.get(sid, 0.0), round(evidence, 6))
-    return sorted(best.items())
+            target[sid] = max(target.get(sid, 0.0), round(evidence, 6))
+    return sorted(best.items()), {s: v for s, v in sorted(generic.items()) if s not in best}
+
+
+def path_hints(task_text: str) -> set[str]:
+    """Lower-cased words a symbol's directory or file name may echo to show the task means it.
+
+    The task's content words, plus every directory and file stem of the paths it names.
+    """
+    hints = set(content_tokens(task_text))
+    for mention in file_mentions(task_text):
+        for segment in mention.lower().split("/"):
+            hints.add(segment.split(".", 1)[0])
+    hints.discard("")
+    return hints
+
+
+def _path_words(file_id: str | None) -> set[str]:
+    """The directory names and the file stem of ``repo:path/to/file.ext``, lower-cased."""
+    if not file_id:
+        return set()
+    segments = file_id.split(":", 1)[-1].lower().split("/")
+    return {*segments[:-1], segments[-1].split(".", 1)[0]} - {""}
+
+
+def _in_repos(file_id: str | None, repo_ids: list[str]) -> bool:
+    return not file_id or ":" not in file_id or file_id.split(":", 1)[0] in repo_ids
 
 
 def _in_container(symbol_id: str, container: str) -> bool:
@@ -401,11 +464,18 @@ def _lexical_anchors(
     pool = max(1, int(pool))
 
     hits_by_term = bulk.lexical_hits(
-        repository,
-        unique_terms + unique_phrases,
-        repo_ids=repo_ids,
-        limit=pool,
-        exclude_tests=not include_tests,
+        repository, unique_terms, repo_ids=repo_ids, limit=pool, exclude_tests=not include_tests
+    )
+    # A pair is used whole below the pool and not at all from it, so its matches need no rank.
+    hits_by_term.update(
+        bulk.lexical_hits(
+            repository,
+            unique_phrases,
+            repo_ids=repo_ids,
+            limit=pool,
+            exclude_tests=not include_tests,
+            ranked=False,
+        )
     )
     term_weight: dict[str, float] = {}
     matched: dict[str, dict[str, float]] = {}

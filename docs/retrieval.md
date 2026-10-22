@@ -41,7 +41,7 @@ evidence** each one brought, as a strength in `[0, 1]`.
 
 | Source | What it looks at | Evidence | Limit |
 | --- | --- | --- | --- |
-| `explicit` | Identifier-looking names, backticked spans, `Class.method` tails and route paths in the task text, or names passed by the caller | `1.0 / √matches`, halved for a member echoing its container's name | names matching more than 8 symbols are dropped |
+| `explicit` | Identifier-looking names, backticked spans, `Class.method` tails and route paths in the task text, or names passed by the caller | `1.0 / √matches`, halved for a member echoing its container's name | a name matching more than 8 symbols is narrowed to the matches in folders / files the task's words name; if that leaves none or still more than 8, it only backs what other sources found (`name`, `1 / log₂(2 + matches)`) |
 | `path` | Source-file paths the task names — `src/utils/auth.ts`, a bare `Layout.tsx`, the `File "/opt/app/flask/app.py"` of a traceback — matched as a suffix of indexed file ids (longest tail first, so an absolute path still finds its file); every symbol of the file is nominated | `0.85 / files matched` | a suffix matching more than 4 files (`index.ts`) names nothing |
 | `history` | Every symbol in files that previous work on this task touched | 0.7 | none |
 | `lexical` | Full-text search over a weighted document - exact name (A), its camelCase / snake_case parts (B), container and every word of the file *path* (C), signature, docstring and the identifier words of the whole body (D) - scored by how many of the task's content terms a symbol covers, each term counting 1.0 when it matched the name, 0.9 in the name parts, 0.6 in container / path words and 0.35 when it only occurs in the signature, docstring or body, plus a bonus for adjacent word pairs (`access token`) found together | up to 0.8 | `max(15, K)` anchors from a pool of `max(25, 2K)` rows per term |
@@ -74,9 +74,14 @@ resolves to `Principal.check` as if the author had named it.
 names one thing. A body that says `Content` or `ExternalId` names a dozen unrelated DTO
 properties, and treating each as a certainty used to seed a dozen full-strength anchors,
 each expanding its own callers, referrers and file. Explicit evidence is therefore divided
-by `√matches`, and a name matching more than eight symbols is dropped entirely — it names
-nothing in particular, and the lexical channel still picks the word up if it carries signal.
-Three further rules sharpen the same idea:
+by `√matches`, and a name matching more than eight symbols is not an anchor by itself. If the
+task's other words name the folder or file of a few of its matches ("the `Content` of the
+billing DTO" and `src/billing/Dto.cs`), those matches stay explicit at `1 / √n`. Otherwise the
+name only *supports* symbols another source already nominated, as a `name` source of
+`1 / log₂(2 + matches)` that adds to their noisy-OR strength but never counts as
+corroboration (section 7) - the lexical channel still picks the word up if it carries signal.
+Matches outside the requested repositories never count. Three further rules sharpen the same
+idea:
 
 - **Qualified first.** `MongoDbService.CancelAsync` is resolved *inside* that type, and the
   bare tail is then not offered separately: the author did not mention the three other
@@ -182,6 +187,15 @@ the best anchor that reached it, multiplied by 0.6 once per hop. A neighbour of 
 #1 hit carries 0.54; a neighbour of a throwaway 0.2 lexical hit carries 0.12. Scoring reads
 this (section 4), which is what stops a `define` edge off a generic name from scoring like a
 real lead.
+
+**Optional: PageRank evidence (`BCE_RETRIEVAL_EXPANSION=ppr`).** Hop evidence keeps only the
+strongest path to a node. With `ppr` the walked edges also feed a personalized PageRank from
+the walked anchors (restart 0.5 in proportion to their strength, 3 power iterations, sorted
+summation), which sums every path. A node's PageRank mass divided by its hop evidence,
+normalised by the median over all neighbours, says whether it gets more than its best path
+predicts (several anchors meet in it) or less (one of a hub's hundred callers). Each
+doubling of that ratio adds 0.25 to an evidence multiplier clamped to [⅔, 1.5]; anchors keep
+their own strength. The flag is off by default until a benchmark A/B decides.
 
 The graph walks themselves have no fan-out cap. A breadth-first walk visits each node once,
 keeps the shortest distance it was reached at, and processes each frontier in sorted order.
@@ -498,7 +512,7 @@ trust the pack, and so a human can tell *why* an answer was thin.
 | --- | --- |
 | `anchor_source_count` | How many of the four anchor sources contributed at all |
 | `strong_anchor_count` | Anchors with evidence strength ≥ 0.6 |
-| `corroborated_anchor_count` | Anchors named by two or more sources, or by `explicit` / `history` |
+| `corroborated_anchor_count` | Anchors named by two or more sources, or by `explicit` / `history` (a supporting `name` source does not count) |
 | `anchor_agreement_ratio` | Share of the *selected* candidates that are strong/corroborated anchors or their direct neighbours |
 | `weak_anchor_ratio` | Share of the selection that is weak (< 0.35), single-source anchors — the flooding signal |
 | `max_anchor_strength` | Strongest evidence in the selection |
@@ -523,6 +537,9 @@ and is computed before the selector runs; the selector does not change it:
   corroborated), at least 60% of the selection is trusted anchors or their direct neighbours,
   at most a quarter is weak anchors, and the top leads the second by 0.5 or more.
 - **`medium`** — everything else.
+- **`unsupported`** — set over any of the above when the index report (`bce doctor`) says
+  less than 20 % of the repository's code files were parsed: the ranking may be sound, but
+  it ranks a fraction of the code, so an agent should search natively.
 
 The v1 rule counted source *tags* across all anchors. A natural-language task always has
 explicit, lexical and semantic tags somewhere, all its candidates are anchors at distance 0,

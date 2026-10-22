@@ -391,6 +391,8 @@ class GraphRepository:
         """Core properties plus the heavy ``docstring`` / ``body`` snippet (context assembly).
 
         Kept separate from :meth:`get_symbol` so hot paths (expansion, scoring) never ship bodies.
+        ``end_line`` / ``col`` / ``text_line`` locate the declaration's text (``None`` on graphs
+        indexed before the extractor recorded them).
         """
         columns = [
             "symbol_id",
@@ -401,12 +403,15 @@ class GraphRepository:
             "body",
             "file_id",
             "line",
+            "end_line",
+            "col",
+            "text_line",
             "indexed_at_commit",
         ]
         query = (
             "MATCH (s:Symbol {symbol_id: $sym}) "
             "RETURN s.symbol_id, s.name, s.kind, s.signature, s.docstring, s.body, s.file_id, "
-            "s.line, s.indexed_at_commit LIMIT 1"
+            "s.line, s.end_line, s.col, s.text_line, s.indexed_at_commit LIMIT 1"
         )
         rows = self.client.cypher(query, {"sym": symbol_id}, columns)
         if not rows:
@@ -558,13 +563,19 @@ class GraphRepository:
         return out
 
     def symbols_meta(self, symbol_ids: list[str]) -> dict[str, dict[str, Any]]:
-        """``symbol_id -> {name, kind, file_id, line}`` for many symbols (missing ones omitted)."""
-        columns = ["symbol_id", "name", "kind", "file_id", "line"]
+        """``symbol_id -> {name, kind, file_id, line, end_line, text_line, col, signature}`` for
+        many symbols (missing ones omitted; the span properties are None on graphs indexed before
+        they were recorded)."""
+        columns = [
+            "symbol_id", "name", "kind", "file_id", "line", "end_line", "text_line", "col",
+            "signature",
+        ]  # fmt: skip
         out: dict[str, dict[str, Any]] = {}
         for chunk in self._chunks(symbol_ids):
             for row in self.client.cypher(
                 "UNWIND $ids AS sid MATCH (s:Symbol {symbol_id: sid}) "
-                "RETURN s.symbol_id, s.name, s.kind, s.file_id, s.line",
+                "RETURN s.symbol_id, s.name, s.kind, s.file_id, s.line, s.end_line, s.text_line, "
+                "s.col, s.signature",
                 {"ids": chunk},
                 columns,
             ):
@@ -955,6 +966,7 @@ class GraphRepository:
         repo_ids: list[str] | None = None,
         limit: int = 20,
         exclude_tests: bool = False,
+        ranked: bool = True,
     ) -> dict[str, list[dict[str, Any]]]:
         """``term -> best ``limit`` keyword matches`` for many terms in a single FTS query.
 
@@ -964,6 +976,11 @@ class GraphRepository:
         Falls back to per-term queries when the FTS side table is absent. With ``exclude_tests``
         the ``limit`` rows are production symbols only (see :meth:`lexical_search`): a pool that
         tests would otherwise fill says "generic" about a term that names three helpers.
+
+        ``ranked=False`` is for callers that use every match of a term with fewer than ``limit``
+        of them and nothing of a term with more: each term's scan stops at ``limit`` rows instead
+        of ranking all its matches (a common word pair matches thousands of large documents).
+        A term below ``limit`` gets the same rows as the ranked query, in symbol_id order.
         """
         unique = sorted({t for t in terms if t})
         if not unique:
@@ -991,21 +1008,35 @@ class GraphRepository:
         where += self._test_filter_sql(exclude_tests, alias="f.")
         params.append(limit)
         tier = _MATCH_TIER_SQL.format(doc="f.document", query="to_tsquery('simple', q.tsq)")
-        sql = (
-            "WITH q AS (SELECT * FROM unnest(%s::text[], %s::text[]) AS t(term, tsq)) "
-            "SELECT term, symbol_id, name, kind, file_id, line, indexed_at_commit, tier FROM ("
-            "  SELECT q.term, f.symbol_id, f.name, f.kind, f.file_id, f.line, "
-            f"         f.indexed_at_commit, {tier} AS tier, "
-            "         row_number() OVER (PARTITION BY q.term "
-            "             ORDER BY ts_rank(f.document, to_tsquery('simple', q.tsq), "
-            f"                             {_TS_RANK_NORMALIZATION}) DESC, "
-            "                      f.symbol_id ASC) AS rn "
-            f"  FROM q JOIN symbol_fts f ON {where}"
-            ") ranked WHERE rn <= %s ORDER BY term, rn"
-        )
+        if ranked:
+            sql = (
+                "WITH q AS (SELECT * FROM unnest(%s::text[], %s::text[]) AS t(term, tsq)) "
+                "SELECT term, symbol_id, name, kind, file_id, line, indexed_at_commit, tier FROM ("
+                "  SELECT q.term, f.symbol_id, f.name, f.kind, f.file_id, f.line, "
+                f"         f.indexed_at_commit, {tier} AS tier, "
+                "         row_number() OVER (PARTITION BY q.term "
+                "             ORDER BY ts_rank(f.document, to_tsquery('simple', q.tsq), "
+                f"                             {_TS_RANK_NORMALIZATION}) DESC, "
+                "                      f.symbol_id ASC) AS rn "
+                f"  FROM q JOIN symbol_fts f ON {where}"
+                ") ranked WHERE rn <= %s ORDER BY term, rn"
+            )
+        else:
+            sql = (
+                "WITH q AS (SELECT * FROM unnest(%s::text[], %s::text[]) AS t(term, tsq)) "
+                "SELECT q.term, m.symbol_id, m.name, m.kind, m.file_id, m.line, "
+                "       m.indexed_at_commit, m.tier "
+                "FROM q CROSS JOIN LATERAL ("
+                "  SELECT f.symbol_id, f.name, f.kind, f.file_id, f.line, f.indexed_at_commit, "
+                f"         {tier} AS tier "
+                f"  FROM symbol_fts f WHERE {where} LIMIT %s"
+                ") m"
+            )
         with self.client.conn.cursor() as cur:
             cur.execute(sql, params)
             rows = cur.fetchall()
+        if not ranked:
+            rows.sort(key=lambda row: (row[0], row[1]))
         for row in rows:
             out.setdefault(row[0], []).append(
                 {
@@ -1054,6 +1085,38 @@ class GraphRepository:
                 rows = [r[0] for r in cur.fetchall()]
                 out[suffix] = rows if 0 < len(rows) <= limit else []
         return out
+
+    def missing_paths(self, paths: list[str], *, repo_ids: list[str] | None = None) -> list[str]:
+        """The ``paths`` (repo-relative suffixes, as :meth:`files_by_suffix` reads them) that match
+        no indexed file with a symbol. Empty when the side table is unavailable."""
+        if not paths or not self._fts_available():
+            return []
+        out: list[str] = []
+        with self.client.conn.cursor() as cur:
+            for path in paths:
+                clean = path.replace("\\", "/").strip("/")
+                if not clean:
+                    continue
+                escaped = clean.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                where = "(file_id ILIKE %s OR file_id ILIKE %s)"
+                params: list[Any] = [f"%/{escaped}", f"%:{escaped}"]
+                if repo_ids:
+                    where += " AND repo_id = ANY(%s)"
+                    params.append(repo_ids)
+                cur.execute(f"SELECT 1 FROM symbol_fts WHERE {where} LIMIT 1", params)  # noqa: S608
+                if cur.fetchone() is None:
+                    out.append(path)
+        return out
+
+    def index_stats(self, repo_ids: list[str] | None = None) -> dict[str, dict[str, Any]]:
+        """Stored index reports (``repo_index_stats``, migration 0014) of the repositories, all
+        when ``repo_ids`` is None; empty before the migration or the first index run."""
+        conn = getattr(self.client, "conn", None)
+        if conn is None:
+            return {}
+        from bce.indexing.index_stats import read_index_stats
+
+        return read_index_stats(conn, repo_ids)
 
     def files_in_directories(self, dir_ids: list[str], *, limit: int = 60) -> dict[str, list[str]]:
         """Indexed files directly inside each directory (``"repo:src/a" -> ["repo:src/a/x.py"]``).
@@ -1138,12 +1201,14 @@ class GraphRepository:
 
         ``mentions`` are ``(kind, text)`` pairs from ``text.mention_terms``: an ``ident`` is
         matched as a whole word (case-sensitive), a ``literal`` as a quoted string in either
-        quote style, ``code`` as a plain substring. Each key maps to ``(total matches, first
-        ``limit`` rows by symbol_id)``: the total tells the caller how generic the fragment is
-        (``useState`` is in every component; ``localStorage`` in a few dozen symbols), the rows
-        are what it anchors on. Needs ``symbol_fts.body`` (migration 0011); ``{}`` before it.
-        With ``exclude_tests`` both the total and the rows count production symbols only, so a
-        key quoted by three services and forty tests is still the coupling it is.
+        quote style, ``code`` as a plain substring. Each key maps to ``(total matches, rows by
+        symbol_id)``: the total tells the caller how generic the fragment is (``useState`` is in
+        every component; ``localStorage`` in a few dozen symbols), the rows are what it anchors
+        on. A fragment in ``limit`` or more symbols is generic and maps to ``(limit, [])``: its
+        scan stops there rather than reading every body that carries it. Needs
+        ``symbol_fts.body`` (migration 0011); ``{}`` before it. With ``exclude_tests`` both the
+        total and the rows count production symbols only, so a key quoted by three services and
+        forty tests is still the coupling it is.
         """
         if not mentions or not self._fts_available() or not self._fts_body_available():
             return {}
@@ -1173,16 +1238,18 @@ class GraphRepository:
                 where += self._test_filter_sql(exclude_tests)
                 params.append(int(limit))
                 cur.execute(
-                    "SELECT symbol_id, name, kind, file_id, line, count(*) OVER () AS total "
-                    f"FROM symbol_fts WHERE body IS NOT NULL AND {where} "  # noqa: S608
-                    "ORDER BY symbol_id ASC LIMIT %s",
+                    "SELECT symbol_id, name, kind, file_id, line "
+                    f"FROM symbol_fts WHERE body IS NOT NULL AND {where} LIMIT %s",  # noqa: S608
                     params,
                 )
                 rows = cur.fetchall()
                 if not rows:
                     continue
+                if len(rows) >= int(limit):
+                    out[(kind, text)] = (int(limit), [])
+                    continue
                 out[(kind, text)] = (
-                    int(rows[0][5] or 0),
+                    len(rows),
                     [
                         {
                             "symbol_id": r[0],
@@ -1191,7 +1258,7 @@ class GraphRepository:
                             "file_id": r[3],
                             "line": r[4],
                         }
-                        for r in rows
+                        for r in sorted(rows, key=lambda r: r[0])
                     ],
                 )
         return out

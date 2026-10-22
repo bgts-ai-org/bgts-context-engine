@@ -19,6 +19,10 @@ distance 0 without dragging their neighbourhoods in. Every node records the stre
 that reached it, decayed once per hop (:data:`HOP_DECAY`), so scoring can tell the first hop off
 the best-evidenced anchor from the first hop off a generic name.
 
+With ``expansion="ppr"`` the walked edges also feed a personalized PageRank from the anchors
+(:func:`ppr_reweight`): a node that several anchors reach - a bridge between them - gets more
+evidence than its single best path gives it, a node hanging off a hub gets less.
+
 Output: a mapping symbol_id -> ExpansionInfo(distance, is_anchor, anchor_strength, source_strength,
 ref_kind, provenance), ready to become scoring Candidates via :func:`to_candidates`, which also
 attaches the graph features (degree, leaf) and the task signal in a single pass.
@@ -26,6 +30,7 @@ attaches the graph features (degree, leaf) and the task signal in a single pass.
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -91,6 +96,14 @@ _GENERIC_NAME_PARTS = frozenset(
 #: Partial task-signal credit (fraction of the name's parts that appear in the task text).
 _PARTIAL_SIGNAL_SCALE = 0.6
 
+#: Personalized PageRank (``expansion="ppr"``): power iterations, restart probability, evidence
+#: gained per doubling of a node's relative mass, and the bounds of the resulting multiplier.
+PPR_ITERATIONS = 3
+PPR_RESTART = 0.5
+PPR_GAIN = 0.25
+PPR_MAX_MULTIPLIER = 1.5
+PPR_MIN_MULTIPLIER = 1.0 / PPR_MAX_MULTIPLIER
+
 
 @dataclass(slots=True)
 class ExpansionInfo:
@@ -110,11 +123,13 @@ def expand_from_anchors(
     anchor_ids: Iterable[str] | AnchorResult,
     *,
     strengths: dict[str, float] | None = None,
+    expansion: str = "hops",
 ) -> dict[str, ExpansionInfo]:
     """Fixed-template, bounded, deterministic expansion. Returns candidates keyed by symbol_id.
 
     Accepts either an :class:`AnchorResult` (strengths read from it) or a plain id iterable with an
-    optional ``strengths`` map (missing -> 1.0, i.e. fully trusted anchors).
+    optional ``strengths`` map (missing -> 1.0, i.e. fully trusted anchors). ``expansion="ppr"``
+    re-weights the neighbours' evidence with :func:`ppr_reweight`.
     """
     if isinstance(anchor_ids, AnchorResult):
         strengths = dict(anchor_ids.strength)
@@ -124,6 +139,8 @@ def expand_from_anchors(
         strengths = dict(strengths or {})
 
     found: dict[str, ExpansionInfo] = {}
+    edges: set[tuple[str, str]] = set()
+    keep_edges = expansion == "ppr"
 
     def record(
         sid: str,
@@ -133,12 +150,19 @@ def expand_from_anchors(
         provenance: str | None,
         ref_kind: str | None = None,
         source_strength: float = 0.0,
+        parent: str | None = None,
+        edge_only: bool = False,
     ) -> None:
         """Insert/keep-smallest-distance and keep-strongest-evidence.
 
         ref_kind, once set from a REFERENCES edge, is retained (stable per node) so scoring gets a
-        deterministic define/write/read/pass signal regardless of traversal order.
+        deterministic define/write/read/pass signal regardless of traversal order. ``edge_only``
+        notes the ``parent -> sid`` edge for :func:`ppr_reweight` and leaves the node as it is.
         """
+        if keep_edges and parent is not None and parent != sid:
+            edges.add((parent, sid) if parent < sid else (sid, parent))
+        if edge_only:
+            return
         existing = found.get(sid)
         if existing is None:
             found[sid] = ExpansionInfo(
@@ -183,6 +207,7 @@ def expand_from_anchors(
                 provenance=ref.get("provenance"),
                 ref_kind=ref.get("ref_kind"),
                 source_strength=strength * HOP_DECAY,
+                parent=sid,
             )
 
     # What the anchor itself references (REFERENCES out of it) 1 hop: the constants, types and
@@ -199,6 +224,7 @@ def expand_from_anchors(
                     anchor=False,
                     provenance=ref.get("provenance"),
                     source_strength=strength * HOP_DECAY,
+                    parent=sid,
                 )
 
     # Type hierarchy (full, both directions), 1 hop from anchors. Implementers are exactly the
@@ -215,13 +241,75 @@ def expand_from_anchors(
                     anchor=False,
                     provenance=rel.get("provenance"),
                     source_strength=strength * HOP_DECAY,
+                    parent=sid,
                 )
 
     _expand_siblings(repository, walked, record)
     _expand_sibling_files(repository, walked, record)
 
+    if keep_edges:
+        ppr_reweight(found, walked, edges)
     _fill_repo_ids(repository, found)
     return found
+
+
+def ppr_reweight(
+    found: dict[str, ExpansionInfo], roots: dict[str, float], edges: set[tuple[str, str]]
+) -> None:
+    """Scale each neighbour's hop evidence by how much PageRank mass the anchors send it.
+
+    A personalized PageRank over the walked subgraph (undirected, restart on the walked anchors in
+    proportion to their strength, :data:`PPR_ITERATIONS` power iterations) sums the evidence of
+    *every* path to a node, where hop evidence keeps only the strongest one. The ratio of the two,
+    normalised by its median over the neighbours, says whether a node gets more mass than its
+    best path predicts - several anchors meet in it - or less - it is one of a hub's hundred
+    callers. Each doubling of that ratio adds :data:`PPR_GAIN` to the node's evidence multiplier
+    (clamped to [:data:`PPR_MIN_MULTIPLIER`, :data:`PPR_MAX_MULTIPLIER`], evidence capped at 1).
+    Anchors keep their own strength; fixed iterations and sorted summation keep the result
+    byte-identical across runs.
+    """
+    total = sum(roots.values())
+    if not edges or total <= 0.0:
+        return
+    neighbours: dict[str, list[str]] = {}
+    for a, b in sorted(edges):
+        neighbours.setdefault(a, []).append(b)
+        neighbours.setdefault(b, []).append(a)
+    nodes = sorted(neighbours)
+    restart = {sid: roots[sid] / total for sid in sorted(roots) if sid in neighbours}
+    if not restart:
+        return
+    mass = dict(restart)
+    for _ in range(PPR_ITERATIONS):
+        spread: dict[str, float] = {}
+        for node in nodes:
+            share = mass.get(node, 0.0)
+            if share <= 0.0:
+                continue
+            step = (1.0 - PPR_RESTART) * share / len(neighbours[node])
+            for other in neighbours[node]:
+                spread[other] = spread.get(other, 0.0) + step
+        mass = {
+            node: round(PPR_RESTART * restart.get(node, 0.0) + spread.get(node, 0.0), 12)
+            for node in nodes
+        }
+
+    ratios: dict[str, float] = {}
+    for sid in nodes:
+        info = found.get(sid)
+        if info is None or info.is_anchor or info.source_strength <= 0.0:
+            continue
+        ratios[sid] = mass.get(sid, 0.0) / info.source_strength
+    positive = sorted(r for r in ratios.values() if r > 0.0)
+    if not positive:
+        return
+    median = positive[len(positive) // 2]
+    for sid in sorted(ratios):
+        relative = ratios[sid] / median
+        factor = 1.0 + PPR_GAIN * math.log2(relative) if relative > 0.0 else PPR_MIN_MULTIPLIER
+        factor = min(PPR_MAX_MULTIPLIER, max(PPR_MIN_MULTIPLIER, factor))
+        info = found[sid]
+        info.source_strength = round(min(1.0, info.source_strength * factor), 6)
 
 
 def expansion_roots(roots: list[str], strengths: dict[str, float]) -> dict[str, float]:
@@ -269,6 +357,7 @@ def _expand_siblings(repository: GraphRepository, walked: dict[str, float], reco
                     anchor=False,
                     provenance=None,
                     source_strength=strength * HOP_DECAY,
+                    parent=sid,
                 )
 
 
@@ -305,9 +394,12 @@ def _expand_sibling_files(
         return
     meta = bulk.symbols_meta(repository, sorted(strong))
     file_strength: dict[str, float] = {}
+    file_anchor: dict[str, str] = {}  # anchor file -> its strongest anchor (the PPR edge's end)
     for sid in sorted(strong):
         file_id = (meta.get(sid) or {}).get("file_id")
         if file_id:
+            if strong[sid] > file_strength.get(file_id, 0.0):
+                file_anchor[file_id] = sid
             file_strength[file_id] = max(file_strength.get(file_id, 0.0), strong[sid])
     if not file_strength:
         return
@@ -315,13 +407,15 @@ def _expand_sibling_files(
     repo_ids = sorted({f.split(":", 1)[0] for f in anchor_files if ":" in f})
 
     nominated: dict[str, tuple[float, str]] = {}  # sibling file -> (strength, rule)
+    nominated_by: dict[str, str] = {}  # sibling file -> the anchor file that nominated it
 
-    def nominate(fid: str, strength: float, rule: str) -> None:
+    def nominate(fid: str, strength: float, rule: str, by: str) -> None:
         if fid in file_strength or fid in nominated:
             return
         if is_test_symbol(None, None, fid):
             return
         nominated[fid] = (strength, rule)
+        nominated_by[fid] = by
 
     # 1. name family, repo-wide.
     patterns: dict[str, list[str]] = {}
@@ -337,7 +431,7 @@ def _expand_sibling_files(
     for fid in anchor_files:
         for pattern in patterns[fid]:
             for sibling in by_pattern.get(pattern, []):
-                nominate(sibling, file_strength[fid], "name_family")
+                nominate(sibling, file_strength[fid], "name_family", fid)
 
     # 2. directory neighbours sharing a name part.
     dirs = sorted({_dir_of(f) for f in anchor_files if _dir_of(f)})
@@ -348,7 +442,7 @@ def _expand_sibling_files(
             continue
         hits = [f for f in by_dir.get(_dir_of(fid), []) if f != fid and parts & _name_parts(f)]
         for sibling in hits[:SIBLING_FILES_PER_ANCHOR]:
-            nominate(sibling, file_strength[fid], "directory")
+            nominate(sibling, file_strength[fid], "directory", fid)
 
     # 3. importers of the anchor's file (bounded fan-in).
     importers_of = getattr(repository, "file_importers", None)
@@ -361,7 +455,7 @@ def _expand_sibling_files(
             if 0 < len(rows) <= SIBLING_IMPORTER_LIMIT:
                 for row in rows:
                     if row.get("file_id"):
-                        nominate(row["file_id"], file_strength[fid], "importer")
+                        nominate(row["file_id"], file_strength[fid], "importer", fid)
 
     if not nominated:
         return
@@ -384,6 +478,7 @@ def _expand_sibling_files(
                 anchor=False,
                 provenance=f"sibling_file:{rule}",
                 source_strength=strength * HOP_DECAY * SIBLING_FILE_SCALE,
+                parent=file_anchor.get(nominated_by[fid]),
             )
 
 
@@ -478,7 +573,12 @@ def _walk(
             strength = frontier[node_id] * HOP_DECAY
             for neigh in neighbours.get(node_id, []):
                 nid = neigh.get("symbol_id")
-                if not nid or nid in visited:
+                if not nid:
+                    continue
+                if nid in visited:
+                    record(
+                        nid, depth, anchor=False, provenance=None, parent=node_id, edge_only=True
+                    )
                     continue
                 visited.add(nid)
                 record(
@@ -487,6 +587,7 @@ def _walk(
                     anchor=False,
                     provenance=neigh.get("provenance"),
                     source_strength=strength,
+                    parent=node_id,
                 )
                 next_frontier[nid] = strength
         frontier = next_frontier

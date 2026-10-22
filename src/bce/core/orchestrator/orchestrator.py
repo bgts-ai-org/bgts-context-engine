@@ -134,7 +134,11 @@ class RetrievalOrchestrator:
         timings: dict[str, float] = {}
 
         stage = time.perf_counter()
-        expansion = expand_from_anchors(self.repository, anchors)
+        expansion = expand_from_anchors(
+            self.repository,
+            anchors,
+            expansion=self.profile.expansion if self.profile is not None else "hops",
+        )
         timings["expand_ms"] = _elapsed_ms(stage)
 
         stage = time.perf_counter()
