@@ -52,20 +52,43 @@ def test_unknown_mode_raises_naming_the_variable():
 def test_workflows_differ_where_the_benchmark_arms_did():
     hint = " ".join(workflow(HINT)["steps"])
     trust = " ".join(workflow(TRUST)["steps"])
-    # hint fills from the engine's own gap signals and may search when the engine says so
-    assert "`coverage.unresolved_identifiers`" in hint and "`payload.candidates`" in hint
-    assert "greps" in hint
+    # hint works from the shown code, opens what the engine reports, and searches for the rest
+    assert "`payload.evidence`" in hint and "`coverage.unresolved_identifiers`" in hint
+    assert "`coverage.gaps`" in hint and "`payload.tests`" in hint
+    assert "search as usual" in hint and "not the whole file" in hint
     # trust takes the files as the answer and forbids searching the tree
     assert "`payload.files`" in trust and "Do not search the repository" in trust
     assert "unresolved_identifiers" not in trust
-    assert workflow(TRUST)["label"] == "accept as correct"
+    assert workflow(TRUST)["label"] == "localize-only, for benchmarks"
 
 
-def test_prose_workflow_names_the_block_not_json_fields():
-    text = workflow_text(HINT, style="prose")
-    assert text.startswith("Workflow - BCE_AGENT_MODE=hint (starting point):\n1. ")
-    assert "payload." not in text and "coverage." not in text
-    assert '"Not covered"' in text and '"Also ranked"' in text
+def test_compact_workflow_names_the_sections_of_the_markdown_answer():
+    text = workflow_text(HINT, style="compact")
+    assert "payload." not in text and "coverage." not in text and "`full` tier" not in text
+    assert '"Primary edit targets"' in text and '"Gaps"' in text and '"Related tests"' in text
+    assert "not the whole file" in text  # read ranges, not files, when a read is needed
+    trust = workflow_text(TRUST, style="compact")
+    assert "primary and related alike" in trust and "Do not search the repository" in trust
+
+
+_SEARCH_BANS = ("do not search", "don't search", "no further search", "without a search")
+
+
+def test_nothing_handed_to_a_hint_agent_tells_it_not_to_search():
+    texts = [
+        workflow_text(HINT, style="json"),
+        workflow_text(HINT, style="compact"),
+        TOOL_SPECS["get_context_for_task"]["description"],
+        mcp_tools.CONTEXT_DESCRIPTION_JSON,
+        render_cursor_rule(["r"]),
+        render_claude_section(["r"], hook=False),
+        render_claude_section(["r"], hook=True),
+    ]
+    templates = Path(precontext.__file__).parent / "templates"
+    texts += [p.read_text(encoding="utf-8") for p in sorted(templates.iterdir()) if p.is_file()]
+    for text in texts:
+        low = text.lower()
+        assert not [ban for ban in _SEARCH_BANS if ban in low], text[:200]
 
 
 # ----------------------------------------------------------------------------------------------
@@ -77,7 +100,7 @@ def test_tool_description_carries_the_mode_workflow():
     base = TOOL_SPECS["get_context_for_task"]["description"]
     specs = available_tool_specs(allow_write=False, agent_mode=TRUST)
     desc = specs["get_context_for_task"]["description"]
-    assert desc.startswith(base) and desc.endswith(workflow_text(TRUST))
+    assert desc.startswith(base) and desc.endswith(workflow_text(TRUST, style="compact"))
     assert TOOL_SPECS["get_context_for_task"]["description"] == base  # catalog untouched
     assert specs["hybrid_search"] is TOOL_SPECS["hybrid_search"]
     plain = available_tool_specs(allow_write=False)
@@ -173,11 +196,17 @@ def test_project_agent_mode_reads_the_editor_configs(tmp_path: Path):
 
 def test_rules_point_at_the_workflow_instead_of_a_fixed_search_policy():
     rule = render_cursor_rule(["r"])
-    assert "`payload.workflow`" in rule and "`BCE_AGENT_MODE` in `.cursor/mcp.json`" in rule
+    assert '"Workflow" section' in rule and "`BCE_AGENT_MODE` in `.cursor/mcp.json`" in rule
     assert "prefer normal search" not in rule and "Search only for what" not in rule
     hooked = render_claude_section(["r"], hook=True)
-    assert '"Workflow" lines of the code context block' in hooked
+    assert '"Workflow" section of the context block' in hooked
     assert "`BCE_AGENT_MODE` in `.mcp.json`" in hooked
+
+
+def test_rules_describe_the_compact_answer():
+    for text in (render_cursor_rule(["r"]), render_claude_section(["r"], hook=False)):
+        assert "Primary edit targets" in text and "`<line>→<code>`" in text
+        assert "Gaps" in text and "file_id" not in text
 
 
 def test_cli_rejects_an_unknown_mode_before_writing(tmp_path: Path):
@@ -240,11 +269,13 @@ def _payload():
 
 def test_block_shows_the_gap_signals_and_the_mode_workflow():
     text = render_context_markdown(_payload(), mode=HINT)
-    assert "Not covered: `Foo` (defined in `src/foo.ts`)" in text
-    assert "Also ranked: `src/c.ts`" in text
-    assert "likely incomplete" in text
-    assert workflow_text(HINT, style="prose") in text
-    assert text.index("Workflow -") < text.index("- `src/a.ts:3`")  # survives truncation
+    assert "- `Foo` is not covered here; defined in `src/foo.ts`" in text
+    assert "likely incomplete" not in text  # no guidance binds to it; it stays in the JSON view
+    assert "## Workflow - BCE_AGENT_MODE=hint (starting point)" in text
+    for step in workflow_text(HINT, style="compact").split("\n")[1:]:
+        assert step in text
+    short = render_context_markdown(_payload(), mode=HINT, max_chars=1400)
+    assert "## Workflow -" in short and len(short) <= 1400  # the budget keeps it whole
     assert "Workflow -" not in render_context_markdown(_payload())
 
 

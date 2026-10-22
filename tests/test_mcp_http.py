@@ -111,6 +111,33 @@ def test_loopback_without_token_rejects_a_rebound_host():
     assert foreign_origin.status_code == 403
 
 
+def test_the_precontext_route_answers_a_hook_behind_the_token():
+    seen = []
+
+    def precontext(body, repo_ids, mode):
+        seen.append((body, repo_ids, mode))
+        return {
+            "hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": "x"}
+        }
+
+    hook = {"prompt": "Fix the login timeout in the auth module", "cwd": "/w"}
+    with _client(host="0.0.0.0", tokens=("t",), precontext=precontext) as client:
+        denied = client.post("/v1/precontext", json=hook)
+        ok = client.post(
+            "/v1/precontext?repo=r1&repo=r2", json=hook, headers={"authorization": "Bearer t"}
+        )
+        bad = client.post("/v1/precontext", content=b"[1]", headers={"authorization": "Bearer t"})
+    assert denied.status_code == 401
+    assert ok.json()["hookSpecificOutput"]["additionalContext"] == "x"
+    assert seen == [(hook, ["r1", "r2"], None)]
+    assert bad.status_code == 400
+
+
+def test_without_a_precontext_handler_there_is_no_route():
+    with _client() as client:
+        assert client.post("/v1/precontext", json={}).status_code in (404, 405)
+
+
 def test_security_settings_follow_the_configuration():
     assert security_settings("127.0.0.1", ())["enable_dns_rebinding_protection"]
     assert not security_settings("0.0.0.0", ("t",))["enable_dns_rebinding_protection"]

@@ -10,8 +10,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Body, Depends, Query
+from fastapi.responses import JSONResponse, PlainTextResponse
 
 from bce.api.rest.deps import get_locale, get_repository, get_scope, get_vector_store
 from bce.api.rest.schemas import (
@@ -21,6 +21,7 @@ from bce.api.rest.schemas import (
     HealthResponse,
     IndexRemoteRequest,
     IndexRequest,
+    InspectRequest,
     LanguagesResponse,
     ReindexRequest,
     SearchRequest,
@@ -31,9 +32,12 @@ from bce.api.rest.schemas import (
 from bce.core.auth.scope import ScopeFilter
 from bce.core.defaults import DEFAULT_MAX_CANDIDATES
 from bce.core.i18n import get_translator
+from bce.core.render import normalize_view, render_compact
+from bce.core.render.graph import render_inspect
 from bce.indexing.gitsync import GitCredentials, GitError
 from bce.indexing.indexer import Indexer
 from bce.indexing.parser.registry import build_default_registry
+from bce.integrations.precontext import server_hook_response
 from bce.jobs.store import cancel_job, enqueue_job, get_job, list_jobs
 from bce.storage.graph.repository import GraphRepository
 from bce.storage.relational.queries import resolve_repo_ids
@@ -54,6 +58,7 @@ from bce.tools.layer3 import (
     select_repos,
     suggest_change_sites,
 )
+from bce.tools.layer3.inspect import inspect_symbol_graph
 
 router = APIRouter()
 
@@ -181,20 +186,36 @@ def find_similar_code_route(
 # --- Layer 3: task-aware orchestration (spec section 7) ---
 
 
-@router.post("/v1/get-context-for-task", response_model=ToolResponse, tags=["layer-3"])
+@router.post(
+    "/v1/get-context-for-task",
+    response_model=ToolResponse,
+    tags=["layer-3"],
+    responses={200: {"content": {"text/markdown": {}}}},
+)
 def get_context_for_task_route(
     body: ContextForTaskRequest,
+    view: str | None = Query(
+        None,
+        description=(
+            "debug (default): the JSON envelope; compact: the Markdown answer an MCP agent gets, "
+            "max_tokens applied to the whole text; locate: the same without code."
+        ),
+    ),
     repository: GraphRepository = Depends(get_repository),
     store: VectorStore = Depends(get_vector_store),
     scope: ScopeFilter = Depends(get_scope),
     locale: str = Depends(get_locale),
-) -> dict[str, Any]:
+) -> Any:
+    try:
+        view = normalize_view(view or "debug")
+    except ValueError as exc:
+        return JSONResponse(status_code=400, content={"message": str(exc)})
     conn = getattr(getattr(repository, "client", None), "conn", None)
 
     def _ids(ids: list[str] | None) -> list[str] | None:
         return resolve_repo_ids(conn, ids) if conn is not None else ids
 
-    return get_context_for_task(
+    result = get_context_for_task(
         repository,
         task_text=body.task_text,
         task_id=body.task_id,
@@ -212,6 +233,62 @@ def get_context_for_task_route(
         scope=scope,
         locale=locale,
     )
+    if view != "debug":
+        text = render_compact(result.get("payload") or {}, max_tokens=body.max_tokens, view=view)
+        return PlainTextResponse(text, media_type="text/markdown; charset=utf-8")
+    return result
+
+
+@router.post(
+    "/v1/inspect-symbol-graph",
+    response_model=ToolResponse,
+    tags=["layer-3"],
+    responses={200: {"content": {"text/markdown": {}}}},
+)
+def inspect_symbol_graph_route(
+    body: InspectRequest,
+    view: str | None = Query(
+        None, description="debug (default): the JSON envelope; compact: the Markdown answer."
+    ),
+    repository: GraphRepository = Depends(get_repository),
+    scope: ScopeFilter = Depends(get_scope),
+    locale: str = Depends(get_locale),
+) -> Any:
+    try:
+        view = normalize_view(view or "debug")
+        conn = getattr(getattr(repository, "client", None), "conn", None)
+        repo_ids = (
+            resolve_repo_ids(conn, body.repo_ids) if conn is not None and body.repo_ids else None
+        ) or body.repo_ids
+        result = inspect_symbol_graph(
+            repository,
+            query=body.query,
+            mode=body.mode,
+            repo_ids=repo_ids,
+            scope=scope,
+            locale=locale,
+        )
+    except ValueError as exc:
+        return JSONResponse(status_code=400, content={"message": str(exc)})
+    if view != "debug":
+        text = render_inspect(result["payload"], max_tokens=body.max_tokens)
+        return PlainTextResponse(text, media_type="text/markdown; charset=utf-8")
+    return result
+
+
+@router.post("/v1/precontext", tags=["integrations"])
+def precontext_route(
+    body: dict[str, Any] = Body(..., description="A Claude Code UserPromptSubmit hook's JSON."),
+    repo: list[str] | None = Query(None, description="Restrict to these repo_ids."),
+    mode: str | None = Query(None, description="Agent mode (default: the server's)."),
+    scope: ScopeFilter = Depends(get_scope),
+) -> Any:
+    """The hook's response: ``hookSpecificOutput.additionalContext`` is the compact answer for the
+    prompt; ``{}`` when the prompt is not a task or there is nothing to add."""
+    try:
+        return server_hook_response(body, repo_ids=repo or None, mode=mode, scope=scope)
+    except ValueError as exc:
+        return JSONResponse(status_code=400, content={"message": str(exc)})
 
 
 @router.post("/v1/suggest-change-sites", response_model=ToolResponse, tags=["layer-3"])
@@ -316,6 +393,7 @@ def index_route(
             "nodes_added": summary.nodes_added,
             "edges_added": summary.edges_added,
             "commit": summary.commit,
+            "stats": summary.stats,
         },
         "message": message,
         "locale": locale,
@@ -383,6 +461,7 @@ def index_remote_route(
             "nodes_added": summary.nodes_added,
             "edges_added": summary.edges_added,
             "commit": summary.commit,
+            "stats": summary.stats,
         },
         "message": message,
         "locale": locale,
@@ -432,6 +511,7 @@ def reindex_route(
             "edges": summary.edges,
             "nodes_added": summary.nodes_added,
             "edges_added": summary.edges_added,
+            "stats": summary.stats,
         },
         "message": message,
         "locale": locale,

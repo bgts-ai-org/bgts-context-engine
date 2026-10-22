@@ -72,6 +72,7 @@ def test_scope_filter_restricts_and_fails_closed():
 def test_mcp_catalog_covers_retrieval_and_indexing():
     expected = {
         "get_context_for_task",
+        "inspect_symbol_graph",
         "hybrid_search",
         "resolve_symbol",
         "find_references",
@@ -202,8 +203,8 @@ def test_mcp_context_answer_drops_the_anchor_map_but_keeps_its_count():
     )
     assert "anchors" not in out["payload"] and out["payload"]["anchor_count"] == 2
     assert out["payload"]["candidates"] == [{"path": "x.py"}]
-    assert "payload.files" in TOOL_SPECS["get_context_for_task"]["description"]
-    assert "unresolved_identifiers" in TOOL_SPECS["get_context_for_task"]["description"]
+    assert "## Primary edit targets" in TOOL_SPECS["get_context_for_task"]["description"]
+    assert "'## Gaps'" in TOOL_SPECS["get_context_for_task"]["description"]
     assert _compact_context({"tool": "x", "payload": {"k": 1}})["payload"] == {"k": 1}
 
 

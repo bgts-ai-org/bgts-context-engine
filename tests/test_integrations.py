@@ -25,7 +25,7 @@ from bce.integrations.agents import (
     setup_opencode,
     upsert_marked_section,
 )
-from bce.integrations.precontext import HEADING, claude_hook_response, render_context_markdown
+from bce.integrations.precontext import claude_hook_response, render_context_markdown
 
 # ----------------------------------------------------------------------------------------------
 # defaults are shared by every surface
@@ -82,40 +82,24 @@ def _payload(items, confidence="high"):
     return {"context": {"items": items}, "coverage": {"confidence": confidence}}
 
 
-def test_render_lists_files_in_rank_order_and_strips_repo_prefix():
+def test_render_is_the_compact_answer_and_strips_repo_prefix():
     items = [
         _item("refresh", "src/http.ts", 10, 0, "{\n  return 1;\n}"),
         _item("store", "src/token.ts", 5, 1, "{\n  return 2;\n}"),
         _item("raw", "src/http.ts", 40, 0, "{\n  return 3;\n}"),
     ]
     text = render_context_markdown(_payload(items))
-    assert text.startswith(HEADING)
-    assert "Confidence: high." in text
-    assert "Files: `src/http.ts` (2), `src/token.ts`" in text
-    assert "- `src/http.ts:10` function `refresh` d0" in text
+    assert text.startswith("# BCE context · demo · confidence high · ~")
+    assert "### src/http.ts:10-10 · function refresh · edit · snippet" in text
+    assert "### src/token.ts:5-5 · function store · dependency · snippet" in text
     assert "demo:src" not in text  # repo prefix stripped everywhere
 
 
-def test_render_drops_placeholder_snippets_and_truncates_long_ones():
-    long_body = "\n".join(f"line {i}" for i in range(30))
-    items = [
-        _item("CONST", "src/a.ts", 1, 0, "CONST"),  # name-only content: no code block
-        _item("ref", "src/b.ts", 2, 2, "ref @ demo:src/b.ts:2", level="reference"),
-        _item("big", "src/c.ts", 3, 0, long_body),
-    ]
-    text = render_context_markdown(_payload(items), snippet_lines=5)
-    assert text.count("```") == 2  # only `big` gets a block
-    assert "line 4" in text and "line 5" not in text
-    assert "... (+25 lines)" in text
-
-
-def test_render_respects_max_distance_and_max_chars():
-    items = [_item(f"f{i}", f"src/f{i}.ts", i, i % 3, "{\n  x\n}") for i in range(12)]
-    near = render_context_markdown(_payload(items), max_distance=0)
-    assert "d1" not in near and "d2" not in near and "d0" in near
-    short = render_context_markdown(_payload(items), max_chars=900)
-    assert len(short) <= 900 + len("- ... (truncated)\n") + 1
-    assert short.rstrip().endswith("- ... (truncated)")
+def test_render_respects_max_chars():
+    items = [_item(f"f{i}", f"src/f{i}.ts", i, 0, "{\n  x\n}") for i in range(12)]
+    short = render_context_markdown(_payload(items), max_chars=400)
+    assert len(short) <= 400
+    assert "### src/f0.ts:" in short  # the first span always stays
 
 
 # ----------------------------------------------------------------------------------------------
@@ -245,7 +229,12 @@ def test_claude_init_without_hook_tells_the_agent_to_call_the_tool(tmp_path: Pat
     setup_claude(tmp_path, repo_ids=["r"], bce_cmd="bce", env_file=None, hook=False)
     md = (tmp_path / "CLAUDE.md").read_text(encoding="utf-8")
     assert "call `get_context_for_task` once" in md
-    assert not (tmp_path / ".claude" / "settings.json").exists()
+    settings = json.loads((tmp_path / ".claude" / "settings.json").read_text(encoding="utf-8"))
+    assert "UserPromptSubmit" not in settings["hooks"]  # only the edited-file hook
+    bare = tmp_path / "bare"
+    bare.mkdir()
+    setup_claude(bare, repo_ids=["r"], bce_cmd="bce", env_file=None, hook=False, edit_hook=False)
+    assert not (bare / ".claude" / "settings.json").exists()
 
 
 def test_opencode_init_merges_opencode_json_and_agents_md(tmp_path: Path):

@@ -187,8 +187,43 @@ def test_all_layers_are_registered() -> None:
         "/v1/jobs",
         "/v1/jobs/{job_id}",
         "/v1/jobs/{job_id}/cancel",
+        "/v1/inspect-symbol-graph",
+        "/v1/precontext",
     ):
         assert path in paths, f"missing endpoint: {path}"
+
+
+def test_precontext_round_trips_a_hook_payload(monkeypatch) -> None:
+    from bce.integrations import precontext as pre_mod
+
+    seen: list[dict[str, Any]] = []
+
+    def fake(prompt, **kw):
+        seen.append({"prompt": prompt, **kw})
+        return {"text": "x" * 20_000, "n_items": 1}
+
+    monkeypatch.setattr(pre_mod, "precontext_for_task", fake)
+    hook = {"prompt": "Fix the login timeout in the auth module", "cwd": "/client"}
+    resp = _client().post("/v1/precontext?repo=r1&mode=trust", json=hook)
+    assert resp.status_code == 200
+    assert resp.json()["hookSpecificOutput"]["hookEventName"] == "UserPromptSubmit"
+    assert seen[0]["repo_ids"] == ["r1"] and seen[0]["mode"] == "trust"
+    assert seen[0]["max_chars"] == pre_mod.CLAUDE_HOOK_MAX_CHARS  # the server applies the cap
+    assert _client().post("/v1/precontext", json={"prompt": "yes"}).json() == {}
+    assert _client().post("/v1/precontext?mode=sometimes", json=hook).status_code == 400
+
+
+def test_inspect_symbol_graph_route_answers_json_and_markdown() -> None:
+    client = _client(_FakeRepository())
+    body = {"query": "nothing_by_this_name", "mode": "callers"}
+    resp = client.post("/v1/inspect-symbol-graph", json=body)
+    assert resp.status_code == 200
+    assert resp.json()["payload"]["status"] == "not_found"
+    md = client.post("/v1/inspect-symbol-graph?view=compact", json=body)
+    assert md.headers["content-type"].startswith("text/markdown")
+    assert md.text.startswith("# BCE graph · no indexed symbol matches")
+    bad = client.post("/v1/inspect-symbol-graph", json={**body, "mode": "everything"})
+    assert bad.status_code == 400
 
 
 def test_semantic_search_payload_is_locale_invariant() -> None:

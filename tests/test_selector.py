@@ -72,11 +72,32 @@ def test_request_shape_one_question_per_file_and_symbol():
     assert len(sst["candidate_symbols"]["s0"]["excerpt"]) <= 240
 
 
+#: The fitted wide listing (stubs from p 0.02, 20 files): the policy mechanics below are shown on
+#: it; the defaults list less (see test_default_listing_keeps_only_plausible_files).
+WIDE = SelectorConfig(stub_threshold=0.02, max_files=20)
+
+
+def test_default_listing_keeps_only_plausible_files():
+    items = [_item(f"x{i}", f"f{i}.py", 10.0 - i) for i in range(9)]
+    groups = group_files(items)
+    file_p = {
+        f"r:f{i}.py": p for i, p in enumerate([0.9, 0.8, 0.6, 0.4, 0.3, 0.27, 0.26, 0.2, 0.1])
+    }
+    out, stats = apply_policy(items, groups, file_p, None, SelectorConfig())
+    tiers = [(it["file_id"], it["tier"]) for it in out]
+    assert tiers == [("r:f0.py", "full"), ("r:f1.py", "full"), ("r:f2.py", "full")] + [
+        (f"r:f{i}.py", "stub") for i in (3, 4, 5)
+    ]  # 6 files in all; p < 0.25 is never listed
+    assert stats["listing_capped"] is True
+    settings = Settings(selector="jev", openrouter_api_key="k")
+    assert (settings.selector_stub_threshold, settings.selector_max_files) == (0.25, 6)
+
+
 def test_policy_tiers_full_stub_dropped_and_prunes_symbols():
     groups = group_files(ITEMS)
     file_p = {"r:a.py": 0.2, "r:b.py": 0.9, "r:c.py": 0.1, "r:d.py": 0.01}
     sym = {"a1": 3.0, "a2": 0.0, "b1": 2.0, "c1": 1.0, "d1": 0.0}
-    out, stats = apply_policy(ITEMS, groups, file_p, sym, SelectorConfig())
+    out, stats = apply_policy(ITEMS, groups, file_p, sym, WIDE)
     tiers = [(it["file_id"], it["tier"]) for it in out]
     # b.py (p=.9) full and first; a.py always full as the engine's first file; c.py stub; d dropped
     assert tiers == [("r:b.py", "full"), ("r:a.py", "full"), ("r:c.py", "stub")]
@@ -116,7 +137,8 @@ def test_policy_never_empties_a_full_file_and_caps_only_the_stub_listing():
     assert [it["symbol_id"] for it in out] == ["a1", "b1", "c1", "d1"]
     # ...while the stub listing stops at the cap and says so
     file_p = {"r:a.py": 0.9, "r:b.py": 0.3, "r:c.py": 0.2, "r:d.py": 0.1}
-    out, stats = apply_policy(ITEMS, groups, file_p, sym, SelectorConfig(max_files=2))
+    cfg = SelectorConfig(stub_threshold=0.02, max_files=2)
+    out, stats = apply_policy(ITEMS, groups, file_p, sym, cfg)
     assert [(it["file_id"], it["tier"]) for it in out] == [("r:a.py", "full"), ("r:b.py", "stub")]
     assert stats["listing_capped"] is True and stats["files_dropped"] == 2
 
@@ -206,7 +228,7 @@ def test_selector_end_to_end_with_fake_model():
         {"f0": {"noul": 0.3}, "f1": {"noul": 0.8}, "f2": {"noul": 0.06}, "f3": {"noul": 0.0}},
         {f"s{i}": {"score": s} for i, s in enumerate([3.0, 2.5, 0.2, 1.0, 0.0])},
     )
-    out, info = Selector(_client(transport)).select(ITEMS, task_text="fix b")
+    out, info = Selector(_client(transport), WIDE).select(ITEMS, task_text="fix b")
     assert len(calls) == 2 and {c["model"] for c in calls} == {"typesafe/jev-1.13"}
     assert (
         info["status"] == "ok"
@@ -473,9 +495,8 @@ def test_precontext_renders_stub_summary():
         },
     }
     text = render_context_markdown(payload)
-    assert "- `b.py` stub: 2 candidate symbol(s): g, h" in text
-    assert "Entries marked `stub`" in text
-    assert "- `a.py:3` function `f` d0" in text
+    assert "## Related files\n- `b.py` — g, h" in text
+    assert "### a.py:3-3 · function f · edit · snippet" in text
 
 
 def test_get_context_for_task_picks_k_from_the_selector(monkeypatch):

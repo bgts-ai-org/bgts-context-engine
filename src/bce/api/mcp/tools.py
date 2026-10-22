@@ -5,10 +5,12 @@ maps a tool name + arguments to a call against the deterministic core, using the
 This is the single source of truth the SDK server binds to, and it is importable/testable without the
 optional ``mcp`` package.
 
-The catalog is deliberately narrower than the REST surface. An agent picks worse when handed a dozen
-overlapping retrieval tools, so only the non-redundant ones are exposed: ``hybrid_search`` subsumes
-semantic and code-similarity search, and ``get_context_for_task`` subsumes the change-site and
-assembly helpers. The rest stay reachable over REST.
+The catalog is deliberately narrower than the REST surface. Every advertised tool's schema is in
+the agent's context on every turn, and an agent picks worse when handed overlapping retrieval tools,
+so the default toolset (``BCE_MCP_TOOLSET=minimal``) is two tools with short descriptions:
+``get_context_for_task`` (the context for a task) and ``inspect_symbol_graph`` (one graph question
+about one symbol, asked by name). ``full`` adds the id-based graph tools and ``hybrid_search``; the
+rest stay reachable over REST. ``BCE_MCP_TOOLS`` names the tools outright and overrides the toolset.
 
 Indexing tools are writes, so they are gated behind ``allow_write`` (``BCE_MCP_ALLOW_WRITE``) and
 enqueue a job rather than indexing inline: a full index outlives any agent's tool-call timeout. They
@@ -16,11 +18,17 @@ cover local working trees only. Cloning a remote repository is a deployment task
 credentials, not something an editor-spawned agent should reach for, so it stays on REST and the CLI.
 
 Every tool returns the standard envelope ``{tool, payload, message, locale}`` (P1: payload is
-language-neutral; only ``message`` is localized).
+language-neutral; only ``message`` is localized). What an MCP client receives is
+:func:`result_text`: the envelope as JSON, except for ``get_context_for_task`` in the ``compact`` or
+``locate`` view (``BCE_MCP_VIEW``), the Markdown of :mod:`bce.core.render.compact`, and
+``inspect_symbol_graph`` outside ``view=debug``, the Markdown of :mod:`bce.core.render.graph`; the
+token budget applies to that text.
 """
 
 from __future__ import annotations
 
+import json
+import logging
 from typing import Any
 
 import psycopg
@@ -29,6 +37,8 @@ from bce.core.agent_mode import workflow, workflow_text
 from bce.core.auth.scope import Principal, ScopeFilter
 from bce.core.defaults import DEFAULT_MAX_CANDIDATES, DEFAULT_MAX_TOKENS, SELECTED_MAX_CANDIDATES
 from bce.core.i18n import get_translator
+from bce.core.render import VIEWS, normalize_view, render_compact
+from bce.core.render.graph import render_inspect
 from bce.jobs.store import enqueue_job, get_job, list_jobs
 from bce.storage.graph.client import GraphClient
 from bce.storage.graph.repository import GraphRepository
@@ -37,6 +47,10 @@ from bce.storage.vector.store import VectorStore
 from bce.tools.layer1 import find_references, get_call_graph, resolve_symbol
 from bce.tools.layer2 import hybrid_search
 from bce.tools.layer3 import expand_blast_radius, get_context_for_task
+from bce.tools.layer3.inspect import MODES as INSPECT_MODES
+from bce.tools.layer3.inspect import inspect_symbol_graph
+
+logger = logging.getLogger("bce.api.mcp")
 
 _STR = {"type": "string"}
 _STR_LIST = {"type": "array", "items": {"type": "string"}}
@@ -50,20 +64,64 @@ def _schema(props: dict[str, Any], required: list[str]) -> dict[str, Any]:
 
 #: Tools that mutate the graph. Only advertised and dispatchable when ``allow_write`` is set.
 WRITE_TOOLS = frozenset({"index_repo", "reindex_repo"})
+#: The indexing queue's tools; the minimal toolset advertises them only with ``allow_write``.
+JOB_TOOLS = frozenset({"index_repo", "reindex_repo", "get_index_job", "list_index_jobs"})
+#: ``BCE_MCP_TOOLSET`` -> the read tools it advertises (``None``: all of them).
+TOOLSETS: dict[str, tuple[str, ...] | None] = {
+    "minimal": ("get_context_for_task", "inspect_symbol_graph"),
+    "full": None,
+}
+DEFAULT_TOOLSET = "minimal"
+
+#: ``get_context_for_task`` description of the minimal toolset (the answer states its workflow).
+CONTEXT_DESCRIPTION_SHORT = (
+    "The code context for a task: call it first, once, with the full task text. Markdown: the "
+    "primary edit targets as numbered code (`line→code`, the file's own numbers), other symbols, "
+    "related files and tests with line ranges, and Gaps - what the answer lacks; search for "
+    "those as usual. view=locate: locations only; debug: JSON."
+)
+#: ``inspect_symbol_graph`` description.
+INSPECT_DESCRIPTION = (
+    "One code-graph question about a symbol: its definition, callers, callees, references, or "
+    "the impact of a change (dependents, tests to run). query: a name, Type.member, path:line, "
+    "or for impact a diff or path:L1-L2 list. Answers with code lines; an ambiguous name lists "
+    "candidates."
+)
+
+#: ``get_context_for_task`` description for the compact (Markdown) answer.
+CONTEXT_DESCRIPTION = (
+    "Primary tool: the code context for a task description. Start here for any 'where do I "
+    "change X' question. The answer is Markdown. '## Primary edit targets' holds the code the "
+    "task most likely changes as numbered source lines (`<line>→<code>`, the file's own line "
+    "numbers and indentation, as a file read prints them), each under a heading "
+    "`path:start-end · kind name · edit|dependency · state · hash`; state is complete (the whole "
+    "declaration), partial (windows of a long one around what the task names; `⋯ lines a-b "
+    "omitted` marks the gaps), skeleton (a class's members with their line ranges) or truncated. "
+    "'## Other symbols in primary files' lists further symbols of those files with their ranges; "
+    "'## Related files' names files probably involved, without code; '## Related tests' the "
+    "existing tests of the edit targets with their ranges; '## Gaps' lists what the engine knows "
+    "the answer does not cover (an identifier the task names with the indexed files defining it, "
+    "names or files the index does not have, missing tests) - search for those as usual. "
+    "view=debug returns the full JSON envelope instead."
+)
+#: ``get_context_for_task`` description for the JSON (debug) answer.
+CONTEXT_DESCRIPTION_JSON = (
+    "Primary tool: assemble the code context for a task description, with a "
+    "coverage/confidence report. Start here for any 'where do I change X' question. "
+    "payload.files lists every file of the answer (path, tier full|stub, relevance, "
+    "why); payload.context.items carry the symbols and their content; payload.evidence the "
+    "numbered code spans; payload.tests the existing tests of the edit targets; "
+    "payload.candidates are further ranked files the selector left out. "
+    "coverage.unresolved_identifiers names identifiers from the task the answer does "
+    "not cover, each with the indexed file defining it - open those directly; coverage.gaps "
+    "lists what the index does not have (unknown names, unindexed files, missing tests) and "
+    "coverage.state is unknown when the task reaches outside the index."
+)
 
 # Tool catalog: name -> (description, input schema).
 TOOL_SPECS: dict[str, dict[str, Any]] = {
     "get_context_for_task": {
-        "description": (
-            "Primary tool: assemble the code context for a task description, with a "
-            "coverage/confidence report. Start here for any 'where do I change X' question. "
-            "payload.files lists every file of the answer (path, tier full|stub, relevance, "
-            "why); payload.context.items carry the symbols and their content; "
-            "payload.candidates are further ranked files the selector left out. "
-            "coverage.unresolved_identifiers names identifiers from the task the answer does "
-            "not cover, each with the indexed file defining it - open those directly; when it "
-            "is empty and coverage.likely_incomplete is false, no further search is needed."
-        ),
+        "description": CONTEXT_DESCRIPTION,
         "schema": _schema(
             {
                 "task_text": {
@@ -74,7 +132,18 @@ TOOL_SPECS: dict[str, dict[str, Any]] = {
                 "max_tokens": {
                     **_INT,
                     "default": DEFAULT_MAX_TOKENS,
-                    "description": "Token budget of the assembled context.",
+                    "description": (
+                        "Token budget of the whole answer text (code, lists and gaps). Leave "
+                        "it unset unless the answer is too short for the task."
+                    ),
+                },
+                "view": {
+                    **_STR,
+                    "enum": list(VIEWS),
+                    "description": (
+                        "compact (default): the Markdown answer; locate: the same without code; "
+                        "debug: the full JSON envelope."
+                    ),
                 },
                 "max_candidates": {
                     **_INT,
@@ -95,6 +164,18 @@ TOOL_SPECS: dict[str, dict[str, Any]] = {
                 "locale": _STR,
             },
             ["task_text"],
+        ),
+    },
+    "inspect_symbol_graph": {
+        "description": INSPECT_DESCRIPTION,
+        "schema": _schema(
+            {
+                "query": _STR,
+                "mode": {**_STR, "enum": list(INSPECT_MODES), "default": "definition"},
+                "repo_ids": _STR_LIST,
+                "max_tokens": _INT,
+            },
+            ["query"],
         ),
     },
     "hybrid_search": {
@@ -160,34 +241,125 @@ TOOL_SPECS: dict[str, dict[str, Any]] = {
 }
 
 
+#: ``get_context_for_task`` description of the minimal toolset when the server answers in JSON.
+CONTEXT_DESCRIPTION_SHORT_JSON = (
+    "The code context for a task: call it first, once, with the full task text. JSON: "
+    "payload.files, payload.evidence (numbered code spans with ranges), payload.tests, and "
+    "coverage.gaps - what the answer lacks; search for those as usual."
+)
+
+
+def normalize_toolset(value: str | None) -> str:
+    """The toolset named by ``value`` (empty means :data:`DEFAULT_TOOLSET`); unknown raises."""
+    name = (value or "").strip().lower() or DEFAULT_TOOLSET
+    if name not in TOOLSETS:
+        raise ValueError(
+            f"BCE_MCP_TOOLSET={value!r} is not a toolset; known: {', '.join(TOOLSETS)}"
+        )
+    return name
+
+
+def _minimal_context_spec(view: str | None) -> dict[str, Any]:
+    compact = normalize_view(view) != "debug"
+    return {
+        "description": CONTEXT_DESCRIPTION_SHORT if compact else CONTEXT_DESCRIPTION_SHORT_JSON,
+        "schema": _schema(
+            {
+                "task_text": _STR,
+                "max_tokens": _INT,
+                "view": {**_STR, "enum": list(VIEWS)},
+                "repo_ids": _STR_LIST,
+            },
+            ["task_text"],
+        ),
+    }
+
+
 def available_tool_specs(
     *,
     allow_write: bool,
     allowlist: frozenset[str] | None = None,
     agent_mode: str | None = None,
+    view: str | None = None,
+    toolset: str = "full",
 ) -> dict[str, dict[str, Any]]:
-    """The catalog to advertise: write tools are hidden unless ``allow_write`` is set, and an
-    ``allowlist`` (``BCE_MCP_TOOLS``) narrows it further. Unknown names in the allowlist raise, so a
-    typo does not silently publish nothing. With ``agent_mode`` (``BCE_AGENT_MODE``) the
-    ``get_context_for_task`` description ends with that mode's workflow."""
+    """The catalog to advertise.
+
+    ``toolset`` (``BCE_MCP_TOOLSET``) picks the read tools: ``minimal`` is
+    ``get_context_for_task`` and ``inspect_symbol_graph`` with short descriptions and only the
+    arguments an agent sets (the dispatcher still accepts the rest), plus the indexing tools when
+    ``allow_write`` is set; ``full`` is every tool, write tools only with ``allow_write``. An
+    ``allowlist`` (``BCE_MCP_TOOLS``) names the tools outright instead; unknown names in it raise,
+    so a typo does not silently publish nothing. Outside the minimal toolset, with ``agent_mode``
+    (``BCE_AGENT_MODE``) the ``get_context_for_task`` description ends with that mode's workflow,
+    worded for the answer ``view`` the server returns by default (``BCE_MCP_VIEW``); the minimal
+    one leaves it to the answer and the server instructions.
+    """
+    minimal = False
     if allowlist is not None:
         unknown = sorted(allowlist - set(TOOL_SPECS))
         if unknown:
             raise ValueError(
                 f"BCE_MCP_TOOLS names unknown tools {unknown}; known: {sorted(TOOL_SPECS)}"
             )
+        names = set(allowlist)
+    else:
+        chosen = TOOLSETS[normalize_toolset(toolset)]
+        minimal = chosen is not None
+        names = (
+            set(TOOL_SPECS)
+            if chosen is None
+            else set(chosen) | (JOB_TOOLS if allow_write else set())
+        )
     specs = {
         name: spec
         for name, spec in TOOL_SPECS.items()
-        if (allow_write or name not in WRITE_TOOLS) and (allowlist is None or name in allowlist)
+        if (allow_write or name not in WRITE_TOOLS) and name in names
     }
-    if agent_mode is not None and "get_context_for_task" in specs:
+    if "get_context_for_task" in specs and minimal:
+        specs["get_context_for_task"] = _minimal_context_spec(view)
+    elif "get_context_for_task" in specs and (agent_mode is not None or view is not None):
         spec = specs["get_context_for_task"]
-        specs["get_context_for_task"] = {
-            **spec,
-            "description": f"{spec['description']}\n\n{workflow_text(agent_mode)}",
-        }
+        compact = normalize_view(view) != "debug"
+        desc = CONTEXT_DESCRIPTION if compact else CONTEXT_DESCRIPTION_JSON
+        if agent_mode is not None:
+            style = (
+                "json"
+                if not compact
+                else ("locate" if normalize_view(view) == "locate" else "compact")
+            )
+            desc = f"{desc}\n\n{workflow_text(agent_mode, style=style)}"
+        specs["get_context_for_task"] = {**spec, "description": desc}
     return specs
+
+
+def result_text(
+    name: str,
+    result: dict[str, Any],
+    *,
+    view: str | None = None,
+    max_tokens: int | None = None,
+) -> str:
+    """The text content an MCP client receives for ``result``.
+
+    ``get_context_for_task`` in the ``compact`` / ``locate`` view and ``inspect_symbol_graph``
+    outside ``view=debug`` are Markdown, ``max_tokens`` applied to it; every other result is the
+    envelope as JSON.
+    """
+    payload = result.get("payload")
+    shown = normalize_view(view)
+    if isinstance(payload, dict) and shown != "debug" and name in RENDERED_TOOLS:
+        try:
+            if name == "inspect_symbol_graph":
+                return render_inspect(payload, max_tokens=max_tokens)
+            return render_compact(payload, max_tokens=max_tokens, view=shown)
+        except Exception:  # noqa: BLE001 - a rendering fault must not cost the agent its answer
+            logger.exception("Markdown rendering failed; answering with the JSON envelope")
+    return json.dumps(result, ensure_ascii=False, default=str)
+
+
+#: Tools whose MCP answer is Markdown outside ``view=debug``.
+RENDERED_TOOLS = frozenset({"get_context_for_task", "inspect_symbol_graph"})
 
 
 def dispatch_tool(
@@ -247,6 +419,15 @@ def dispatch_tool(
         if agent_mode is not None and isinstance(payload, dict):
             payload["workflow"] = workflow(agent_mode)
         return result
+    if name == "inspect_symbol_graph":
+        return inspect_symbol_graph(
+            repository,
+            query=str(args.get("query") or ""),
+            mode=str(args.get("mode") or "definition"),
+            repo_ids=args.get("repo_ids"),
+            scope=scope,
+            locale=locale,
+        )
     if name == "hybrid_search":
         return hybrid_search(
             repository,
