@@ -1,18 +1,18 @@
 """Agent mode: how far an agent relies on the ``get_context_for_task`` answer.
 
-The agent benchmark (``local_bench/agent_mcp_bench``) measured two ways of using the answer:
-
-- ``hint`` ("starting point", the default): the answer is the baseline. The agent adds the files of
-  the identifiers the engine reports as uncovered and searches only when the engine itself says the
-  answer is likely incomplete.
-- ``trust`` ("accept as correct"): the answer is the set of locations. The agent works from its
-  files and does not search the tree.
+- ``hint`` ("starting point", the default): the answer comes first. The agent designs the change
+  from the code it shows, reads only the ranges it leaves out, opens the files of the identifiers
+  it reports as uncovered, and searches as usual for whatever else it needs - the answer lists the
+  gaps the engine knows of, but an agent is never told not to search.
+- ``trust`` ("localize-only, for benchmarks"): the answer is the set of locations. The agent works
+  from its files and does not search the tree. This measures the engine's localisation alone; it
+  is not a mode to work in.
 
 The mode is one setting, ``BCE_AGENT_MODE``. The init commands write it into the editor's MCP server
 entry so it can be switched there. Every surface that hands the answer to an agent states the
-workflow of the active mode: the MCP tool description, ``payload.workflow`` of each answer, and the
-``bce precontext`` block. The editor rules only point at that workflow, so switching the mode needs
-no rule rewrite.
+workflow of the active mode: the MCP tool description, the answer's "Workflow" section (or
+``payload.workflow`` of the JSON view), and the ``bce precontext`` block. The editor rules only
+point at that workflow, so switching the mode needs no rule rewrite.
 """
 
 from __future__ import annotations
@@ -24,29 +24,29 @@ HINT = "hint"
 TRUST = "trust"
 DEFAULT_AGENT_MODE = HINT
 
-LABELS = {HINT: "starting point", TRUST: "accept as correct"}
+LABELS = {HINT: "starting point", TRUST: "localize-only, for benchmarks"}
 
-#: Steps per mode. Placeholders name the answer's parts so one text serves the JSON answer (MCP)
-#: and the prose block (``bce precontext``); see :data:`_TERMS`.
+#: Steps per mode. Placeholders name the answer's parts so one text serves the JSON answer
+#: (MCP ``view=debug``) and the compact Markdown answer (MCP default, ``bce precontext``); see
+#: :data:`_TERMS`.
 _STEPS: dict[str, tuple[str, ...]] = {
     HINT: (
-        "Start from {files}, `full` tier first: open those files directly instead of searching "
-        "for them, and keep every one of them in view.",
-        "For every identifier in {unresolved}, open {defined_in}.",
-        "When {complete}, the answer covers every identifier the task names: do not search the "
-        "tree for further locations.",
-        "Only when {incomplete} and the steps above add nothing, check {candidates}, then run a few "
-        "targeted greps for the most specific identifiers in the task. With confidence `low`, "
-        "normal search is fine.",
-        "Tests, configs and locale files are not in the graph; search for those as usual.",
+        "Start from {evidence}: {evidence_use}. Open {related} directly instead of searching for "
+        "them.",
+        "Read a file only for lines {omitted}, or where your editor needs a read before an edit - "
+        "and then only that range (offset/limit), not the whole file.",
+        "{unresolved_step} If anything else you need is not in the answer, search as usual (grep, "
+        "glob); {gaps} lists what the engine knows the answer lacks.",
+        "{tests} are the existing tests of the edit targets. Configs and locale files are not "
+        "indexed; search for those as usual.",
     ),
     TRUST: (
-        "Treat {files} as the set of locations for this task, `full` and `stub` tier alike: open "
-        "those files directly and work from them.",
+        "Treat {files} as the set of locations for this task, {all_tiers}: work from {evidence} "
+        "and open those files directly.",
         "Do not search the repository (grep, glob, ls, find, codebase search) to find or verify "
         "code locations, and do not ask the engine again with the same task.",
         "If those files do not cover the task, say so instead of searching.",
-        "The only exception is a test, config or locale file the task names explicitly; the graph "
+        "The only exception is a config or locale file the task names explicitly; the graph "
         "does not index those.",
     ),
 }
@@ -54,21 +54,48 @@ _STEPS: dict[str, tuple[str, ...]] = {
 _TERMS: dict[str, dict[str, str]] = {
     "json": {
         "files": "`payload.files`",
-        "unresolved": "`coverage.unresolved_identifiers`",
-        "defined_in": "its `defined_in` files",
-        "complete": (
-            "`coverage.unresolved_identifiers` is empty and `coverage.likely_incomplete` is false"
+        "all_tiers": "`full` and `stub` tier alike",
+        "evidence": "`payload.evidence`",
+        "evidence_use": (
+            "the code of the primary edit targets with their file ranges, as the files hold it "
+            "now - design the change from it"
         ),
-        "incomplete": "`coverage.likely_incomplete` is true",
-        "candidates": "`payload.candidates`",
+        "related": "the other `payload.files`",
+        "omitted": "`payload.evidence` does not show (spans with `complete: false`)",
+        "unresolved_step": (
+            "For every identifier in `coverage.unresolved_identifiers`, open its `defined_in` "
+            "files."
+        ),
+        "gaps": "`coverage.gaps`",
+        "tests": "`payload.tests`",
     },
-    "prose": {
-        "files": "the files listed here",
-        "unresolved": 'the "Not covered" line',
-        "defined_in": "the files it names",
-        "complete": 'there is no "Not covered" line and the answer is not marked likely incomplete',
-        "incomplete": "the answer is marked likely incomplete",
-        "candidates": 'the "Also ranked" files',
+    "compact": {
+        "files": "the files of the answer",
+        "all_tiers": "primary and related alike",
+        "evidence": '"Primary edit targets"',
+        "evidence_use": (
+            "the numbered code is the files' current text, with their line numbers - design the "
+            "change from it"
+        ),
+        "related": 'the "Related files"',
+        "omitted": "the answer leaves out (`⋯ lines a-b omitted`, partial or skeleton spans)",
+        "unresolved_step": 'For every name "Gaps" places in a file, open that file.',
+        "gaps": '"Gaps"',
+        "tests": '"Related tests"',
+    },
+    "locate": {
+        "files": "the files of the answer",
+        "all_tiers": "primary and related alike",
+        "evidence": '"Primary edit targets"',
+        "evidence_use": (
+            "each entry is a declaration and its line range - read those ranges and design the "
+            "change from them"
+        ),
+        "related": 'the "Related files"',
+        "omitted": "outside the listed ranges that the change needs",
+        "unresolved_step": 'For every name "Gaps" places in a file, open that file.',
+        "gaps": '"Gaps"',
+        "tests": '"Related tests"',
     },
 }
 
