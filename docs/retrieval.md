@@ -438,12 +438,16 @@ below are Jev's; the deciders run under the same thresholds and are compared in
 
 A fixed policy turns the answers into tiers:
 
-- **full** — the engine's first file, plus every file with p ≥ 0.5. Its symbols go to the
-  assembler as usual, except those scored below 1 (*unrelated*); a full file always keeps
-  its best symbol.
+- **full** — every file with p ≥ 0.5. Its symbols go to the assembler as usual, except
+  those scored below 1 (*unrelated*); a full file always keeps its best symbol.
 - **stub** — files with p ≥ 0.05, at most 12 files listed in total. Each becomes one item at
   `reference` detail whose content is `path - N candidate symbol(s): a, b, c`. The agent
-  knows the file exists and can open it; it costs about 40 tokens.
+  knows the file exists and can open it; it costs about 40 tokens. The engine's first file
+  and pinned files are listed here at least, whatever their p and the cap.
+
+The engine's first file used to be full regardless of the model's vote. Where the model put
+it below 0.5 it was an edit target in 1 of 54 answers (55 tasks, 13 repositories), yet as a
+full file it led the answer's code and sent the agent to the wrong place.
 - everything else is dropped.
 
 Items carry `tier`, `file_relevance` (p) and, when the symbol request answered,
@@ -528,7 +532,7 @@ trust the pack, and so a human can tell *why* an answer was thin.
 | `selector` | Only when the selector ran: `status` (`ok` / `partial` / `error` / `skipped`), `files_in` / `files_full` / `files_stub` / `files_dropped`, `symbols_in` / `symbols_out`, `ms`, `input_tokens`, `cost_usd`, the `policy` thresholds |
 
 These roll up into one label, computed in `_confidence_level`. It describes the *ranking*
-and is computed before the selector runs; the selector does not change it:
+and is computed before the selector runs; the selector can only lower it (see below):
 
 - **`low`** — no anchor reaches strength 0.35 and none is corroborated; *or* more than half
   the selection is weak single-source anchors or test code; *or* a single source and either
@@ -547,6 +551,14 @@ and two hubs differ by a point of degree — so a pack of eight noise anchors wa
 `high`, and confidence *fell* as the true targets entered the list. The v2 rule asks the
 question the label is supposed to answer: do the selected candidates agree on something the
 engine has real evidence for?
+
+When the selector answered (`ok` or `partial`), the coverage block also carries
+`target_relevance`, the highest p among the full files (0 when there is none), and
+`target_unconfirmed`, true when it is under 0.7 (`TARGET_MIN_RELEVANCE`). An unconfirmed
+answer is capped at `low` (an `unsupported` one stays `unsupported`) and the compact text
+says so under the edit targets. Answers whose best full file stayed under 0.7 pointed at the
+wrong first file in 3 of 4 cases (55 tasks, 13 repositories); none of the answers that
+pointed right did.
 
 `low` is not a failure. It is the engine saying it found something but could not
 corroborate it, which is exactly when an agent should ask a follow-up question or widen the

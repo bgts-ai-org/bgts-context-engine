@@ -74,6 +74,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   for both Claude Code and Copilot.
 - Selector defaults: stub threshold 0.02 → 0.25, at most 6 files (`BCE_SELECTOR_*` restore
   the old values).
+- The engine's first file is full only when the selector agrees (p ≥ the full threshold);
+  otherwise it is listed as a stub. When no full file reaches p 0.7 the answer's confidence is
+  capped at `low`, `coverage.target_unconfirmed` is set and the compact text asks the agent to
+  confirm the location before editing.
+- Compact answer: "Related files" lists only files the selector rates p ≥ 0.5 (and pinned
+  files), most probable first, with their symbols' line ranges, and is budgeted before the
+  code; a primary file whose code does not fit is listed there with its range instead of
+  vanishing. "Other symbols" no longer lists symbols of files that got no code.
 - The agent guidance (`hint` mode) designs the change from the shown code, reads only the
   ranges the answer leaves out and searches as usual for anything else; `trust` is labelled
   localize-only.
