@@ -95,6 +95,20 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   scan stops once it is generic. On a 60k-symbol repository the anchors took 9.3 s before and
   about 8 s after; on the 14 development tasks the median call fell by about a sixth.
 
+### Fixed
+
+- **`get_context_for_task` no longer fails on an index without call edges.** AGE creates an
+  edge label's table with the first edge that uses it, and `symbol_features` reads the `CALLS`
+  table directly. A repository that produced no call edge (a small one, or one that only
+  declares types and constants) therefore failed with `relation "code_graph.CALLS" does not
+  exist`: HTTP 500 over REST, a traceback on the CLI (#44). Retrieval now treats a missing
+  `CALLS` table as "no call edges".
+- **Two `bce index` runs started together on a fresh database no longer die with
+  `DeadlockDetected` or `DuplicateTable`.** Both created the same lazily created edge label
+  tables inside their long transactions. Migration `0014_graph_edge_labels` creates the nine
+  edge labels up front, skipping any the database already has; run `bce migrate` after
+  upgrading.
+
 ## [1.0.2] - 2026-10-09
 
 ### Changed

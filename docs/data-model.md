@@ -102,6 +102,7 @@ Applied in order by `bce migrate`, tracked in `schema_migrations`.
 | `0011_search_text` | `symbol_fts.body` (the symbol's full text) folded into the FTS document, every word of the file *path* at weight C, `embeddings.chunk` and the `(kind, ref_id, chunk)` uniqueness that lets a long symbol be several vectors |
 | `0012_body_trgm` | `pg_trgm` GIN indexes on `symbol_fts.body` and `symbol_fts.file_id`, for the usage and path anchor sources (skipped with a notice where the extension is unavailable) |
 | `0013_fts_is_test` | `symbol_fts.is_test` — whether the symbol is a test (path / name rules), so the lexical and usage searches can exclude tests in the query instead of after the fetch |
+| `0014_graph_edge_labels` | the nine edge labels, created before the first index run instead of by the first edge that uses each |
 
 Note that `0005` **truncates** `embeddings`. Widening a vector column cannot preserve
 existing rows, so upgrading across that migration means re-indexing to repopulate them.
@@ -116,6 +117,16 @@ since. Run `bce index` (or `bce reindex` over the whole history) once after upgr
 `0013` adds `is_test` with a `false` default; rows indexed before it are treated as production
 symbols by the query-level filter, and the callers' Python-side check still removes them from
 the results. Re-index once so the pools fill with production symbols.
+
+AGE creates an edge label's table only when the first edge with that label is written, so a
+database that has not indexed a call yet has no `CALLS` table, and two indexers started
+together on a fresh database race to create the same label tables. `0014` creates all nine
+labels up front in the `code_graph` graph (the vertex labels are created by `0008`); labels a
+database already has are left alone, so running `bce migrate` after upgrading adds just the
+missing ones. Run it while no index job is writing: an indexer that is still creating a label
+lazily makes the migration fail with `DuplicateTable`, and running `bce migrate` again applies
+it. Retrieval also treats a missing `CALLS` table as "no call edges", so an index that has not
+been migrated yet still answers.
 
 ### repos
 
