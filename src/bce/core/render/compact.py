@@ -5,6 +5,7 @@ Layout; a section without content is left out::
     # BCE context · <repo> @ <commit> · confidence <c> [· coverage unknown]
       [· index parses <P> % of the code] · ~<N> tokens
     ## Primary edit targets
+    [Unconfirmed: ... (best p <p>). Confirm the location with a search before you edit.]
     ### <path>:<start>-<end> · <kind> <name> · <edit|dependency> · <state> · <content hash>
     ```<lang>
     <line>→<code>
@@ -13,7 +14,7 @@ Layout; a section without content is left out::
     ## Other symbols in primary files
     - `<path>:<line>` <kind> `<name><signature>` (L<line>-<end>)
     ## Related files
-    - `<path>` — <symbols> (p <relevance>)
+    - `<path>` — <symbol> (L<line>-<end>), ... (p <relevance>)
     ## Related tests
     - `<path>` — `<Class::test>` (L<line>-<end>) · <calls X | test file of P>
     ## Gaps
@@ -29,10 +30,15 @@ the file's own line numbers and indentation in the ``<line>→<text>`` form edit
 print, so an edit can be written from them without re-reading the file.
 
 The token budget applies to this text as a whole (about four characters per token): parts are
-admitted in priority order - header, workflow, gaps, the first span, related files, related tests,
+admitted in priority order - header, workflow, gaps, related files, the first span, related tests,
 further spans, other symbols - and a span that does not fit keeps the lines nearest to its signature
-and to what the task names before it is dropped. ``~N tokens`` in the header is the estimate of
-the final text, which never exceeds ``max_tokens``.
+and to what the task names before it is dropped; a file left without a shown span is then listed
+under related files. ``~N tokens`` in the header is the estimate of the final text, which never
+exceeds ``max_tokens``.
+
+"Related files" lists, with the context selector's verdicts, the files it rates likely to be edited
+(:data:`RELATED_MIN_RELEVANCE`) and the files the task names; the unconfirmed line appears when it
+rates none of the files shown in full as likely (``coverage.target_unconfirmed``).
 
 Pure: the same payload and budget always give the same text.
 """
@@ -54,9 +60,15 @@ CHARS_PER_TOKEN = 4
 VIEWS = ("compact", "locate", "debug")
 DEFAULT_VIEW = "compact"
 _ALIASES = {"evidence": "compact", "markdown": "compact", "md": "compact", "json": "debug"}
-#: Stub files listed under "Related files", and the least selector probability they need.
-RELATED_MAX = 3
-RELATED_MIN_RELEVANCE = 0.25
+#: "Related files" with the selector's verdicts: the files without a shown span that it rates at
+#: least this likely to be edited (and the files the task names), most probable first, at most
+#: :data:`RELATED_MAX`. Below 0.5, 3 of 126 listed files were edited by the change.
+RELATED_MAX = 6
+RELATED_MIN_RELEVANCE = 0.5
+#: Without the selector: the full-detail files, then at most this many reference-level files.
+RELATED_MAX_UNTIERED = 3
+#: Symbols (with their line ranges) named per related file.
+RELATED_SYMBOLS = 4
 OTHER_MAX = 8
 GAPS_MAX = 6
 TESTS_MAX = 2
@@ -335,29 +347,102 @@ def _stub_names(items: list[dict[str, Any]]) -> dict[str, str]:
     return out
 
 
+def _line_range(line: int, end: int) -> str:
+    return f" (L{line}-{end})" if end > line > 0 else (f" (L{line})" if line else "")
+
+
+def _symbol_ranges(items: list[dict[str, Any]], fid: str) -> str:
+    """The first :data:`RELATED_SYMBOLS` full-detail symbols of ``fid`` with their line ranges."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for it in items:
+        name = str(it.get("name") or "")
+        if str(it.get("file_id")) != fid or not name or name in seen:
+            continue
+        if it.get("tier") == "stub" or it.get("detail_level") == "reference":
+            continue
+        seen.add(name)
+        out.append(f"{name}{_line_range(int(it.get('line') or 0), int(it.get('end_line') or 0))}")
+        if len(out) >= RELATED_SYMBOLS:
+            break
+    return ", ".join(out)
+
+
+def _related_line(f: dict[str, Any], symbols: str) -> str:
+    fid = str(f.get("file_id") or "")
+    line = f"- `{f.get('path') or path_of(fid)}`" + (f" — {symbols}" if symbols else "")
+    rel = f.get("relevance")
+    return line + (f" (p {float(rel):.2f})" if rel is not None else "")
+
+
 def _related_lines(
     files: list[dict[str, Any]], primary: list[str], items: list[dict[str, Any]]
 ) -> list[str]:
-    """Full-tier files without a span first (all of them), then the best stubs."""
+    """The answer's files without a span (see :data:`RELATED_MAX` / :data:`RELATED_MAX_UNTIERED`)."""
     names = _stub_names(items)
-    full: list[str] = []
-    stubs: list[str] = []
-    for f in files:
+    pinned = {str(it.get("file_id")) for it in items if it.get("pinned")}
+    tiered = any(f.get("relevance") is not None for f in files)
+    rows: list[tuple[float, int, dict[str, Any]]] = []
+    stubs = 0
+    for pos, f in enumerate(files):
         fid = str(f.get("file_id") or "")
         if not fid or fid in primary:
             continue
         rel = f.get("relevance")
-        stub = f.get("tier") == "stub"
-        if stub and (
-            len(stubs) >= RELATED_MAX or (rel is not None and rel < RELATED_MIN_RELEVANCE)
-        ):
+        if tiered:
+            if fid not in pinned and (rel is None or float(rel) < RELATED_MIN_RELEVANCE):
+                continue
+        elif f.get("tier") == "stub":
+            if stubs >= RELATED_MAX_UNTIERED:
+                continue
+            stubs += 1
+        if tiered:
+            key = -(float(rel) if rel is not None else 1.0)
+        else:
+            key = 1.0 if f.get("tier") == "stub" else 0.0
+        rows.append((key, pos, f))
+    rows.sort(key=lambda r: (r[0], r[1]))
+    out = []
+    for _, _, f in rows[:RELATED_MAX] if tiered else rows:
+        fid = str(f.get("file_id") or "")
+        symbols = (names.get(fid) if f.get("tier") == "stub" else _symbol_ranges(items, fid)) or (
+            ", ".join(str(s) for s in (f.get("symbols") or [])[:RELATED_SYMBOLS])
+        )
+        out.append(_related_line(f, symbols))
+    return out
+
+
+def _overflow_lines(
+    spans: list[dict[str, Any]], shown: set[str], listed: list[str], files: list[dict[str, Any]]
+) -> list[str]:
+    """One related-file line per file whose spans did not fit the budget."""
+    by_id = {str(f.get("file_id") or ""): f for f in files}
+    out: list[str] = []
+    seen = set(shown)
+    for span in spans:
+        fid = str(span.get("file_id") or "")
+        if not fid or fid in seen:
             continue
-        symbols = names.get(fid) or ", ".join(str(s) for s in (f.get("symbols") or [])[:4])
-        line = f"- `{f.get('path') or path_of(fid)}`" + (f" — {symbols}" if symbols else "")
-        if rel is not None:
-            line += f" (p {float(rel):.2f})"
-        (stubs if stub else full).append(line)
-    return full + stubs
+        seen.add(fid)
+        path = span.get("path") or path_of(fid)
+        if any(line.startswith(f"- `{path}`") for line in listed):
+            continue
+        start = int(span.get("start") or 0)
+        rng = _line_range(start, int(span.get("end") or start))
+        out.append(_related_line(by_id.get(fid) or {"file_id": fid, "path": path},
+                                 f"{span.get('name') or ''}{rng}".strip()))  # fmt: skip
+    return out
+
+
+def _unconfirmed_line(coverage: dict[str, Any]) -> str | None:
+    """The warning that no file of the answer is a clear edit target (``coverage``'s verdict)."""
+    if not coverage.get("target_unconfirmed"):
+        return None
+    best = float(coverage.get("target_relevance") or 0.0)
+    return (
+        f"Unconfirmed: the context selector rates no file here as a likely edit target (best "
+        f"p {best:.2f}). Confirm the location with a search before you edit."
+    )
 
 
 def one_line_signature(name: Any, signature: Any, max_chars: int = _SIGNATURE_MAX_CHARS) -> str:
@@ -437,21 +522,43 @@ def render_compact(
     flow = workflow_lines(mode, view=view) if mode else []
     if flow and not budget.take(flow):
         flow = []
-    gaps = _take_section(budget, "gaps", _gap_lines(coverage))
+    unconfirmed = _unconfirmed_line(coverage)
+    gap_lines = _gap_lines(coverage)
+    if unconfirmed and not spans:
+        gap_lines = [f"- {unconfirmed}", *gap_lines][:GAPS_MAX]
+    gaps = _take_section(budget, "gaps", gap_lines)
     blocks: list[str] = []
+    related: list[str] = []
+    rendered: list[dict[str, Any]] = []
     if view == "locate":
         blocks = _take_section(budget, "spans", [_locate_line(s) for s in spans])
-    elif spans and budget.take([_HEADINGS["spans"]]):
-        first = _fit_span(budget, spans[0], required=True)
-        blocks = [_HEADINGS["spans"], *first] if first else []
-        if not first:
-            budget.left += len(_HEADINGS["spans"]) + 1
-    related = _take_section(budget, "related", _related_lines(files, primary, items))
+        rendered = spans if blocks else []
+        related = _take_section(budget, "related", _related_lines(files, primary, items))
+    else:
+        # The file list goes before the code: it is a line per file, and the code of a long
+        # first span would otherwise crowd out the other files the change touches.
+        related = _take_section(budget, "related", _related_lines(files, primary, items))
+        head = [_HEADINGS["spans"], *([unconfirmed] if unconfirmed else [])]
+        if spans and budget.take(head):
+            first = _fit_span(budget, spans[0], required=True)
+            if first:
+                blocks, rendered = [*head, *first], [spans[0]]
+            else:
+                budget.left += sum(len(line) + 1 for line in head)
     tests = _take_section(budget, "tests", _test_lines(list(payload.get("tests") or [])))
     if blocks and view != "locate":
         for span in spans[1:]:
-            blocks += _fit_span(budget, span)
-    other = _take_section(budget, "other", _other_lines(items, primary, spans))
+            lines = _fit_span(budget, span)
+            if lines:
+                blocks += lines
+                rendered.append(span)
+    shown = [str(s.get("file_id")) for s in rendered]
+    overflow = _overflow_lines(spans, set(shown), related, files)
+    if overflow and not related:
+        related = _take_section(budget, "related", overflow)
+    else:
+        related += [line for line in overflow if budget.take([line])]
+    other = _take_section(budget, "other", _other_lines(items, shown, rendered))
 
     body = "\n".join([*blocks, *other, *related, *tests, *gaps, *flow])
     count = 0

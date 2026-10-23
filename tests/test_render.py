@@ -372,7 +372,7 @@ def _assembled():
             "line": 5,
             "detail_level": "reference",
             "tier": "stub",
-            "file_relevance": 0.4,
+            "file_relevance": 0.6,
             "content": "app/http.py - 2 candidate symbol(s): send, retry",
         }
     )
@@ -409,8 +409,15 @@ def _payload(**coverage):
                 "path": "app/http.py",
                 "file_id": "demo:app/http.py",
                 "tier": "stub",
-                "relevance": 0.4,
+                "relevance": 0.6,
                 "symbols": ["send"],
+            },
+            {
+                "path": "app/maybe.py",
+                "file_id": "demo:app/maybe.py",
+                "tier": "stub",
+                "relevance": 0.4,
+                "symbols": ["maybe"],
             },
             {
                 "path": "app/noise.py",
@@ -484,9 +491,9 @@ def test_compact_layout():
     assert "### app/auth.py:30-61 · class Session · dependency · skeleton · " in text
     assert "39→    def size(self):  [L39-40]" in lines
     assert "### app/auth.py:60-72 · function refresh · dependency · snippet" in text
-    # the stub with a plausible probability is listed, the improbable one is not
-    assert "- `app/http.py` — send, retry (p 0.40)" in lines
-    assert "noise.py" not in text
+    # the file the selector rates likely is listed, the less likely ones are not
+    assert "- `app/http.py` — send, retry (p 0.60)" in lines
+    assert "maybe.py" not in text and "noise.py" not in text
     gaps = lines[lines.index("## Gaps") + 1 :]
     assert gaps[0] == "- `TokenStore` is not covered here; defined in `app/store.py`"
     assert gaps[1] == ""  # likely_incomplete stays in the JSON view; no guidance binds to it
@@ -541,6 +548,94 @@ def test_compact_lists_related_tests_and_the_gap_signals():
     ]
     missing = render_compact({**payload, "coverage": {"gaps": {"missing_tests": True}}})
     assert "- No existing test of the primary edit targets was found in the index." in missing
+
+
+def _file(path: str, tier: str, rel: float | None) -> dict:
+    return {"path": path, "file_id": f"demo:{path}", "tier": tier, "relevance": rel, "symbols": []}
+
+
+def test_related_files_list_the_likely_files_most_probable_first():
+    payload = _payload()
+    items = payload["context"]["items"]
+    items += [
+        {"symbol_id": "m1", "repo_id": "demo", "file_id": "demo:app/models.py", "name": "User",
+         "kind": "class", "line": 3, "end_line": 40, "detail_level": "full", "tier": "full",
+         "file_relevance": 0.9},
+        {"symbol_id": "m2", "repo_id": "demo", "file_id": "demo:app/models.py", "name": "save",
+         "kind": "function", "line": 44, "end_line": 50, "detail_level": "full", "tier": "full",
+         "file_relevance": 0.9},
+        {"symbol_id": "p1", "repo_id": "demo", "file_id": "demo:app/named.py", "name": "named",
+         "kind": "function", "line": 1, "detail_level": "reference", "tier": "stub",
+         "file_relevance": 0.3, "pinned": True,
+         "content": "app/named.py - 1 candidate symbol(s): named"},
+    ]  # fmt: skip
+    payload["files"] = [
+        payload["files"][0],
+        _file("app/http.py", "stub", 0.6),
+        _file("app/named.py", "stub", 0.3),
+        _file("app/models.py", "full", 0.9),
+        _file("app/maybe.py", "stub", 0.45),
+    ]
+    lines = render_compact(payload).split("\n")
+    i = lines.index("## Related files")
+    assert lines[i + 1 : i + 4] == [
+        "- `app/models.py` — User (L3-40), save (L44-50) (p 0.90)",
+        "- `app/http.py` — send, retry (p 0.60)",
+        "- `app/named.py` — named (p 0.30)",  # the task names it: listed whatever its p
+    ]
+    assert "maybe.py" not in "\n".join(lines)
+
+
+def test_without_selector_verdicts_the_related_files_keep_the_untiered_listing():
+    payload = _payload()
+    payload["files"] = [
+        {**payload["files"][0], "relevance": None},
+        *(_file(f"app/s{i}.py", "stub", None) for i in range(5)),
+        _file("app/full.py", "full", None),
+    ]
+    text = render_compact(payload)
+    related = text.split("## Related files\n")[1].split("\n## ")[0].splitlines()
+    assert related == ["- `app/full.py`", "- `app/s0.py`", "- `app/s1.py`", "- `app/s2.py`"]
+
+
+def test_a_file_whose_spans_do_not_fit_is_listed_with_their_range():
+    items = _assembled()
+    other = {**_ranked()[0], "symbol_id": "py::db::query#9", "file_id": "demo:app/db.py",
+             "name": "query", "line": 5, "end_line": 84, "symbol_relevance": 2.0}  # fmt: skip
+    items.insert(1, {**other, "detail_level": "full", "content": "..."})
+    ranked = [*_ranked(), other]
+    # every line names the task's header, so no shorter variant of the span exists
+    query = "\n".join(f"    h{i} = request.headers.get('X-Auth-Token')" for i in range(80))
+
+    def bodies(ids):
+        return {"py::auth::check_token#1": AUTH_TEXT, "py::db::query#9": query}
+
+    payload = {
+        **_payload(),
+        "evidence": build_evidence(items, ranked, task_text=TASK, bodies=bodies),
+    }
+    payload["files"].insert(1, _file("app/db.py", "full", 0.8))
+    assert {s["path"] for s in payload["evidence"]} == {"app/auth.py", "app/db.py"}
+    text = render_compact(payload, max_tokens=600)
+    assert "### app/auth.py:10-14" in text and "### app/db.py" not in text
+    assert "- `app/db.py` — query (L5-84) (p 0.80)" in text.split("\n")
+    assert estimate_tokens(text) <= 600
+
+
+def test_an_unconfirmed_target_is_flagged_where_the_code_starts():
+    text = render_compact(_payload(target_unconfirmed=True, target_relevance=0.48))
+    lines = text.split("\n")
+    i = lines.index("## Primary edit targets")
+    assert lines[i + 1] == (
+        "Unconfirmed: the context selector rates no file here as a likely edit target (best "
+        "p 0.48). Confirm the location with a search before you edit."
+    )
+    assert lines[i + 2].startswith("### app/auth.py:10-14")
+    # without code to flag it goes to the gaps
+    payload = {**_payload(target_unconfirmed=True, target_relevance=0.0), "evidence": []}
+    gaps = render_compact(payload).split("## Gaps\n")[1].splitlines()
+    assert gaps[0].startswith("- Unconfirmed: the context selector rates no file here")
+    assert "Unconfirmed" not in render_compact(_payload(target_unconfirmed=False))
 
 
 def test_compact_header_counts_the_final_text():
