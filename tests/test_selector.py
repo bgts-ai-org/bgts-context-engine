@@ -99,30 +99,46 @@ def test_policy_tiers_full_stub_dropped_and_prunes_symbols():
     sym = {"a1": 3.0, "a2": 0.0, "b1": 2.0, "c1": 1.0, "d1": 0.0}
     out, stats = apply_policy(ITEMS, groups, file_p, sym, WIDE)
     tiers = [(it["file_id"], it["tier"]) for it in out]
-    # b.py (p=.9) full and first; a.py always full as the engine's first file; c.py stub; d dropped
-    assert tiers == [("r:b.py", "full"), ("r:a.py", "full"), ("r:c.py", "stub")]
-    assert [it["symbol_id"] for it in out] == ["b1", "a1", "c1"]  # a2 pruned (score 0 < 1)
+    # b.py (p=.9) full; a.py, the engine's first file, is only listed (the model puts it at .2);
+    # c.py stub; d dropped
+    assert tiers == [("r:b.py", "full"), ("r:a.py", "stub"), ("r:c.py", "stub")]
+    assert [it["symbol_id"] for it in out] == ["b1", "a1", "c1"]
     assert out[2]["detail_level"] == "reference" and out[2]["summary"].startswith(
         "c.py - 1 candidate"
     )
+    assert out[1]["summary"].startswith("a.py - 2 candidate")
     assert out[0]["file_relevance"] == 0.9 and out[0]["symbol_relevance"] == 2.0
     assert stats == {
         "files_in": 4,
-        "files_full": 2,
-        "files_stub": 1,
+        "files_full": 1,
+        "files_stub": 2,
         "files_dropped": 1,
         # dropped files stay nameable: the engine ranked them, only the model voted them down
         "dropped_files": [{"file_id": "r:d.py", "path": "d.py", "file_relevance": 0.01}],
         "symbols_in": 5,
         "symbols_out": 3,
-        "symbols_dropped_in_full_files": 1,
+        "symbols_dropped_in_full_files": 0,
         "symbol_pruning": True,
         "files_pinned": 0,
         "files_pinned_to_full": 0,
         "files_demoted_by_budget": 0,
-        "full_bytes": 324,
+        "full_bytes": 14,
         "listing_capped": False,
     }
+
+
+def test_policy_lists_the_engines_first_file_whatever_the_model_says():
+    groups = group_files(ITEMS)
+    sym = {"a1": 3.0, "a2": 0.0, "b1": 2.0, "c1": 1.0, "d1": 0.0}
+    # a.py at p 0.01: under the stub threshold and past the listing cap, still listed
+    file_p = {"r:a.py": 0.01, "r:b.py": 0.9, "r:c.py": 0.8, "r:d.py": 0.6}
+    out, stats = apply_policy(ITEMS, groups, file_p, sym, SelectorConfig(max_files=2))
+    tiers = [(it["file_id"], it["tier"]) for it in out]
+    assert tiers == [("r:b.py", "full"), ("r:c.py", "full"), ("r:d.py", "full"), ("r:a.py", "stub")]
+    # the model agrees: the first file is full, and exempt from the byte budget
+    file_p = {"r:a.py": 0.55, "r:b.py": 0.9, "r:c.py": 0.0, "r:d.py": 0.0}
+    out, _ = apply_policy(ITEMS, groups, file_p, sym, SelectorConfig(full_content_bytes=1))
+    assert [(it["file_id"], it["tier"]) for it in out] == [("r:a.py", "full"), ("r:b.py", "stub")]
 
 
 def test_policy_never_empties_a_full_file_and_caps_only_the_stub_listing():
@@ -237,7 +253,7 @@ def test_selector_end_to_end_with_fake_model():
     )
     assert [(it["file_id"], it["tier"]) for it in out] == [
         ("r:b.py", "full"),
-        ("r:a.py", "full"),
+        ("r:a.py", "stub"),
         ("r:c.py", "stub"),
     ]
     assert info["files_dropped"] == 1 and info["policy"]["full_threshold"] == 0.5
