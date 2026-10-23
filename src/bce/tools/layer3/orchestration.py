@@ -26,7 +26,7 @@ from bce.config import get_settings
 from bce.core.assembler import assemble
 from bce.core.assembler.files_summary import files_summary
 from bce.core.auth.scope import ScopeFilter
-from bce.core.coverage import compute_coverage, coverage_message
+from bce.core.coverage import apply_target_confidence, compute_coverage, coverage_message
 from bce.core.defaults import DEFAULT_MAX_CANDIDATES, DEFAULT_MAX_TOKENS, SELECTED_MAX_CANDIDATES
 from bce.core.i18n import get_translator
 from bce.core.orchestrator import RetrievalOrchestrator, bulk
@@ -486,6 +486,7 @@ def get_context_for_task(
     )
     stage = time.perf_counter()
     files = files_summary(package.get("items") or [], ranked=items, pins=pins)
+    apply_target_confidence(coverage, files, selection)
     # The code the agent-facing view shows verbatim: whole declarations with their file range,
     # windowed around what the task names when long, classes as skeletons.
     evidence = build_evidence(

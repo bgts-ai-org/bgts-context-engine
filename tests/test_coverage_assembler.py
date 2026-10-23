@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import pytest
+
 from bce.core.assembler import DetailLevel, assemble
-from bce.core.coverage import compute_coverage
+from bce.core.coverage import apply_target_confidence, compute_coverage
 from bce.core.coverage.confidence import GOD_NODE_DEGREE
 from bce.core.orchestrator.anchors import AnchorResult
 from bce.core.orchestrator.orchestrator import RetrievalResult
@@ -38,6 +40,41 @@ def test_low_confidence_single_source_small_margin():
     ]
     cov = compute_coverage(_result(cands, anchors))
     assert cov["confidence"] == "low"
+
+
+FILES = [
+    {"file_id": "r:a.py", "tier": "full", "relevance": 0.65},
+    {"file_id": "r:b.py", "tier": "stub", "relevance": 0.95},
+]
+
+
+@pytest.mark.parametrize(
+    ("files", "level", "best", "unconfirmed", "after"),
+    [
+        # the best full file (a stub does not count) is under the bar: capped at low
+        (FILES, "high", 0.65, True, "low"),
+        ([{**FILES[0], "relevance": 0.9}, FILES[1]], "medium", 0.9, False, "medium"),
+        ([FILES[1]], "medium", 0.0, True, "low"),  # no full file at all
+        (FILES, "unsupported", 0.65, True, "unsupported"),  # the index verdict stands
+    ],
+)
+def test_the_selector_caps_confidence_when_no_full_file_is_a_likely_edit_target(
+    files, level, best, unconfirmed, after
+):
+    cov = {"confidence": level}
+    apply_target_confidence(cov, files, {"status": "ok"})
+    assert cov == {
+        "confidence": after,
+        "target_relevance": best,
+        "target_unconfirmed": unconfirmed,
+    }
+
+
+@pytest.mark.parametrize("selection", [None, {"status": "error"}, {"status": "timeout"}])
+def test_without_a_selector_verdict_confidence_is_left_alone(selection):
+    cov = {"confidence": "high"}
+    apply_target_confidence(cov, FILES, selection)
+    assert cov == {"confidence": "high"}
 
 
 def test_god_node_flagged():
