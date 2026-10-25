@@ -95,6 +95,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   scan stops once it is generic. On a 60k-symbol repository the anchors took 9.3 s before and
   about 8 s after; on the 14 development tasks the median call fell by about a sixth.
 
+### Fixed
+
+- Database connection URIs now escape usernames, passwords and database names, so
+  reserved characters such as `@`, `/` and `%` retain their literal values.
+  If you previously percent-encoded these settings as a workaround, replace them
+  with the original values when you upgrade, wherever you configure `BCE_DB_*`.
+
 ## [1.0.2] - 2026-10-09
 
 ### Changed
