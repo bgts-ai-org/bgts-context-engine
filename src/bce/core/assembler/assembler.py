@@ -164,6 +164,8 @@ def assemble(
             "kind",
             "file_id",
             "line",
+            "end_line",
+            "signature",
             "tier",
             "file_relevance",
             "symbol_relevance",

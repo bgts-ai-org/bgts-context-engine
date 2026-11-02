@@ -14,12 +14,15 @@ Commands:
 - ``cursor-init``      write .cursor/mcp.json + the agent rule into a project
 - ``claude-init``      write .mcp.json, a CLAUDE.md section and the pre-context hook into a project
 - ``opencode-init``    write opencode.json (mcp) + an AGENTS.md section into a project
+- ``codex-init``       write .codex/config.toml (mcp_servers) + an AGENTS.md section into a project
+- ``copilot-init``     write .mcp.json + a .github/copilot-instructions.md section into a project
 - ``languages``        list supported languages/extensions (no database needed)
+- ``doctor``           installation checks + each repository's index quality report
 - ``serve``            run the REST API (FastAPI/uvicorn)
-- ``serve-mcp``        run the MCP server over stdio
+- ``serve-mcp``        run the MCP server over stdio or streamable HTTP
 
-Read/write commands need a running PostgreSQL (Apache AGE + pgvector); ``languages``,
-``cursor-init``, ``claude-init`` and ``opencode-init`` do not.
+Read/write commands need a running PostgreSQL (Apache AGE + pgvector); ``languages`` and the
+``*-init`` commands do not.
 """
 
 from __future__ import annotations
@@ -119,6 +122,9 @@ def index(
     name: str = typer.Option(..., "--name", help="Logical repository name"),
     commit: str | None = typer.Option(None, "--commit", help="Override commit sha"),
     locale: str | None = typer.Option(None, "--locale", help="Message locale (en/tr)"),
+    report: bool = typer.Option(
+        False, "--report", help="Print the index quality report (as `bce doctor` shows it)"
+    ),
 ) -> None:
     """Full-index a local repository into the code graph."""
     from bce.core.i18n import get_translator
@@ -131,6 +137,8 @@ def index(
         repository = GraphRepository(GraphClient(conn))
         summary = Indexer(repository).index_local_repo(path=repo, name=name, commit=commit)
         conn.commit()
+    if report:
+        _echo_index_report(name, summary.commit, summary.stats)
 
     tr = get_translator()
     loc = tr.resolve(locale)
@@ -153,6 +161,7 @@ def index(
             "nodes_added": summary.nodes_added,
             "edges_added": summary.edges_added,
             "commit": summary.commit,
+            "stats": summary.stats,
         }
     )
 
@@ -408,14 +417,26 @@ def context(
         help="Run the configured context selector (BCE_SELECTOR: jev, decider-2b, decider-4b; "
         "off by default) on the ranked candidates; --no-select returns the raw ranking",
     ),
+    view: str = typer.Option(
+        "debug",
+        "--view",
+        help="debug: the message and the JSON payload (stage timings on stderr); compact: the "
+        "Markdown answer an MCP agent receives (max-tokens applied to the whole text); locate: "
+        "the same without code",
+    ),
 ) -> None:
     """Layer 3: assemble a context package + coverage for a task (ranked, then tiered by the selector)."""
+    from bce.core.render import normalize_view, render_compact
     from bce.storage.graph.client import GraphClient
     from bce.storage.graph.repository import GraphRepository
     from bce.storage.relational.db import connection
     from bce.storage.vector.store import VectorStore
     from bce.tools.layer3 import get_context_for_task
 
+    try:
+        view = normalize_view(view)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_hint="--view") from None
     with connection() as conn:
         repository = GraphRepository(GraphClient(conn))
         result = get_context_for_task(
@@ -428,9 +449,67 @@ def context(
             locale=locale,
             select=select,
         )
+    if view != "debug":
+        typer.echo(render_compact(result["payload"], max_tokens=max_tokens, view=view), nl=False)
+        return
     if result["message"]:
         typer.echo(result["message"])
     _echo_json(result["payload"])
+    _echo_timings(result.get("timings"))
+
+
+def _echo_timings(timings: dict[str, float] | None) -> None:
+    """The pipeline's stage times on stderr, in pipeline order (``retrieve`` spans expand to
+    narrow)."""
+    if not timings:
+        return
+    parts = [f"{key.removesuffix('_ms')} {value:.0f}" for key, value in timings.items()]
+    typer.echo("timings (ms): " + " · ".join(parts), err=True)
+
+
+@app.command()
+def inspect(
+    query: str = typer.Argument(
+        ...,
+        help="A symbol name, Type.member, path:line, or for --mode impact a unified diff "
+        "('-' reads it from stdin) or path:L1-L2 ranges",
+    ),
+    mode: str = typer.Option(
+        "definition", "--mode", help="definition, callers, callees, references or impact"
+    ),
+    repo: list[str] = typer.Option(None, "--repo", help="Limit to these repository ids or names"),
+    max_tokens: int | None = typer.Option(None, "--max-tokens", help="Token budget of the text"),
+    view: str = typer.Option(
+        "compact", "--view", help="compact: the Markdown an MCP agent receives; debug: JSON"
+    ),
+) -> None:
+    """One graph question about one symbol (the MCP inspect_symbol_graph tool)."""
+    from bce.core.render import normalize_view
+    from bce.core.render.graph import render_inspect
+    from bce.storage.graph.client import GraphClient
+    from bce.storage.graph.repository import GraphRepository
+    from bce.storage.relational.db import connection
+    from bce.storage.relational.queries import resolve_repo_ids
+    from bce.tools.layer3.inspect import inspect_symbol_graph
+
+    try:
+        view = normalize_view(view)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_hint="--view") from None
+    if query == "-":
+        query = sys.stdin.read()
+    with connection() as conn:
+        repo_ids = resolve_repo_ids(conn, list(repo)) if repo else None
+        try:
+            result = inspect_symbol_graph(
+                GraphRepository(GraphClient(conn)), query=query, mode=mode, repo_ids=repo_ids
+            )
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from None
+    if view == "debug":
+        _echo_json(result["payload"])
+        return
+    typer.echo(render_inspect(result["payload"], max_tokens=max_tokens), nl=False)
 
 
 _MODE_HELP = (
@@ -456,6 +535,15 @@ def precontext(
     ),
     max_tokens: int = typer.Option(DEFAULT_MAX_TOKENS, "--max-tokens", help="Token budget"),
     mode: str | None = typer.Option(None, "--mode", help=_MODE_HELP),
+    server: str | None = typer.Option(
+        None,
+        "--server",
+        help="Ask this BCE server (bce serve, or bce serve-mcp --transport http) for the hook "
+        "response instead of the database; its BCE_AGENT_MODE applies unless --mode is given",
+    ),
+    token: str | None = typer.Option(
+        None, "--token", envvar="BCE_HOOK_TOKEN", help="Bearer token for --server"
+    ),
 ) -> None:
     """The compact "Code context for this task" block an agent starts with (markdown).
 
@@ -468,9 +556,14 @@ def precontext(
     from bce.integrations.precontext import (
         claude_hook_response,
         precontext_for_task,
+        remote_hook_response,
         resolve_agent_mode,
     )
 
+    if task is not None and server is not None:
+        raise typer.BadParameter(
+            "--server answers hook payloads only; omit --task", param_hint="--server"
+        )
     if task is not None:
         try:
             resolved = resolve_agent_mode(mode, Path.cwd())
@@ -490,9 +583,23 @@ def precontext(
     except json.JSONDecodeError as exc:
         typer.echo(f"bce precontext: stdin is not JSON ({exc})", err=True)
         return
-    response = claude_hook_response(payload, repo_ids=repo_id or None, mode=mode)
+    if server is not None:
+        response = remote_hook_response(
+            payload, server=server, token=token, repo_ids=repo_id or None, mode=mode
+        )
+    else:
+        response = claude_hook_response(payload, repo_ids=repo_id or None, mode=mode)
     if response is not None:
         typer.echo(json.dumps(response, ensure_ascii=False))
+
+
+@app.command(name="edit-hook")
+def edit_hook() -> None:
+    """Claude Code PostToolUse hook: after the first edit of each file in a session, note that
+    BCE's line numbers for it predate the edit (reads the hook JSON on stdin; no database)."""
+    from bce.integrations.edit_hook import main
+
+    main()
 
 
 def _agent_init_common(
@@ -563,7 +670,7 @@ _INIT_ENV_HELP = (
 _INIT_CMD_HELP = "Executable the editor spawns (default: this bce)"
 _INIT_MODE_HELP = (
     "Agent mode written as BCE_AGENT_MODE into the MCP server entry: hint (starting point) or "
-    "trust (accept as correct). Default: the mode already configured there, else hint"
+    "trust (localize-only, for benchmarks). Default: the mode already configured there, else hint"
 )
 
 
@@ -602,9 +709,25 @@ def claude_init(
         help="Install the UserPromptSubmit hook that adds the graph's answer to every prompt",
     ),
     mode: str | None = typer.Option(None, "--mode", help=_INIT_MODE_HELP),
+    hook_server: str | None = typer.Option(
+        None,
+        "--hook-server",
+        help="Let the hook ask this BCE server (POST /v1/precontext, with curl) instead of "
+        "running bce precontext against the database",
+    ),
+    hook_token_env: str | None = typer.Option(
+        None,
+        "--hook-token-env",
+        help="Environment variable holding the --hook-server bearer token (read when the hook runs)",
+    ),
+    edit_hook: bool = typer.Option(
+        True,
+        "--edit-hook/--no-edit-hook",
+        help="Install the PostToolUse hook that flags edited files as newer than the index",
+    ),
 ) -> None:
     """Connect a project to the engine for Claude Code: .mcp.json, a CLAUDE.md section and, by
-    default, the pre-computed context hook in .claude/settings.json.
+    default, the pre-computed context hook and the edited-file hook in .claude/settings.json.
 
     Merges into existing files (other servers, hooks and CLAUDE.md content are kept) and is safe
     to rerun.
@@ -616,7 +739,17 @@ def claude_init(
         project, repo_id, env_file, bce_command, ".claude"
     )
     _report_setup(
-        setup_claude(project, repo_ids=repo_ids, bce_cmd=cmd, env_file=env, hook=hook, mode=mode),
+        setup_claude(
+            project,
+            repo_ids=repo_ids,
+            bce_cmd=cmd,
+            env_file=env,
+            hook=hook,
+            mode=mode,
+            hook_server=hook_server,
+            hook_token_env=hook_token_env,
+            edit_hook=edit_hook,
+        ),
         env,
         new,
     )
@@ -643,6 +776,55 @@ def opencode_init(
     )
     _report_setup(
         setup_opencode(project, repo_ids=repo_ids, bce_cmd=cmd, env_file=env, mode=mode), env, new
+    )
+
+
+@app.command(name="codex-init")
+def codex_init(
+    project: Path = typer.Option(Path("."), "--project", help=_INIT_PROJECT_HELP),
+    repo_id: list[str] = typer.Option([], "--repo-id", help=_INIT_REPO_HELP),
+    env_file: Path | None = typer.Option(None, "--env-file", help=_INIT_ENV_HELP),
+    bce_command: str | None = typer.Option(None, "--bce-command", help=_INIT_CMD_HELP),
+    mode: str | None = typer.Option(None, "--mode", help=_INIT_MODE_HELP),
+) -> None:
+    """Connect a project to the engine for Codex: .codex/config.toml (mcp_servers) + an AGENTS.md
+    section.
+
+    Merges into existing files (other tables, comments and AGENTS.md content are kept) and is
+    safe to rerun.
+    """
+    from bce.integrations.agents import setup_codex
+
+    mode = _check_mode(mode)
+    project, repo_ids, cmd, env, new = _agent_init_common(
+        project, repo_id, env_file, bce_command, ".codex"
+    )
+    _report_setup(
+        setup_codex(project, repo_ids=repo_ids, bce_cmd=cmd, env_file=env, mode=mode), env, new
+    )
+
+
+@app.command(name="copilot-init")
+def copilot_init(
+    project: Path = typer.Option(Path("."), "--project", help=_INIT_PROJECT_HELP),
+    repo_id: list[str] = typer.Option([], "--repo-id", help=_INIT_REPO_HELP),
+    env_file: Path | None = typer.Option(None, "--env-file", help=_INIT_ENV_HELP),
+    bce_command: str | None = typer.Option(None, "--bce-command", help=_INIT_CMD_HELP),
+    mode: str | None = typer.Option(None, "--mode", help=_INIT_MODE_HELP),
+) -> None:
+    """Connect a project to the engine for GitHub Copilot (CLI and VS Code): .mcp.json + a
+    .github/copilot-instructions.md section.
+
+    Merges into existing files (other servers and instructions are kept) and is safe to rerun.
+    """
+    from bce.integrations.agents import setup_copilot
+
+    mode = _check_mode(mode)
+    project, repo_ids, cmd, env, new = _agent_init_common(
+        project, repo_id, env_file, bce_command, ".github"
+    )
+    _report_setup(
+        setup_copilot(project, repo_ids=repo_ids, bce_cmd=cmd, env_file=env, mode=mode), env, new
     )
 
 
@@ -854,6 +1036,44 @@ def bench_prs_run(
             )
 
 
+def _echo_index_report(name: str, commit: str, stats: dict | None) -> None:
+    from bce.doctor import _repo_lines
+
+    typer.echo("\n".join(_repo_lines({"name": name, "commit": commit, "stats": stats})), err=True)
+
+
+@app.command()
+def doctor(
+    repo: list[str] = typer.Option(
+        None, "--repo", help="Logical repository name to report on (repeatable; default: all)"
+    ),
+    as_json: bool = typer.Option(False, "--json", help="Print the report as JSON"),
+) -> None:
+    """Check the installation and print each indexed repository's index quality report.
+
+    Database reachability, pending migrations, installed parsers, embedding and retrieval
+    settings; then per repository: code files per language and how many were parsed, parse
+    errors, symbols, resolved cross-file references, SCIP, embeddings, and a verdict. Exits 1 when
+    the database is unreachable or migrations are pending.
+    """
+    from bce.doctor import collect, render
+    from bce.indexing.parser.symbol_id import make_repo_id
+    from bce.storage.relational.db import connection
+
+    repo_ids = [make_repo_id(r) for r in repo] if repo else None
+    try:
+        with connection() as conn:
+            report = collect(conn, repo_ids=repo_ids)
+    except Exception as exc:  # noqa: BLE001 - an unreachable database is a finding, not a crash
+        report = collect(None, repo_ids=repo_ids, error=str(exc).splitlines()[0])
+    if as_json:
+        _echo_json(report)
+    else:
+        typer.echo("\n".join(render(report)))
+    if not report["database"]["ok"] or (report.get("migrations") or {}).get("pending"):
+        raise typer.Exit(code=1)
+
+
 @app.command()
 def languages() -> None:
     """List supported languages and file extensions (no database needed)."""
@@ -906,19 +1126,42 @@ def serve(
 @app.command(name="serve-mcp")
 def serve_mcp(
     env_file: Path | None = typer.Option(None, "--env-file", help=_ENV_FILE_HELP),
+    transport: str = typer.Option(
+        "stdio", "--transport", help="stdio (the agent spawns the server) or http"
+    ),
+    host: str = typer.Option(
+        "127.0.0.1", "--host", help="HTTP bind host; off loopback needs BCE_MCP_HTTP_TOKEN"
+    ),
+    port: int = typer.Option(8765, "--port", help="HTTP bind port"),
+    path: str = typer.Option("/mcp", "--path", help="HTTP endpoint path"),
 ) -> None:
-    """Run the MCP server over stdio (agent-native surface). Requires the 'mcp' package.
+    """Run the MCP server (agent-native surface) over stdio or HTTP. Requires the 'mcp' package.
 
     ``--env-file`` is accepted here as well as before the command name, because an editor's MCP
     config spawns this command directly and reads more naturally with the option after it.
     """
     import asyncio
 
+    if transport not in ("stdio", "http"):
+        raise typer.BadParameter("must be 'stdio' or 'http'", param_hint="--transport")
+    if not path.startswith("/"):
+        raise typer.BadParameter("must start with '/'", param_hint="--path")
     _load_env_file(env_file)
 
-    from bce.api.mcp.server import run_stdio
+    if transport == "stdio":
+        from bce.api.mcp.server import run_stdio
 
-    asyncio.run(run_stdio())
+        asyncio.run(run_stdio())
+        return
+
+    from bce.api.mcp.http import HttpSecurityError
+    from bce.api.mcp.server import run_http
+
+    try:
+        asyncio.run(run_http(host=host, port=port, path=path))
+    except HttpSecurityError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=2) from exc
 
 
 def main() -> None:

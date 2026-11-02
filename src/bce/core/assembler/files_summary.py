@@ -19,9 +19,12 @@ from typing import Any
 WHY_LIMIT = 3
 
 #: Anchor sources in the order they are worth mentioning (strongest evidence first).
-_SOURCE_ORDER = ("explicit", "path", "jira", "history", "semantic", "lexical", "usage", "impact")
+_SOURCE_ORDER = (
+    "explicit", "path", "jira", "history", "semantic", "lexical", "usage", "impact", "name",
+)  # fmt: skip
 _SOURCE_LABEL = {
     "explicit": "task names a symbol here",
+    "name": "task uses this (common) name",
     "path": "task names this path",
     "jira": "linked in the issue",
     "history": "edited with the task's files before",

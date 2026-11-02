@@ -250,6 +250,7 @@ the model's ranks, and a guard on its top ranks in narrowing. They are grouped i
 | `BCE_RETRIEVAL_SEMANTIC_GUARD_RANKS` | unset | override: model's first *n* ranks fill slots 1..*n* |
 | `BCE_RETRIEVAL_SEMANTIC_RESERVE_SHARE` | unset | override: floor on the model's share of the list |
 | `BCE_RETRIEVAL_SEMANTIC_RANK_SCALE` | unset | override: rank at which semantic anchor strength halves |
+| `BCE_RETRIEVAL_EXPANSION` | unset (`hops`) | `ppr`: re-weight expansion evidence with a personalized PageRank from the anchors (bridges between anchors gain, a hub's fan-out loses); experimental |
 
 `voyage` is the historical set every constant was fitted with (no guard, share 0.5, scale
 30) and is also what an unknown model or the `hashing` fallback gets. `jina` differs in one

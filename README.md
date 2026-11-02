@@ -152,10 +152,16 @@ indexed), pointing at the engine's `.env`:
 bce --env-file /path/to/engine/.env cursor-init --repo-id my-service   # Cursor
 bce --env-file /path/to/engine/.env claude-init --repo-id my-service   # Claude Code
 bce --env-file /path/to/engine/.env opencode-init --repo-id my-service # OpenCode
+bce --env-file /path/to/engine/.env codex-init --repo-id my-service    # Codex
+bce --env-file /path/to/engine/.env copilot-init --repo-id my-service  # GitHub Copilot
 ```
 
 `opencode-init` merges the server into `opencode.json` (OpenCode's `mcp` format) and writes
-the same agent guidance as a marked section of `AGENTS.md`.
+the same agent guidance as a marked section of `AGENTS.md`. `codex-init` adds the server
+table to `.codex/config.toml` (other tables and comments are kept) and writes the same
+`AGENTS.md` section; Codex loads it once you trust the project. `copilot-init` writes the
+portable `.mcp.json` that Copilot CLI and VS Code both read (the same entry Claude Code
+uses) and the guidance as a marked section of `.github/copilot-instructions.md`.
 
 `cursor-init` writes `.cursor/mcp.json` (merged into an existing one) and the rule
 `.cursor/rules/bgts-context-engine.mdc`, which tells the agent to call
@@ -167,17 +173,19 @@ before its first turn. An earlier 14-task benchmark on a React/TypeScript codeba
 this hook at −20 % tokens and half the search output with the same or better checks; the
 600-task numbers in [Results](#results) measure the MCP flow on Cursor CLI and OpenCode.
 Cursor's prompt hook cannot add context, so there the rule does that job. `--no-hook`,
-`--repo-id` (repeatable) and `--bce-command` adjust the files; both commands are safe to rerun.
+`--repo-id` (repeatable) and `--bce-command` adjust the files; every init command is safe to
+rerun.
 
-**Two agent modes.** `BCE_AGENT_MODE` sets how far the agent relies on the answer. All three
-init commands write it into the server entry's `env` block (`environment` in
-`opencode.json`); change it there and reload the MCP server to switch:
+**Two agent modes.** `BCE_AGENT_MODE` sets how far the agent relies on the answer. Every init
+command writes it into the server entry's `env` block (`environment` in `opencode.json`);
+change it there and reload the MCP server to switch:
 
-- `hint` (**starting point**, the default): the agent starts from `payload.files`, adds the
-  files of identifiers the answer does not cover (`coverage.unresolved_identifiers`), and
-  searches only when the engine says the answer is likely incomplete.
-- `trust` (**accept as correct**): `payload.files` is the answer; the agent opens those files
-  and does not search the tree.
+- `hint` (**starting point**, the default): the agent designs the change from the code the
+  answer shows, reads only the ranges it leaves out, opens the files of identifiers the answer
+  does not cover, and searches as usual for anything else; the answer's "Gaps" section lists
+  what the engine knows it lacks.
+- `trust` (**localize-only, for benchmarks**): the answer's files are the set of locations; the
+  agent opens those files and does not search the tree. It measures the engine alone.
 
 On the 600 tasks with Cursor CLI, `hint` reached 92.9 % file recall at 59k tokens per task and
 `trust` 92.3 % at 45k, against 95.6 % and 264k for the CLI alone.
@@ -352,8 +360,10 @@ UI walkthrough of the BGTS Context Engine web interface.
 - **Under a seventh of the tokens, optionally.** The context selector keeps the files a task
   edits and lists the rest in one line each: 8 310 → 1 121 tokens per answer on 600 real
   changes, file recall 94.4 → 93.3 with Jev, fail-open to the plain ranking.
-- **Six languages.** Python, JavaScript and TypeScript built in; Java, C# and Go behind the
-  `langs` extra. [Adding one](docs/languages.md#adding-a-language) touches two files.
+- **Eight languages.** Python, JavaScript and TypeScript built in; Java, C#, Go, Rust and
+  C/C++ behind the `langs` extra. [Adding one](docs/languages.md#adding-a-language) touches
+  two files. `bce doctor` reports how much of each repository's code the index parsed, and an
+  answer says so when part of it is in a language no installed parser handles.
 - **Cross-language call edges.** React Native and Expo bridges connect
   `NativeModules.Foo.bar()` in TypeScript to `bar` in Objective-C, Swift or Kotlin — a hole
   no single parser can see.
@@ -468,7 +478,7 @@ Ordered by how often it comes up, not by difficulty:
   [SECURITY.md](SECURITY.md).
 - **Streamable HTTP transport for MCP.** Today the MCP surface is stdio only, so the server
   runs next to the agent. Remote transport makes one index serve a team.
-- **More languages.** Rust, Kotlin and PHP are the most requested. The provider interface is
+- **More languages.** Kotlin and PHP are the most requested. The provider interface is
   the contribution path with the least friction — see
   [docs/languages.md](docs/languages.md#adding-a-language).
 - **Wider SCIP ingestion.** Compiler-grade edges beat syntax-derived ones and are scored as

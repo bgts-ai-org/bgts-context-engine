@@ -226,8 +226,8 @@ ranked candidates unselected and says so in `coverage.selector`.
 | `BCE_SELECTOR_URL` | `https://openrouter.ai/api/alpha/decisions` (jev), `http://127.0.0.1:8000/v1/systemone` (deciders) | |
 | `BCE_SELECTOR_TIMEOUT` | `3` (jev), `10` (deciders) | seconds per request; also the worst-case latency added |
 | `BCE_SELECTOR_FULL_THRESHOLD` | `0.5` | p(file is edited) at or above which a file keeps its symbols |
-| `BCE_SELECTOR_STUB_THRESHOLD` | `0.05` | at or above which a file is listed as one stub line |
-| `BCE_SELECTOR_MAX_FILES` | `12` | files listed in total (full + stub) |
+| `BCE_SELECTOR_STUB_THRESHOLD` | `0.25` | at or above which a file is listed as one stub line (`0.02` restores the fitted wide listing) |
+| `BCE_SELECTOR_MAX_FILES` | `6` | files listed in total (full + stub; a full file is never cut). `20` restores the wide listing |
 | `BCE_SELECTOR_SYMBOL_MIN_SCORE` | `1.0` | symbols of a full file scored below this (0 unrelated … 3 must change) are dropped |
 
 The four thresholds apply to every model. They were fitted on Jev; re-fitting them for a

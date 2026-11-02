@@ -1,136 +1,48 @@
-"""Render a ``get_context_for_task`` payload as the compact prose block an agent prompt carries.
+"""The ``get_context_for_task`` answer as the block an agent prompt carries (``bce precontext``).
 
-The block is re-sent on every model turn, so it is short by design: a file list in rank order,
-then one line per symbol (``path:line kind name distance``) with a snippet of at most
-``snippet_lines`` lines, and only where the snippet says more than the name. This is the exact
-format the agent benchmark injected; at the default budget it is about 5k characters
-(~1.3k tokens).
+The block is the compact Markdown answer of :mod:`bce.core.render.compact` - the same text the MCP
+tool returns - so an agent reads one format whichever way the context reached it. It is re-sent on
+every model turn, so the token budget applies to the whole block, workflow included; a character
+cap (Claude Code drops hook context past 10 000 characters) lowers that budget so the block always
+fits whole.
+
+The Claude Code hook can compute the block locally (``bce precontext``, which needs the database)
+or ask a server for it: ``POST /v1/precontext`` on ``bce serve`` and on ``bce serve-mcp
+--transport http`` takes the hook's JSON and answers with the hook's response, so the client needs
+only ``bce precontext --server URL`` or ``curl`` (:func:`remote_hook_command`).
 """
 
 from __future__ import annotations
 
+import json
 import sys
 import time
+import urllib.parse
+import urllib.request
 from pathlib import Path
 from typing import Any
 
-from bce.core.agent_mode import normalize_agent_mode, workflow_text
-from bce.core.defaults import DEFAULT_MAX_TOKENS, DEFAULT_SNIPPET_LINES
-
-HEADING = "## Code context for this task (bgts-context-engine code graph, computed once)"
+from bce.core.agent_mode import normalize_agent_mode
+from bce.core.defaults import DEFAULT_MAX_TOKENS
+from bce.core.render.compact import CHARS_PER_TOKEN, render_compact
 
 
 def render_context_markdown(
     payload: dict[str, Any],
     *,
-    snippet_lines: int = DEFAULT_SNIPPET_LINES,
-    max_distance: int | None = None,
     max_chars: int | None = None,
+    max_tokens: int | None = None,
     mode: str | None = None,
 ) -> str:
-    """Markdown for the agent from a ``get_context_for_task`` payload.
+    """The compact answer for ``payload`` (with ``mode``'s workflow when given).
 
-    ``max_distance`` drops items farther than that from the anchors; ``max_chars`` truncates at an
-    item boundary (Claude Code caps hook context at 10 000 characters). With ``mode`` the block
-    ends its header with that agent mode's workflow, so truncation never cuts it.
+    ``max_tokens`` defaults to the budget the answer was assembled with; ``max_chars`` caps it
+    further so the whole block, workflow included, stays within that many characters.
     """
-    cov = payload.get("coverage") or {}
-    items = list((payload.get("context") or {}).get("items") or [])
-    if max_distance is not None:
-        items = [it for it in items if (it.get("graph_distance") or 0) <= max_distance]
-
-    def rel(it: dict[str, Any]) -> str:
-        path = str(it.get("file_id") or "")
-        repo = str(it.get("repo_id") or "")
-        prefix = f"{repo}:"
-        return path[len(prefix) :] if repo and path.startswith(prefix) else path
-
-    files: dict[str, int] = {}
-    for it in items:
-        p = rel(it)
-        if p:
-            files[p] = files.get(p, 0) + 1
-
-    conf = cov.get("confidence") or "unknown"
-    head = [
-        HEADING,
-        "",
-        f"Confidence: {conf}. Files below are verified locations of the symbols the task text refers "
-        "to (distance 0 = direct match, 1+ = reached through calls/references/imports). Read them "
-        "first instead of searching for them; treat them as candidates to inspect, not as a list of "
-        "files to change.",
-        "",
-        "Files: " + ", ".join(f"`{p}`" + (f" ({n})" if n > 1 else "") for p, n in files.items()),
-        "",
-    ]
-    if any(it.get("tier") == "stub" for it in items):
-        head += [
-            "Entries marked `stub` name a probably related file without its code; open one only if "
-            "the other entries do not cover the task.",
-            "",
-        ]
-    unresolved = [u for u in cov.get("unresolved_identifiers") or [] if u.get("name")]
-    if unresolved:
-        head += [
-            "Not covered: "
-            + "; ".join(
-                f"`{u['name']}` (defined in "
-                + ", ".join(f"`{_strip_repo(f)}`" for f in u.get("defined_in") or [])
-                + ")"
-                for u in unresolved
-            ),
-            "",
-        ]
-    ranked = [str(c.get("path")) for c in payload.get("candidates") or [] if c.get("path")]
-    if ranked:
-        head += ["Also ranked: " + ", ".join(f"`{p}`" for p in ranked), ""]
-    if cov.get("likely_incomplete"):
-        head += ["The engine marks this answer as likely incomplete.", ""]
-    if mode is not None:
-        head += [workflow_text(mode, style="prose"), ""]
-    blocks: list[str] = []
-    for it in items:
-        path = rel(it)
-        if it.get("tier") == "stub":
-            summary = str(it.get("content") or "")
-            if summary.startswith(path + " - "):
-                summary = summary[len(path) + 3 :]
-            blocks.append(f"- `{path}` stub: {summary}")
-            continue
-        loc = f"{path}:{it.get('line')}" if it.get("line") else path or str(it.get("symbol_id"))
-        lines = [
-            f"- `{loc}` {it.get('kind') or 'symbol'} `{it.get('name') or ''}` d{it.get('graph_distance')}"
-        ]
-        content = str(it.get("content") or "")
-        name = str(it.get("name") or "")
-        placeholder = content.strip() in (
-            "",
-            name,
-            f"{name} @ {it.get('file_id')}:{it.get('line')}",
-        )
-        if it.get("detail_level") in ("full", "signature") and not placeholder:
-            body = content.splitlines()
-            if len(body) > snippet_lines:
-                body = body[:snippet_lines] + [
-                    f"... (+{len(content.splitlines()) - snippet_lines} lines)"
-                ]
-            lines.append("  ```")
-            lines.extend("  " + b for b in body)
-            lines.append("  ```")
-        blocks.append("\n".join(lines))
-
-    text = "\n".join(head)
-    for block in blocks:
-        candidate = text + "\n" + block
-        if max_chars is not None and len(candidate) + 1 > max_chars:
-            text += "\n- ... (truncated)"
-            break
-        text = candidate
-    return text + "\n"
-
-
-def _strip_repo(file_id: str) -> str:
-    return file_id.split(":", 1)[1] if ":" in file_id else file_id
+    tokens = int(max_tokens or (payload.get("context") or {}).get("budget") or DEFAULT_MAX_TOKENS)
+    if max_chars is not None:
+        tokens = max(1, min(tokens, max_chars // CHARS_PER_TOKEN))
+    return render_compact(payload, max_tokens=tokens, mode=mode)
 
 
 def resolve_agent_mode(explicit: str | None, project: Path) -> str:
@@ -150,12 +62,13 @@ def precontext_for_task(
     repo_ids: list[str] | None = None,
     max_candidates: int | None = None,
     max_tokens: int = DEFAULT_MAX_TOKENS,
-    snippet_lines: int = DEFAULT_SNIPPET_LINES,
     max_chars: int | None = None,
     mode: str | None = None,
+    scope: Any = None,
 ) -> dict[str, Any]:
     """Run ``get_context_for_task`` once and render it (with ``mode``'s workflow when given).
-    Returns ``text`` plus what was measured.
+    Returns ``text`` plus what was measured. ``repo_ids`` may name repositories by id or name;
+    ``scope`` is the caller's :class:`~bce.core.auth.scope.ScopeFilter` (None: unrestricted).
 
     Imports the storage layer lazily so the CLI can offer the command without paying for it on
     ``--help``.
@@ -163,6 +76,7 @@ def precontext_for_task(
     from bce.storage.graph.client import GraphClient
     from bce.storage.graph.repository import GraphRepository
     from bce.storage.relational.db import connection
+    from bce.storage.relational.queries import resolve_repo_ids
     from bce.storage.vector.store import VectorStore
     from bce.tools.layer3 import get_context_for_task
 
@@ -171,15 +85,14 @@ def precontext_for_task(
         result = get_context_for_task(
             GraphRepository(GraphClient(conn)),
             task_text=task_text,
-            repo_ids=repo_ids or None,
+            repo_ids=resolve_repo_ids(conn, list(repo_ids)) if repo_ids else None,
             max_candidates=max_candidates,
             max_tokens=max_tokens,
             store=VectorStore(conn),
+            scope=scope,
         )
     payload = result.get("payload") or {}
-    text = render_context_markdown(
-        payload, snippet_lines=snippet_lines, max_chars=max_chars, mode=mode
-    )
+    text = render_context_markdown(payload, max_chars=max_chars, max_tokens=max_tokens, mode=mode)
     cov = payload.get("coverage") or {}
     return {
         "text": text,
@@ -196,10 +109,23 @@ def precontext_for_task(
 CLAUDE_HOOK_MAX_CHARS = 10_000
 #: Prompts shorter than this ("continue", "yes", "/compact") are not tasks; skip the lookup.
 _MIN_PROMPT_CHARS = 20
+#: The server route that answers a Claude Code ``UserPromptSubmit`` hook.
+PRECONTEXT_PATH = "/v1/precontext"
+#: How long a remote hook waits for the server (a cold answer embeds and runs the selector).
+REMOTE_TIMEOUT_S = 60
+
+
+def is_task_prompt(stdin_json: dict[str, Any]) -> bool:
+    prompt = str(stdin_json.get("prompt") or "").strip()
+    return len(prompt) >= _MIN_PROMPT_CHARS and not prompt.startswith("/")
 
 
 def claude_hook_response(
-    stdin_json: dict[str, Any], *, repo_ids: list[str] | None, mode: str | None = None
+    stdin_json: dict[str, Any],
+    *,
+    repo_ids: list[str] | None,
+    mode: str | None = None,
+    scope: Any = None,
 ) -> dict[str, Any] | None:
     """``UserPromptSubmit`` hook body for Claude Code, or ``None`` when there is nothing to add.
 
@@ -207,9 +133,9 @@ def claude_hook_response(
     hook JSON carries its ``cwd``). Fails open: any error is reported on stderr and the prompt goes
     through without context.
     """
-    prompt = str(stdin_json.get("prompt") or "").strip()
-    if len(prompt) < _MIN_PROMPT_CHARS or prompt.startswith("/"):
+    if not is_task_prompt(stdin_json):
         return None
+    prompt = str(stdin_json.get("prompt") or "").strip()
     try:
         project = Path(str(stdin_json.get("cwd") or Path.cwd()))
         pre = precontext_for_task(
@@ -217,6 +143,7 @@ def claude_hook_response(
             repo_ids=repo_ids,
             max_chars=CLAUDE_HOOK_MAX_CHARS,
             mode=resolve_agent_mode(mode, project),
+            scope=scope,
         )
     except Exception as exc:  # noqa: BLE001 - a hook must never block the prompt
         print(f"bce precontext: skipped ({exc})", file=sys.stderr)
@@ -229,3 +156,77 @@ def claude_hook_response(
             "additionalContext": pre["text"],
         }
     }
+
+
+def server_hook_response(
+    stdin_json: dict[str, Any],
+    *,
+    repo_ids: list[str] | None,
+    mode: str | None = None,
+    scope: Any = None,
+) -> dict[str, Any]:
+    """``POST /v1/precontext``: the hook response, ``{}`` when there is nothing to add.
+
+    The agent mode is the request's, else the server's ``BCE_AGENT_MODE``; it is never read from
+    the client's ``cwd``, which names a path on the client's machine. An unknown mode raises.
+    """
+    from bce.config import get_settings
+
+    resolved = normalize_agent_mode(mode or get_settings().agent_mode)
+    body = {k: v for k, v in stdin_json.items() if k != "cwd"}
+    return claude_hook_response(body, repo_ids=repo_ids, mode=resolved, scope=scope) or {}
+
+
+def precontext_url(
+    server: str, *, repo_ids: list[str] | None = None, mode: str | None = None
+) -> str:
+    """The ``POST /v1/precontext`` URL of ``server`` (its base URL) for these repositories."""
+    query = [("repo", r) for r in repo_ids or []] + ([("mode", mode)] if mode else [])
+    base = server.rstrip("/")
+    if base.endswith("/mcp"):
+        base = base[: -len("/mcp")]
+    return base + PRECONTEXT_PATH + (f"?{urllib.parse.urlencode(query)}" if query else "")
+
+
+def remote_hook_response(
+    stdin_json: dict[str, Any],
+    *,
+    server: str,
+    token: str | None = None,
+    repo_ids: list[str] | None = None,
+    mode: str | None = None,
+    timeout: float = REMOTE_TIMEOUT_S,
+) -> dict[str, Any] | None:
+    """The hook response computed by ``server`` (:data:`PRECONTEXT_PATH`), or ``None``. Fails open
+    like :func:`claude_hook_response`."""
+    if not is_task_prompt(stdin_json):
+        return None
+    request = urllib.request.Request(
+        precontext_url(server, repo_ids=repo_ids, mode=mode),
+        data=json.dumps(stdin_json).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            **({"Authorization": f"Bearer {token}"} if token else {}),
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - configured URL
+            body = json.loads(response.read().decode("utf-8") or "{}")
+    except Exception as exc:  # noqa: BLE001 - a hook must never block the prompt
+        print(f"bce precontext: skipped ({exc})", file=sys.stderr)
+        return None
+    return body if isinstance(body, dict) and body.get("hookSpecificOutput") else None
+
+
+def remote_hook_command(
+    server: str, *, repo_ids: list[str] | None = None, token_env: str | None = None
+) -> str:
+    """A ``curl`` hook command for ``server``: the client needs no ``bce`` install. It prints
+    nothing when the server fails (``-f``), so the prompt goes through without context."""
+    auth = f' -H "Authorization: Bearer ${{{token_env}}}"' if token_env else ""
+    url = precontext_url(server, repo_ids=repo_ids)
+    return (
+        f"curl -sf -m {REMOTE_TIMEOUT_S} -X POST -H 'Content-Type: application/json'{auth} "
+        f"--data-binary @- '{url}' || true"
+    )
