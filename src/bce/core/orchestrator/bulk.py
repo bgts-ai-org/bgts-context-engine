@@ -105,19 +105,28 @@ def lexical_hits(
     repo_ids: list[str] | None,
     limit: int,
     exclude_tests: bool = False,
+    ranked: bool = True,
 ) -> dict[str, list[dict[str, Any]]]:
     """``term -> best ``limit`` keyword matches``, one query for all terms when supported.
 
     ``exclude_tests`` asks the repository to fill the ``limit`` rows with production symbols
     (migration 0013); repositories that do not know the flag are called without it and the
-    caller keeps filtering the rows itself.
+    caller keeps filtering the rows itself. ``ranked=False`` is for a caller that only uses the
+    terms with fewer than ``limit`` matches, all of them (see
+    :meth:`GraphRepository.lexical_search_many`); repositories without it rank as before.
     """
     if not terms:
         return {}
-    extra = {"exclude_tests": True} if exclude_tests else {}
+    extra: dict[str, Any] = {"exclude_tests": True} if exclude_tests else {}
     bulk = _bulk(repository, "lexical_search_many")
     if bulk is not None:
         try:
+            if not ranked:
+                try:
+                    return bulk(terms, repo_ids=repo_ids, limit=limit, ranked=False, **extra)
+                except TypeError as exc:
+                    if "ranked" not in str(exc) and not any(key in str(exc) for key in extra):
+                        raise
             return _call_with_optional(bulk, extra, terms, repo_ids=repo_ids, limit=limit)
         except NotImplementedError:
             pass

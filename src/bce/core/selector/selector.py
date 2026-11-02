@@ -16,12 +16,18 @@ and apply a fixed policy on the probabilities (fitted for Jev on the same 597 ch
 ``local_bench/multi_repo_bench/select_bench.py``, policy ``tier 0.5/0.05|12 +sym>=1.0``; the
 deciders run under the same thresholds):
 
-- ``full``  files: the engine's first file, plus every file with ``p >= full_threshold``. Their
-  symbols are kept at the assembler's normal detail, except symbols scored below
-  ``symbol_min_score`` which are dropped (a file always keeps at least one symbol).
+- ``full``  files: every file with ``p >= full_threshold``. Their symbols are kept at the
+  assembler's normal detail, except symbols scored below ``symbol_min_score`` which are dropped (a
+  file always keeps at least one symbol).
 - ``stub``  files: ``p >= stub_threshold`` (at most ``max_files`` files listed in total) become one
-  reference line each (path + symbol names) - the agent sees they exist and can open them.
+  reference line each (path + symbol names) - the agent sees they exist and can open them. The
+  engine's first file is always at least a stub, whatever its ``p`` and the cap.
 - everything else is dropped.
+
+The engine's first file used to be full regardless of the model's vote. Where the model put it
+below ``full_threshold`` it was an edit target in 1 of 54 answers (55 tasks, 13 repositories), yet
+as a full file it led the answer's code and sent the agent to the wrong place; it is now shown in
+full only when the model agrees.
 
 Effect on the benchmark above (600 tasks, end to end): recall of the files a change touches
 94.4 -> 93.4 (within the first 20 symbols 91.0 -> 92.5) while the tokens handed to the agent fall
@@ -29,6 +35,12 @@ from 8 310 to 1 714 (-79 %) and the listed files from 20.5 to 10.9 (2.3 at full 
 stubs). The model is not bit-deterministic (probabilities jitter
 by ~0.01 between identical calls); the flips this causes sit at the stub boundary, on files the
 change never touched, and the recall moved by <= 0.6 points across three repeated runs.
+
+The defaults list less than that fit: stubs need ``p >= 0.25`` and the listing stops at 6 files
+in all. Agents given the ~11-file answer above opened the listed files as a reading list; an
+answer of the full files plus the few plausible ones is read as what it is. ``stub_threshold``
+0.02 / ``max_files`` 20 (``BCE_SELECTOR_STUB_THRESHOLD`` / ``BCE_SELECTOR_MAX_FILES``) restore the
+fitted listing.
 
 The selector is fail-open: any error or timeout returns the ranked candidates untouched, and the
 ``coverage.selector`` block says so. It never adds a candidate the engine did not rank.
@@ -69,13 +81,13 @@ class SelectorConfig:
     a fixed cap of 12 was the binding constraint in 46 % of the answers of a 600-change
     benchmark and cost 2.4x the misses of the uncapped answers. ``full_content_bytes`` bounds the
     text handed over at full detail: when the full files' bodies exceed it, the least probable
-    full files are demoted to stubs (the engine's first file and pinned files never are).
+    full files are demoted to stubs (a full engine's first file and pinned files never are).
     ``pinned_full_limit`` bounds how many files the caller pins into the full tier against the
     model's vote (the rest of the pinned files are still listed as stubs)."""
 
     full_threshold: float = 0.5
-    stub_threshold: float = 0.02
-    max_files: int = 20
+    stub_threshold: float = 0.25
+    max_files: int = 6
     symbol_min_score: float = 1.0
     full_content_bytes: int = 12_000
     pinned_full_limit: int = 6
@@ -293,12 +305,9 @@ def apply_policy(
     def p_of(g: FileGroup) -> float:
         return file_p.get(g.file_id, 0.0)
 
-    # Full tier: the engine's first file, every file above the full threshold, then the pinned
-    # files (bounded). No cap applies here - a probability cut, not a count cut.
-    full: list[FileGroup] = [g for g in groups if g.pos == 0]
-    for g in ranked:
-        if p_of(g) >= cfg.full_threshold and g not in full:
-            full.append(g)
+    # Full tier: every file above the full threshold, then the pinned files (bounded). No cap
+    # applies here - a probability cut, not a count cut.
+    full: list[FileGroup] = [g for g in ranked if p_of(g) >= cfg.full_threshold]
     pinned_groups = [g for g in ranked if g.file_id in pinned]
     pinned_promoted = 0
     for g in pinned_groups:
@@ -309,8 +318,8 @@ def apply_policy(
         full.append(g)
         pinned_promoted += 1
 
-    # Stub tier: everything above the stub threshold, until the listing cap; pinned files that
-    # did not make the full tier are listed regardless of the cap.
+    # Stub tier: everything above the stub threshold, until the listing cap; the engine's first
+    # file and pinned files that did not make the full tier are listed regardless of either.
     stubs: list[FileGroup] = []
     capped = False
     for g in ranked:
@@ -322,7 +331,7 @@ def apply_policy(
             capped = True
             break
         stubs.append(g)
-    for g in pinned_groups:
+    for g in [*(g for g in groups if g.pos == 0), *pinned_groups]:
         if g not in full and g not in stubs:
             stubs.append(g)
 

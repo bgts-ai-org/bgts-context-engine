@@ -40,6 +40,9 @@ class RetrievalProfile:
     #: Anchors: semantic strength is ``cap / (1 + rank / scale)``; the rank at which the model's
     #: evidence is worth half its cap. See ``anchors.semantic_strength``.
     semantic_rank_scale: float
+    #: Expansion evidence: ``hops`` (strongest anchor decayed per hop) or ``ppr`` (re-weighted by a
+    #: personalized PageRank over the walked subgraph, see ``expand.ppr_reweight``).
+    expansion: str = "hops"
 
 
 #: voyage-code-4 (and the historical defaults every constant was fitted with). Unchanged.
@@ -74,6 +77,9 @@ JINA = RetrievalProfile(
 )
 
 PROFILES: dict[str, RetrievalProfile] = {p.name: p for p in (VOYAGE, JINA)}
+
+#: Valid ``RetrievalProfile.expansion`` values (``BCE_RETRIEVAL_EXPANSION``).
+EXPANSIONS = frozenset({"hops", "ppr"})
 
 #: Unknown model (or the hashing fallback): the voyage constants, the only fully validated set.
 DEFAULT_PROFILE = VOYAGE
@@ -122,4 +128,7 @@ def active_profile(settings: Settings | None = None) -> RetrievalProfile:
         profile = replace(
             profile, semantic_rank_scale=max(1.0, float(settings.retrieval_semantic_rank_scale))
         )
+    expansion = (settings.retrieval_expansion or "").strip().lower()
+    if expansion in EXPANSIONS:
+        profile = replace(profile, expansion=expansion)
     return profile

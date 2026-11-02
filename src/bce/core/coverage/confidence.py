@@ -41,6 +41,13 @@ GOD_NODE_DEGREE = 20
 STRONG_ANCHOR_STRENGTH = 0.6
 #: Below this an anchor is "weak" (typically one common lexical term).
 WEAK_ANCHOR_STRENGTH = 0.35
+#: Sources that only back what another source found (a generic name the task uses), so they do
+#: not make an anchor corroborated.
+SUPPORTING_SOURCES = frozenset({"name"})
+#: The context selector's ``p(file is edited)`` a full file needs for the answer to name a clear
+#: edit target. Answers whose best full file stayed below it pointed at the wrong first file in 3
+#: of 4 cases (55 tasks, 13 repositories); none of the answers that pointed right did.
+TARGET_MIN_RELEVANCE = 0.7
 
 
 class ConfidenceLevel(StrEnum):
@@ -70,7 +77,7 @@ def compute_coverage(result: RetrievalResult, repository: Any | None = None) -> 
         return float(s)
 
     def is_corroborated(sid: str) -> bool:
-        srcs = sources_of.get(sid, [])
+        srcs = [s for s in sources_of.get(sid, []) if s not in SUPPORTING_SOURCES]
         return len(srcs) >= 2 or "explicit" in srcs or "history" in srcs
 
     strong_anchor_count = sum(
@@ -177,6 +184,35 @@ def compute_coverage(result: RetrievalResult, repository: Any | None = None) -> 
     }
 
 
+def apply_target_confidence(
+    coverage: dict[str, Any],
+    files: list[dict[str, Any]],
+    selection: dict[str, Any] | None,
+) -> None:
+    """Fold the context selector's verdict into ``coverage``.
+
+    When the selector tiered the answer, ``coverage.target_relevance`` is the best ``p`` of its
+    full files (0.0 without one). A value under :data:`TARGET_MIN_RELEVANCE` sets
+    ``coverage.target_unconfirmed`` and caps the confidence at ``low``: the anchors may agree on a
+    symbol, but the model does not think any file shown in full is where the change goes. Without
+    a selector verdict nothing changes.
+    """
+    if not selection or selection.get("status") not in ("ok", "partial"):
+        return
+    best = max(
+        (
+            float(f["relevance"])
+            for f in files
+            if f.get("tier") == "full" and f.get("relevance") is not None
+        ),
+        default=0.0,
+    )
+    coverage["target_relevance"] = round(best, 3)
+    coverage["target_unconfirmed"] = best < TARGET_MIN_RELEVANCE
+    if coverage["target_unconfirmed"] and coverage.get("confidence") != "unsupported":
+        coverage["confidence"] = str(ConfidenceLevel.LOW)
+
+
 def _anchor_strength(strengths: dict[str, float], sid: str) -> float:
     s = strengths.get(sid)
     return 1.0 if s is None else float(s)
@@ -250,6 +286,7 @@ def coverage_message(coverage: dict[str, Any], locale: str) -> str:
         "high": "coverage.high",
         "medium": "coverage.medium",
         "low": "coverage.low",
+        "unsupported": "coverage.unsupported",
     }.get(level, "coverage.medium")
     return tr.translate(
         key,

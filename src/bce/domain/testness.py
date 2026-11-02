@@ -66,3 +66,37 @@ def is_test_symbol(
     if name and not paths and _TEST_NAME_CAMEL_RE.match(name):
         return True
     return False
+
+
+_JS_EXTS = ("js", "jsx", "mjs", "cjs")
+_TS_EXTS = ("ts", "tsx")
+
+
+def conventional_test_basenames(path: str) -> list[str]:
+    """Basenames the tests of source file ``path`` conventionally have, per language.
+
+    ``app/auth.py`` -> ``test_auth.py``, ``auth_test.py``; ``src/store.ts`` -> ``store.test.ts``,
+    ``store.spec.ts`` (and the ``.tsx`` forms); ``account.go`` -> ``account_test.go``;
+    ``Account.java`` -> ``AccountTest.java``, ``AccountTests.java``, ``TestAccount.java``;
+    ``Account.cs`` -> ``AccountTests.cs``, ``AccountTest.cs``. Empty for a file that is itself a
+    test, a package marker (``__init__.py``) or a language without a file-name convention.
+    """
+    name = path.replace("\\", "/").rsplit("/", 1)[-1].rsplit(":", 1)[-1]
+    stem, dot, ext = name.rpartition(".")
+    ext = ext.lower()
+    if not dot or not stem or stem.startswith("__") or is_test_symbol(None, None, path):
+        return []
+    if ext in ("py", "pyi"):
+        return [f"test_{stem}.py", f"{stem}_test.py"]
+    if ext in _TS_EXTS or ext in _JS_EXTS:
+        exts = _TS_EXTS if ext in _TS_EXTS else _JS_EXTS
+        return [f"{stem}.{kind}.{e}" for kind in ("test", "spec") for e in exts]
+    if ext == "go":
+        return [f"{stem}_test.go"]
+    if ext in ("java", "kt", "scala", "php"):
+        return [f"{stem}Test.{ext}", f"{stem}Tests.{ext}", f"Test{stem}.{ext}"]
+    if ext == "cs":
+        return [f"{stem}Tests.cs", f"{stem}Test.cs"]
+    if ext == "rb":
+        return [f"{stem}_spec.rb", f"{stem}_test.rb"]
+    return []

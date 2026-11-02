@@ -7,6 +7,96 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-02
+
+### Added
+
+- **Compact evidence answer.** `get_context_for_task` returns Markdown by default
+  (`view=compact`; `locate` drops the code, `debug` is the JSON envelope; `BCE_MCP_VIEW`
+  sets the default, REST takes `?view=`). Primary edit targets come as whole declarations
+  with the file's own line numbers (`1344→code`), windowed around what the task names when
+  long, classes as skeletons; each span heading carries its range, its state (`complete`,
+  `partial`, `truncated`, `skeleton`, `outline`, `snippet`), a content hash and its role
+  (`edit` / `dependency`). `max_tokens` applies to the final text, header included.
+  `bce precontext` and the Claude Code hook render the same text.
+- **Related tests and Gaps.** Up to two existing test files of the edit targets (through the
+  graph's call/reference edges and each language's test-file naming) with their test symbols
+  and line ranges; a Gaps section with what the index is known not to cover
+  (`unknown_identifiers`, `unsupported_paths`, `truncated_evidence`, `missing_tests`,
+  `semantic_degraded`) and `coverage.state`.
+- **`inspect_symbol_graph` (MCP), `bce inspect`, `POST /v1/inspect-symbol-graph`.** One
+  tool for `definition`, `callers`, `callees`, `references` and `impact` (from a unified diff
+  or `path:L10-L20` ranges: the touched symbols, what calls / references / extends them, the
+  tests to run). `BCE_MCP_TOOLSET=minimal` (default) advertises it with
+  `get_context_for_task` only; `full` adds the other tools.
+- **Hook from a server.** `POST /v1/precontext` on `bce serve` and `bce serve-mcp
+  --transport http`; `bce precontext --server URL` and `bce claude-init --hook-server URL`
+  (a `curl` hook) use it. `claude-init` also installs a `PostToolUse` hook (`bce edit-hook`,
+  `--no-edit-hook` to skip) that tells the agent once per file that an edited file is newer
+  than the index.
+- **Rust and C/C++ providers** (`[langs]` extra: `tree-sitter-rust`, `tree-sitter-cpp`), see
+  [docs/languages.md](docs/languages.md).
+- **Module outline symbols.** A file with top-level code outside its declarations gets a
+  `module` symbol whose text is the file's top level with declaration bodies folded.
+- **Index quality report: `bce doctor`, `bce index --report`.** The indexer counts every code
+  file per language, parsed or not, and stores the report (migration 0014,
+  `repo_index_stats`): parse errors, symbols, resolved cross-file references, SCIP,
+  embeddings. Answers over a repository less than 95 % parsed say which languages are missing
+  (`coverage.index`, a Gaps line); under 20 % their confidence is `unsupported`. The report is
+  also in the index job result and the REST index responses.
+- **`BCE_RETRIEVAL_EXPANSION=ppr` (experimental).** Personalized-PageRank re-weighting of the
+  expansion evidence; off by default.
+- **Stage timings.** The `get_context_for_task` envelope carries `timings` (milliseconds per
+  pipeline stage, beside the payload); `view=debug` returns it, `bce context --view debug`
+  prints it on stderr and the MCP `mcp tool call` log line records it with the render time.
+- **MCP over streamable HTTP: `bce serve-mcp --transport http [--host] [--port] [--path]`.**
+  The stdio tool catalog served by uvicorn (stateless sessions), so one engine serves agents
+  in other processes or containers. Requests need `Authorization: Bearer <token>`
+  (`BCE_MCP_HTTP_TOKEN`, comma-separated for rotation, compared in constant time); `GET
+  /healthz` is open. Without a token the server binds to loopback only and refuses any other
+  host at startup, and on loopback it rejects non-loopback `Host` / `Origin` headers against
+  DNS rebinding; `BCE_MCP_HTTP_ALLOWED_HOSTS` / `_ORIGINS` enforce the check with a token.
+- **`bce codex-init` and `bce copilot-init`: one-command setup for Codex and GitHub Copilot.**
+  `codex-init` adds a `[mcp_servers.bgts-context-engine]` table to the project's
+  `.codex/config.toml` (`startup_timeout_sec` 60 and `tool_timeout_sec` 120 instead of
+  Codex's 10 / 60 s), replacing an earlier copy of that table and keeping every other line,
+  comments included; it refuses to write when the server is defined in a form it cannot
+  replace (inline table, dotted keys). It writes the same `AGENTS.md` section as
+  `opencode-init`. `copilot-init` writes the portable `.mcp.json` that Copilot CLI and VS
+  Code both read and the agent guidance as a marked section of
+  `.github/copilot-instructions.md`. Both write `BCE_AGENT_MODE` into the server's `env`
+  (default `hint`, a rerun keeps the configured value, `--mode` overrides it), and
+  `bce precontext` also reads the mode from `.codex/config.toml`. Checked with Codex CLI
+  0.162.1 (`codex mcp list`/`get`) and Copilot CLI 1.0.83 (`copilot mcp list`/`get`) in a
+  trusted folder.
+
+### Changed
+
+- `claude-init` writes `"type": "stdio"` in the `.mcp.json` entry, so the one entry is valid
+  for both Claude Code and Copilot.
+- Selector defaults: stub threshold 0.02 → 0.25, at most 6 files (`BCE_SELECTOR_*` restore
+  the old values).
+- The engine's first file is full only when the selector agrees (p ≥ the full threshold);
+  otherwise it is listed as a stub. When no full file reaches p 0.7 the answer's confidence is
+  capped at `low`, `coverage.target_unconfirmed` is set and the compact text asks the agent to
+  confirm the location before editing.
+- Compact answer: "Related files" lists only files the selector rates p ≥ 0.5 (and pinned
+  files), most probable first, with their symbols' line ranges, and is budgeted before the
+  code; a primary file whose code does not fit is listed there with its range instead of
+  vanishing. "Other symbols" no longer lists symbols of files that got no code.
+- The agent guidance (`hint` mode) designs the change from the shown code, reads only the
+  ranges the answer leaves out and searches as usual for anything else; `trust` is labelled
+  localize-only.
+- An explicit name matching more than eight symbols is narrowed by the folders and files the
+  task names instead of being dropped, and otherwise only supports what other sources found.
+- Re-index to get the new symbol ranges, module outlines, Rust / C / C++ symbols and the
+  index report.
+- Faster `get_context_for_task`, same answers: the query embedding is requested on a worker
+  thread while the explicit, path, lexical and usage anchors are looked up, and recent query
+  vectors are kept per process; word pairs are matched without ranking and a body fragment's
+  scan stops once it is generic. On a 60k-symbol repository the anchors took 9.3 s before and
+  about 8 s after; on the 14 development tasks the median call fell by about a sixth.
+
 ## [1.0.2] - 2026-10-09
 
 ### Changed
@@ -637,7 +727,8 @@ First public release.
 - Docker Compose deployment with PostgreSQL, Apache AGE and pgvector preconfigured.
 - `server.json` manifest describing the stdio server for the official MCP registry.
 
-[Unreleased]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v1.0.2...HEAD
+[Unreleased]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v1.0.2...v1.1.0
 [1.0.2]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v0.3.0...v1.0.0

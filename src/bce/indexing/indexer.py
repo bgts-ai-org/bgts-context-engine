@@ -18,6 +18,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+from bce.domain.code_files import CODE_EXTENSIONS
+from bce.domain.enums import NodeLabel
 from bce.domain.models import GraphFragment
 from bce.indexing.embedder import Embedder
 from bce.indexing.extractor import Extractor
@@ -29,6 +31,7 @@ from bce.indexing.gitsync import (
     parse_bitbucket_url,
     sync_repo,
 )
+from bce.indexing.index_stats import IndexStatsBuilder, write_index_stats
 from bce.indexing.linker import link_fragments, synthesize_scip_edges
 from bce.indexing.parser.symbol_id import make_file_id, make_repo_id
 from bce.indexing.upserter import Upserter
@@ -39,6 +42,24 @@ from bce.storage.vector.store import VectorStore
 _BRIDGE_EXTS = (".m", ".mm", ".swift", ".kt", ".js", ".jsx", ".ts", ".tsx")
 
 logger = logging.getLogger("bce.indexing")
+
+
+def _count(
+    census: IndexStatsBuilder,
+    rel: str,
+    language: str | None,
+    fragment: GraphFragment | None,
+    parse_error: bool,
+) -> None:
+    if fragment is None:
+        census.add(rel, language=language, indexed=False)
+        return
+    symbols = sum(
+        1
+        for n in fragment.nodes
+        if n.label is NodeLabel.SYMBOL and n.properties.get("kind") != "module"
+    )
+    census.add(rel, language=language, indexed=True, parse_error=parse_error, symbols=symbols)
 
 
 @dataclass(slots=True)
@@ -52,6 +73,8 @@ class IndexSummary:
     edges_added: int = 0
     remote_url: str | None = None
     branch: str | None = None
+    #: Index quality report (:mod:`bce.indexing.index_stats`).
+    stats: dict | None = None
 
 
 @dataclass(slots=True)
@@ -66,6 +89,8 @@ class IncrementalSummary:
     edges: int
     nodes_added: int = 0
     edges_added: int = 0
+    #: Index quality report; None when no file changed (the stored report stands).
+    stats: dict | None = None
 
 
 class Indexer:
@@ -229,16 +254,14 @@ class Indexer:
 
         self._apply_scip_resolution(root)
 
-        # Pass 1: per-file extraction + upsert. Fragments are kept for the repo-wide link pass.
+        # Pass 1: per-file extraction + upsert. Fragments are kept for the repo-wide link pass;
+        # code files no parser handles are only counted (index report).
         files = 0
         fragments: list[GraphFragment] = []
         indexed_paths: list[str] = []
-        exts = self.extractor.registry.supported_extensions()
-        for rel, abs_path in iter_source_files(root, exts):
-            source = abs_path.read_bytes()
-            fragment = self.extractor.extract_file(
-                repo_id=repo_id, path=rel, source=source, indexed_at_commit=commit
-            )
+        census = IndexStatsBuilder()
+        for rel, abs_path in iter_source_files(root, self._census_extensions()):
+            fragment = self._extract_counted(census, repo_id, rel, abs_path, commit)
             if fragment is None:
                 continue
             fragments.append(fragment)
@@ -256,7 +279,9 @@ class Indexer:
         )
 
         # Pass 2: cross-file linking, optional SCIP edge synthesis, heuristic bridges.
-        self._link_and_upsert(root, fragments)
+        link_stats: dict[str, int] = {}
+        self._link_and_upsert(root, fragments, stats=link_stats)
+        stats = self._write_stats(census, link_stats, repo_id, commit)
 
         nodes, edges = self.repository.counts()
         logger.info(
@@ -282,13 +307,69 @@ class Indexer:
             edges_added=edges - edges_before,
             remote_url=remote_url,
             branch=branch,
+            stats=stats,
         )
 
-    def _link_and_upsert(self, root: Path, fragments: list[GraphFragment]) -> None:
+    def _census_extensions(self) -> tuple[str, ...]:
+        """Every code extension: the parsed ones plus those only counted by the index report."""
+        return tuple(sorted(set(self.extractor.registry.supported_extensions()) | CODE_EXTENSIONS))
+
+    def _extract_counted(
+        self, census: IndexStatsBuilder, repo_id: str, rel: str, abs_path: Path, commit: str
+    ) -> GraphFragment | None:
+        """Extract ``rel`` if a parser handles it, counting it in ``census`` either way."""
+        provider = self.extractor.registry.get_for_path(rel)
+        if provider is None:
+            census.add(rel, language=None, indexed=False)
+            return None
+        fragment = self.extractor.extract_file(
+            repo_id=repo_id, path=rel, source=abs_path.read_bytes(), indexed_at_commit=commit
+        )
+        _count(census, rel, provider.language, fragment, self.extractor.last_parse_error)
+        return fragment
+
+    def _write_stats(
+        self, census: IndexStatsBuilder, link_stats: dict[str, int], repo_id: str, commit: str
+    ) -> dict:
+        """Build the index report and store it (no-op storage without a connection / 0014)."""
+        from bce.config import get_settings
+
+        settings = get_settings()
+        stats = census.report(
+            link=link_stats,
+            scip=self.extractor.scip_resolution is not None,
+            embedding={
+                "enabled": self.embedder is not None,
+                "provider": settings.embedding_provider,
+                "model": settings.embedding_model,
+            },
+        )
+        conn = getattr(getattr(self.repository, "client", None), "conn", None)
+        if conn is not None:
+            try:
+                write_index_stats(conn, repo_id=repo_id, commit=commit, stats=stats)
+            except Exception:  # noqa: BLE001 - the report must never fail an index run
+                logger.warning("index report not stored", exc_info=True)
+        logger.info(
+            "index report",
+            extra={
+                "repo_id": repo_id,
+                "files": stats["files"],
+                "indexed": stats["indexed"],
+                "parse_errors": stats["parse_errors"],
+            },
+        )
+        return stats
+
+    def _link_and_upsert(
+        self, root: Path, fragments: list[GraphFragment], *, stats: dict[str, int] | None = None
+    ) -> None:
         """Repo-wide pass 2: resolve cross-file refs, synthesize SCIP + bridge edges, upsert."""
         if not fragments:
             return
-        linked = link_fragments(fragments, scip_resolution=self.extractor.scip_resolution)
+        linked = link_fragments(
+            fragments, scip_resolution=self.extractor.scip_resolution, stats=stats
+        )
         if len(linked):
             self.upserter.upsert_file_fragment(linked)
         if self.extractor.scip_resolution is not None:
@@ -418,9 +499,15 @@ class Indexer:
                 modified += 1
         self._flush_embeddings()
 
+        stats = None
         if changed_paths:
-            fragments = self._collect_fragments_for_relink(root, repo_id, target, changed_fragments)
-            self._link_and_upsert(root, fragments)
+            census = IndexStatsBuilder()
+            fragments = self._collect_fragments_for_relink(
+                root, repo_id, target, changed_fragments, census
+            )
+            link_stats: dict[str, int] = {}
+            self._link_and_upsert(root, fragments, stats=link_stats)
+            stats = self._write_stats(census, link_stats, repo_id, target)
         self._record_churn(root, repo_id, target, None)
 
         self._update_indexed_commit(repo_id, target)
@@ -449,6 +536,7 @@ class Indexer:
             edges=edges,
             nodes_added=nodes - nodes_before,
             edges_added=edges - edges_before,
+            stats=stats,
         )
 
     def _collect_fragments_for_relink(
@@ -457,22 +545,21 @@ class Indexer:
         repo_id: str,
         commit: str,
         changed_fragments: dict[str, GraphFragment],
+        census: IndexStatsBuilder,
     ) -> list[GraphFragment]:
         """Fragments for every source file (in-memory only; unchanged files are not re-upserted).
 
-        Changed files reuse their freshly extracted fragments; unchanged files are re-parsed just
-        to rebuild the deterministic link inputs (exports/imports/unresolved refs).
+        Unchanged files are re-parsed just to rebuild the deterministic link inputs
+        (exports/imports/unresolved refs); every code file is counted in ``census``.
         """
         fragments: list[GraphFragment] = []
-        exts = self.extractor.registry.supported_extensions()
-        for rel, abs_path in iter_source_files(root, exts):
-            if rel in changed_fragments:
-                fragments.append(changed_fragments[rel])
-                continue
-            source = abs_path.read_bytes()
-            fragment = self.extractor.extract_file(
-                repo_id=repo_id, path=rel, source=source, indexed_at_commit=commit
-            )
+        for rel, abs_path in iter_source_files(root, self._census_extensions()):
+            fragment = changed_fragments.get(rel)
+            if fragment is not None:
+                provider = self.extractor.registry.get_for_path(rel)
+                _count(census, rel, provider.language if provider else None, fragment, False)
+            else:
+                fragment = self._extract_counted(census, repo_id, rel, abs_path, commit)
             if fragment is not None:
                 fragments.append(fragment)
         return fragments

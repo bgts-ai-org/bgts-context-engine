@@ -94,11 +94,12 @@ def trace_context_for_task(
 
     # Stage 2: deterministic expansion (section 6.3).
     t = time.perf_counter()
-    expansion = expand_from_anchors(repository, anchors)
+    expansion = expand_from_anchors(repository, anchors, expansion=profile.expansion)
     stages.append(
         {
             "stage": "expand",
             "duration_ms": _elapsed_ms(t),
+            "expansion": profile.expansion,
             "nodes": [
                 {
                     "symbol_id": info.symbol_id,

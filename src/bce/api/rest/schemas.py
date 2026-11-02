@@ -108,6 +108,21 @@ class BlastRadiusRequest(BaseModel):
     target_symbols: list[str] = Field(..., description="Symbols whose impact surface to compute.")
 
 
+class InspectRequest(BaseModel):
+    query: str = Field(
+        ...,
+        description="A symbol name, Type.member, path:line, or for mode=impact a unified diff "
+        "or path:L1-L2 ranges.",
+    )
+    mode: str = Field(
+        default="definition", description="definition | callers | callees | references | impact."
+    )
+    repo_ids: list[str] | None = Field(default=None, description="Restrict to these repo_ids.")
+    max_tokens: int | None = Field(
+        default=None, ge=1, le=200000, description="Token budget of the Markdown view."
+    )
+
+
 class SelectReposRequest(BaseModel):
     task_text: str = Field(..., description="Task text.")
     component_repo_ids: list[str] | None = Field(default=None)

@@ -3,7 +3,7 @@
   "name": "io.github.bgts-ai-org/bgts-context-engine",
   "title": "BGTS Context Engine",
   "description": "Deterministic code-graph context for AI coding agents over PostgreSQL, Apache AGE and pgvector",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "websiteUrl": "https://github.com/bgts-ai-org/bgts-context-engine",
   "repository": {
     "url": "https://github.com/bgts-ai-org/bgts-context-engine",
@@ -14,7 +14,7 @@
       "registryType": "pypi",
       "registryBaseUrl": "https://pypi.org",
       "identifier": "bgts-context-engine",
-      "version": "1.0.2",
+      "version": "1.1.0",
       "transport": {
         "type": "stdio"
       },
@@ -38,7 +38,7 @@
           "type": "positional",
           "valueHint": "command",
           "value": "serve-mcp",
-          "description": "Serve the MCP tools over stdio (eight read-only, two more with BCE_MCP_ALLOW_WRITE=true)."
+          "description": "Serve the MCP tools over stdio (get_context_for_task and inspect_symbol_graph by default, every read-only tool with BCE_MCP_TOOLSET=full, the indexing tools with BCE_MCP_ALLOW_WRITE=true)."
         }
       ],
       "environmentVariables": [
@@ -104,7 +104,7 @@
         },
         {
           "name": "BCE_AGENT_MODE",
-          "description": "How the agent uses the get_context_for_task answer: hint (default, starting point; search only when the engine reports a gap) or trust (accept as correct; no searching the tree). Stated in every answer's payload.workflow.",
+          "description": "How the agent uses the get_context_for_task answer: hint (default, starting point; work from the shown code, search as usual for what it lacks) or trust (localize-only, for benchmarks; no searching the tree). Stated in every answer's Workflow section.",
           "default": "hint",
           "choices": ["hint", "trust"]
         },

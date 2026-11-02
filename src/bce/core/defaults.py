@@ -15,11 +15,9 @@ DEFAULT_MAX_CANDIDATES = 20
 #: files against 91.0 % at K=20, and the selected answer still carried a fifth of the tokens.
 SELECTED_MAX_CANDIDATES = 50
 
-#: Default token budget of the assembled context. An agent re-sends the context on every model
+#: Default token budget of the answer (the compact text an agent reads, as a whole; the JSON view
+#: applies it to the assembled items). An agent re-sends the context on every model
 #: turn, so it is kept short: at 1500 the agent benchmark carried ~1.3k tokens of graph context per
 #: turn and still halved its search output; the earlier 4000 travelled as ~4k tokens per turn for
 #: no further gain. Callers that want longer snippets raise it per request.
 DEFAULT_MAX_TOKENS = 1500
-
-#: Snippet lines kept per item when the context is rendered as prose for an agent prompt.
-DEFAULT_SNIPPET_LINES = 12

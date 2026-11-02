@@ -31,6 +31,7 @@ from bce.indexing.parser._treesitter import (
     make_parser,
     node_text,
     search_text,
+    span_properties,
 )
 from bce.indexing.parser.base import LanguageProvider, ParseContext
 from bce.indexing.parser.symbol_id import make_module_id, make_symbol_id
@@ -246,6 +247,7 @@ class PythonProvider(LanguageProvider):
                 "namespace": namespace or package or "",
                 "file_id": ctx.file_id,
                 "line": node.start_point[0] + 1,
+                **span_properties(node),
                 "indexed_at_commit": ctx.indexed_at_commit,
             },
         )

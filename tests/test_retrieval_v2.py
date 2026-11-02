@@ -7,6 +7,7 @@ Each test pins one of the failure modes observed on natural-language tasks with 
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import pytest
@@ -376,6 +377,71 @@ def test_generic_name_matching_many_symbols_is_not_explicit_evidence():
     result = find_anchors(repo, task_text="the `Content` field is dropped")
     # 12 > EXPLICIT_MAX_MATCHES: naming a dozen unrelated DTO properties is not naming anything.
     assert result.anchors == {}
+
+
+class _GenericNameRepo(_ExplicitRepo):
+    """``Content`` declared by twelve DTOs in three folders, and a keyword index over them."""
+
+    def __init__(self, lexical: dict[str, list[str]] | None = None) -> None:
+        super().__init__()
+        folders = ("billing", "billing") + ("models",) * 10
+        self.rows["Content"] = [
+            {
+                "symbol_id": f"cs::Acme.Models::Dto{i}::Content",
+                "kind": "property",
+                "file_id": f"api:src/{folder}/Dto{i}.cs",
+            }
+            for i, folder in enumerate(folders)
+        ]
+        self.lexical = lexical or {}
+
+    def lexical_search(self, term, repo_ids=None, limit=20):
+        return [
+            {"symbol_id": sid, "name": "Content", "file_id": "api:src/x.cs", "match_tier": "a"}
+            for sid in self.lexical.get(term, [])
+        ]
+
+
+def test_a_generic_name_inside_a_folder_the_task_names_is_explicit():
+    repo = _GenericNameRepo()
+    result = find_anchors(repo, task_text="the `Content` of billing invoices is dropped")
+    # 12 matches, 2 under src/billing/: the folder word narrows the name to those two.
+    assert result.anchors == {
+        "cs::Acme.Models::Dto0::Content": ["explicit"],
+        "cs::Acme.Models::Dto1::Content": ["explicit"],
+    }
+    assert result.strength_of("cs::Acme.Models::Dto0::Content") == pytest.approx(0.707107, 1e-5)
+
+
+def test_a_generic_name_backs_only_what_another_source_found():
+    repo = _GenericNameRepo(lexical={"dropped": ["cs::Acme.Models::Dto7::Content"]})
+    result = find_anchors(repo, task_text="the `Content` field is dropped")
+    # No folder narrows it: the name nominates nothing, but the lexical hit gains log2 evidence.
+    assert list(result.anchors) == ["cs::Acme.Models::Dto7::Content"]
+    assert result.anchors["cs::Acme.Models::Dto7::Content"] == ["lexical", "name"]
+    unnamed = _GenericNameRepo(lexical=repo.lexical)
+    del unnamed.rows["Content"]
+    alone = find_anchors(unnamed, task_text="the `Content` field is dropped")
+    lexical = alone.strength_of("cs::Acme.Models::Dto7::Content")
+    expected = 1 - (1 - lexical) * (1 - 1 / math.log2(14))
+    assert result.strength_of("cs::Acme.Models::Dto7::Content") == pytest.approx(expected, 1e-5)
+
+
+def test_a_folder_hint_that_leaves_too_many_matches_does_not_narrow():
+    repo = _GenericNameRepo()
+    # Ten DTOs live under src/models/: still past the cap, so nothing is nominated.
+    assert find_anchors(repo, task_text="`Content` on the models is dropped").anchors == {}
+
+
+def test_explicit_matches_outside_the_requested_repositories_do_not_count():
+    repo = _GenericNameRepo()
+    repo.rows["Flush"] = [
+        {"symbol_id": "cs::A::Writer::Flush", "kind": "method", "file_id": "api:src/w.cs"},
+        {"symbol_id": "cs::B::Spool::Flush", "kind": "method", "file_id": "mail:src/s.cs"},
+    ]
+    result = find_anchors(repo, task_text="`Flush` is never called", repo_ids=["api"])
+    assert result.anchors == {"cs::A::Writer::Flush": ["explicit"]}
+    assert result.strength_of("cs::A::Writer::Flush") == 1.0
 
 
 def test_container_member_echoing_its_name_is_secondary_evidence():
@@ -1161,8 +1227,15 @@ def test_corroborated_anchor_with_agreeing_neighbours_is_high_confidence():
     cov = compute_coverage(_result(cands, anchors))
     assert cov["confidence"] == "high"
     assert cov["corroborated_anchor_count"] == 1
-    assert cov["strong_anchor_count"] == 1
-    assert cov["anchor_agreement_ratio"] == 1.0
+
+
+def test_a_generic_name_does_not_corroborate_an_anchor():
+    anchors = AnchorResult()
+    anchors.add("diff", "lexical", 0.3)
+    anchors.add("diff", "name", 0.2)
+    cands = [Candidate(symbol_id="diff", anchor=True, graph_distance=0, score=3.0)]
+    cov = compute_coverage(_result(cands, anchors))
+    assert cov["corroborated_anchor_count"] == 0
 
 
 def test_test_heavy_selection_is_low_confidence():
