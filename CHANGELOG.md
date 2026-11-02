@@ -7,6 +7,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-02
+
 ### Added
 
 - **Compact evidence answer.** `get_context_for_task` returns Markdown by default
@@ -725,7 +727,8 @@ First public release.
 - Docker Compose deployment with PostgreSQL, Apache AGE and pgvector preconfigured.
 - `server.json` manifest describing the stdio server for the official MCP registry.
 
-[Unreleased]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v1.0.2...HEAD
+[Unreleased]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v1.0.2...v1.1.0
 [1.0.2]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/bgts-ai-org/bgts-context-engine/compare/v0.3.0...v1.0.0
