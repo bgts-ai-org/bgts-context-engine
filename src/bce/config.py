@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 from functools import lru_cache
 from typing import Any
+from urllib.parse import quote
 
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -210,8 +211,8 @@ class Settings(BaseSettings):
     @property
     def dsn(self) -> str:
         return (
-            f"postgresql://{self.db_user}:{self.db_password}"
-            f"@{self.db_host}:{self.db_port}/{self.db_name}"
+            f"postgresql://{quote(self.db_user, safe='')}:{quote(self.db_password, safe='')}"
+            f"@{self.db_host}:{self.db_port}/{quote(self.db_name, safe='')}"
         )
 
 

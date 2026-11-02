@@ -174,6 +174,10 @@ Every setting is an environment variable prefixed `BCE_`, also read from `.env`.
 | `BCE_DB_PASSWORD` | `bce` | change outside local development |
 | `BCE_GRAPH_NAME` | `code_graph` | Apache AGE graph name |
 
+Set `BCE_DB_USER`, `BCE_DB_PASSWORD` and `BCE_DB_NAME` to their literal values.
+The engine percent-encodes them when it builds the connection URI.
+If you previously percent-encoded a value as a workaround, replace it with the original value.
+
 ### Indexing and git
 
 | Variable | Default | |
