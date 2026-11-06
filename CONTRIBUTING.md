@@ -76,8 +76,11 @@ Types in use: `feat`, `fix`, `refactor`, `perf`, `docs`, `test`, `build`, `ci`, 
 Write the body as prose explaining why the change is needed, not a restatement of the
 diff. Keep each commit self-contained and green on its own.
 
-Branch off `development` and target it with your pull request. `main` only ever receives
-merges from `development`, and `releases` receives them when a version is published.
+Branch off `development` and target it with your pull request. `development` merges into
+`releases` when a version is published, and `releases` merges into `main` once that release
+is out — a pull request into `main` is only accepted from `releases`, and a pull request
+into `releases` is only accepted from `development`. A CI check enforces this on every pull
+request opened against either branch, not just convention.
 
 ## Adding a language
 
@@ -109,6 +112,9 @@ For maintainers. A release is a merged pull request into the `releases` branch.
 wheel and sdist, asserts the UI bundle is actually inside the wheel, uploads to PyPI with
 the `PYPI_API_TOKEN` secret, and finally tags the merge commit and opens the GitHub
 release. The tag is written last, so it always means "this version is on PyPI".
+
+5. Open a pull request from `releases` to `main` and merge it, so `main` reflects the
+   published version too.
 
 `release.yml` remains as a manual fallback: pushing a `v*` tag yourself builds and
 publishes the same way, through PyPI Trusted Publishing instead of the token. Use it only
