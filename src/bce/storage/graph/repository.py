@@ -484,6 +484,15 @@ class GraphRepository:
         ids_expr = "ANY(ARRAY(SELECT x::graphid FROM unnest(%s::text[]) AS x))"
         keys = sorted(gids)
         with self.client.conn.cursor() as cur:
+            # AGE creates an edge label's table with the first edge that uses it, so an index
+            # without call edges has no CALLS table to read. Migration 0014 creates the label up
+            # front; this keeps a database that has not run it yet from failing: no table means
+            # no call edges, so every flag stays False. The answer is not cached, unlike the
+            # symbol_fts and file_churn probes: the table appears with the first indexed call
+            # edge, and a remembered "absent" would hide the call flags from a running process.
+            cur.execute("SELECT to_regclass(%s)", (calls_table,))
+            row = cur.fetchone()
+            calls_ready = bool(row and row[0] is not None)
             for i in range(0, len(keys), self._FEATURE_CHUNK):
                 chunk = keys[i : i + self._FEATURE_CHUNK]
                 for col in ("start_id", "end_id"):
@@ -496,6 +505,8 @@ class GraphRepository:
                         sid = gids.get(str(gid))
                         if sid in out:
                             out[sid]["degree"] += int(degree or 0)
+                if not calls_ready:
+                    continue
                 for flag, col in (("has_callees", "start_id"), ("has_callers", "end_id")):
                     cur.execute(
                         f"SELECT DISTINCT {col}::text FROM {calls_table} "  # noqa: S608
